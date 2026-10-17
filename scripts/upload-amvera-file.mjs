@@ -4,7 +4,7 @@ import path from 'node:path';
 import { callTool } from './amvera-mcp.mjs';
 
 const rel = process.argv[2];
-if (!rel) throw new Error('СѓРєР°Р¶РёС‚Рµ РїСѓС‚СЊ С„Р°Р№Р»Р°');
+if (!rel) throw new Error('укажите путь файла');
 const ROOT = path.resolve(import.meta.dirname, '..');
 const text = fs.readFileSync(path.join(ROOT, rel), 'utf8');
 const dir = path.posix.dirname(rel);
@@ -18,5 +18,5 @@ const r = await callTool('uploadFiles', {
   commitMessage: `dsh-open-web: ${rel}`,
   branch: 'master',
 });
-console.log(r.isError ? 'РћРЁРР‘РљРђ: ' + r.text : r.text.slice(0, 300));
+console.log(r.isError ? 'ОШИБКА: ' + r.text : r.text.slice(0, 300));
 

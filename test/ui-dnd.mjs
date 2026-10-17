@@ -1,7 +1,8 @@
 // Проверка панели «Файлы проекта» в настоящем Chrome через DevTools-протокол (без зависимостей):
 //   - файл можно перетащить в панель → он сразу попадает в проект;
 //   - файл из панели можно утащить мышью (проверяем полезную нагрузку dragstart);
-//   - кнопка загрузки подписана словами, кнопки «Новый workflow» в шапке больше нет.
+//   - кнопка загрузки подписана словами, кнопки «Новый workflow» в шапке больше нет;
+//   - окно «Новый проект» — только название, создания папок в интерфейсе нет.
 //
 // Запуск (нужен уже работающий сервер):
 //   $env:DSHOW_BASE='http://127.0.0.1:3131'; $env:DSHOW_USER='admin'; $env:DSHOW_PASS='...'
@@ -193,6 +194,38 @@ try {
   uploadLabel.trim() === 'Загрузить файлы'
     ? ok('кнопка загрузки подписана', uploadLabel.trim())
     : fail('подпись кнопки загрузки', JSON.stringify(uploadLabel));
+
+  // 3.5. окно «Новый проект» — только название; создания папок в интерфейсе нет
+  await evaluate(`document.getElementById('newProjectBtn').click()`);
+  const popoverShown = await waitFor(`!!document.querySelector('.popover')`);
+  const popoverShape = popoverShown
+    ? await evaluate(`(() => {
+        const p = document.querySelector('.popover');
+        return { selects: p.querySelectorAll('select').length, inputs: p.querySelectorAll('input').length, text: p.innerText };
+      })()`)
+    : { selects: -1, inputs: 0, text: '' };
+  popoverShape.selects === 0 && popoverShape.inputs === 1
+    ? ok('в окне «Новый проект» только название', `полей ввода ${popoverShape.inputs}, списков ${popoverShape.selects}`)
+    : fail('окно «Новый проект»', JSON.stringify(popoverShape));
+  /workflow|без папки/i.test(popoverShape.text)
+    ? fail('текст окна «Новый проект»', 'остался выбор workflow')
+    : ok('упоминания workflow в окне нет');
+  if (process.env.DSHOW_UI_POPOVER_SHOT) {
+    const shot = await cdp.send('Page.captureScreenshot', { format: 'png' });
+    fs.writeFileSync(process.env.DSHOW_UI_POPOVER_SHOT, Buffer.from(shot.data, 'base64'));
+    console.log(`  --  снимок окна «Новый проект»: ${process.env.DSHOW_UI_POPOVER_SHOT}`);
+  }
+  await evaluate(`document.getElementById('newProjectBtn').click()`);
+  await waitFor(`!document.querySelector('.popover')`);
+
+  const folderControls = await evaluate(`(() => {
+     const list = document.getElementById('projectList');
+     const buttons = [...list.querySelectorAll('button')].map((node) => node.innerText.trim()).filter(Boolean);
+     return { sidebarAdd: !!document.querySelector('.sidebar-add'), texts: buttons, header: [...document.querySelectorAll('#newProjectBtn, .sidebar-head button')].map((node) => node.innerText.trim()) };
+   })()`);
+  folderControls.sidebarAdd || folderControls.texts.some((text) => /папк/i.test(text))
+    ? fail('создание папок в интерфейсе', JSON.stringify(folderControls))
+    : ok('кнопки создания папки нет');
 
   // 4. перетаскивание файла в панель — подсветка и загрузка в проект
   const dragState = await evaluate(`(() => {

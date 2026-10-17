@@ -16,6 +16,7 @@ import {
   TRUST_PROXY,
   costUsd,
   ensureDirs,
+  taskLimitUsd,
 } from './src/config.mjs';
 import { describeFailure, generateTitle, runTurn } from './src/agent.mjs';
 import { transcribeAudio } from './src/asr.mjs';
@@ -286,8 +287,7 @@ function usdText(value) {
 }
 
 function projectLimit(project) {
-  const limit = Number(project?.budgetUsd);
-  return Number.isFinite(limit) && limit > 0 ? limit : BUDGET.limitUsd;
+  return taskLimitUsd(project?.budgetUsd);
 }
 
 /* Запрос администратору: создаём один раз на проект и сразу шлём в Telegram. */
@@ -679,8 +679,8 @@ async function handleMessageStream(req, res, user, chatId) {
         approvalStatus: approval.status,
       };
       const note =
-        `\n\nЗадача обошлась в ${usdText(outcome.budgetHit.spentUsd)} — это больше лимита ` +
-        `${usdText(outcome.budgetHit.limitUsd)}. Я приостановил работу и отправил администратору ` +
+        `\n\nОдна задача обошлась в ${usdText(outcome.budgetHit.spentUsd)} — это выше порога ` +
+        `${usdText(outcome.budgetHit.limitUsd)} за задачу. Я приостановил работу и отправил администратору ` +
         'запрос на подтверждение: продолжу, как только он разрешит.';
       assistantText += note;
       stream.emit({ type: 'delta', text: note });
@@ -731,7 +731,7 @@ function assetVersion() {
   const now = Date.now();
   if (now - assetVersionCache.at < 2000) return assetVersionCache.value;
   let stamp = 0;
-  for (const name of ['index.html', 'styles.css', 'app.js', 'theme.js']) {
+  for (const name of ['index.html', 'styles.css', 'app.js', 'theme.js', 'favicon.svg']) {
     try {
       stamp = Math.max(stamp, fs.statSync(path.join(PUBLIC_DIR, name)).mtimeMs);
     } catch {
@@ -1004,6 +1004,28 @@ async function route(req, res) {
           const full = resolveSafe(workspace, rel);
           const download = url.searchParams.get('download') === '1';
           return sendFile(res, full, { download, name: path.basename(full) });
+        } catch (error) {
+          return sendError(res, 400, error.message);
+        }
+      }
+      if (parts[3] === 'file-preview' && method === 'GET') {
+        // Просмотр файла прямо в приложении: текст документа извлекаем на сервере,
+        // чтобы Word/Excel/презентации открывались для чтения, а не скачивались.
+        const rel = url.searchParams.get('path') || '';
+        try {
+          const full = resolveSafe(workspace, rel);
+          if (!fs.existsSync(full) || !fs.statSync(full).isFile()) return sendError(res, 404, 'Файл не найден');
+          const name = path.basename(full);
+          const stat = fs.statSync(full);
+          const base = { name, path: rel, size: stat.size, kind: detectKind(name), kindLabel: kindLabel(detectKind(name)) };
+          if (stat.size > 25 * 1024 * 1024) {
+            return sendJson(res, 200, { ...base, text: '', warnings: ['Файл больше 25 МБ — предпросмотр недоступен, скачайте его.'] });
+          }
+          const { kind, text, warnings } = extractDocumentText(fs.readFileSync(full), name, '', {
+            maxRows: 500,
+            maxChars: 200000,
+          });
+          return sendJson(res, 200, { ...base, kind, kindLabel: kindLabel(kind), text, warnings });
         } catch (error) {
           return sendError(res, 400, error.message);
         }

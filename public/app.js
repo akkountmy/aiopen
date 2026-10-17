@@ -393,7 +393,7 @@ function switchAuthForm(mode) {
   const signup = mode === 'signup';
   $('#loginForm').classList.toggle('hidden', signup);
   $('#signupForm').classList.toggle('hidden', !signup);
-  $('#authTitle').textContent = signup ? 'Создание аккаунта' : 'Вход в рабочее пространство';
+  /* Заголовка в карточке входа нет: её верх занимает логотип. */
   $('#signupError').textContent = '';
   if (signup) setTimeout(() => $('#signupUser').focus(), 30);
   else setTimeout(() => $('#loginUser').focus(), 30);
@@ -513,7 +513,7 @@ function workflowNode(workflow) {
   row.appendChild(el('span', 'w-count', String(projects.length)));
   const menuBtn = el('button', 'row-menu');
   menuBtn.type = 'button';
-  menuBtn.title = 'Действия с workflow';
+  menuBtn.title = 'Действия с папкой';
   menuBtn.innerHTML = ICONS.dots;
   menuBtn.addEventListener('click', (event) => {
     event.stopPropagation();
@@ -539,20 +539,20 @@ function renderSidebar() {
   root.innerHTML = '';
   if (!state.projects.length && !state.workflows.length) {
     root.appendChild(el('div', 'files-empty', 'Пока нет проектов'));
-    return;
+  } else {
+    for (const project of state.projects) {
+      if (workflowOf(project)) continue;
+      root.appendChild(projectNode(project));
+    }
+    for (const workflow of state.workflows) root.appendChild(workflowNode(workflow));
   }
-  for (const project of state.projects) {
-    if (workflowOf(project)) continue;
-    root.appendChild(projectNode(project));
-  }
-  for (const workflow of state.workflows) root.appendChild(workflowNode(workflow));
 }
 
 function updateCrumbs() {
   const project = activeProject();
   $('#crumbProject').textContent = project ? project.name : '';
   $('#crumbChat').textContent = state.chat?.title || 'Новый диалог';
-  document.title = state.chat?.title ? `${state.chat.title} — Рабочее пространство` : 'Рабочее пространство';
+  document.title = state.chat?.title ? `${state.chat.title} — DSH Open` : 'DSH Open';
   if (!$('#filesBtn').disabled) {
     /* nothing */
   }
@@ -704,7 +704,7 @@ function renderMessage(message) {
   }
 
   const head = el('div', 'msg-head');
-  head.innerHTML = '<span class="dot"></span><span>Ассистент</span>';
+  head.innerHTML = '<span class="dot"></span><span>AI-ассистент</span>';
   wrap.appendChild(head);
 
   if (message.tools?.length) {
@@ -728,7 +728,7 @@ function renderMessage(message) {
         ? `Задача стоила ${fmtUsd(message.budget.spentUsd)} — администратор подтвердил продолжение.`
         : message.budget.status === 'rejected'
           ? `Задача стоила ${fmtUsd(message.budget.spentUsd)} — администратор отклонил продолжение.`
-          : `Задача стоила ${fmtUsd(message.budget.spentUsd)} при лимите ${fmtUsd(message.budget.limitUsd)}. Ждёт подтверждения администратора.`;
+          : `Задача стоила ${fmtUsd(message.budget.spentUsd)} при пороге ${fmtUsd(message.budget.limitUsd)} за задачу. Ждёт подтверждения администратора.`;
     note.appendChild(el('span', '', label));
     wrap.appendChild(note);
   }
@@ -1190,7 +1190,7 @@ function renderFiles() {
     const isImage = /\.(png|jpe?g|webp|gif|bmp)$/i.test(item.name);
     row.innerHTML = `<span class="f-icon">${item.dir ? ICONS.folder : isImage ? ICONS.image : ICONS.file}</span>`;
     const name = el('span', 'f-name', item.name);
-    name.title = item.dir ? item.path : `${item.path} — потяните мышью, чтобы сохранить на компьютер`;
+    name.title = item.dir ? item.path : `${item.path} — нажмите, чтобы открыть; потяните мышью, чтобы сохранить`;
     row.appendChild(name);
     if (!item.dir) row.appendChild(el('span', 'f-size', fmtSize(item.size)));
     const actions = el('div', 'f-actions');
@@ -1241,20 +1241,18 @@ function renderFiles() {
     });
     actions.appendChild(del);
     row.appendChild(actions);
-    row.addEventListener('click', () => {
+    const activate = () => {
       if (item.dir) loadFiles(item.path);
-      else if (isImage) previewImage(item);
-      else {
-        // HTML-страницу (лендинг) открываем в изолированной вкладке, остальное — как есть.
-        if (/\.html?$/i.test(item.name)) {
-          window.open(
-            `/api/projects/${state.activeProjectId}/preview?path=${encodeURIComponent(item.path)}`,
-            '_blank',
-          );
-        } else {
-          const inline = /\.(pdf|txt|md|csv|json|svg)$/i.test(item.name);
-          window.open(fileUrl(item.path, !inline), '_blank');
-        }
+      else openFileViewer(item);
+    };
+    row.addEventListener('click', activate);
+    /* Строка — это кнопка: с клавиатуры она тоже открывает папку или файл. */
+    row.setAttribute('role', 'button');
+    row.tabIndex = 0;
+    row.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        activate();
       }
     });
     list.appendChild(row);
@@ -1294,9 +1292,126 @@ function mimeOf(fileName) {
 function previewImage(item) {
   openModal({
     title: item.name,
+    className: 'viewer',
     body: `<img class="preview-img" alt="${escapeHtml(item.name)}" src="${fileUrl(item.path, false)}"/>`,
-    actions: [{ label: 'Закрыть', kind: 'quiet' }],
+    actions: [
+      { id: 'download', label: 'Скачать', kind: 'quiet', onClick: () => { window.open(fileUrl(item.path, true), '_blank'); return false; } },
+      { label: 'Закрыть', kind: 'quiet' },
+    ],
   });
+}
+
+/* Клик по файлу в панели открывает его для просмотра, а не скачивает.
+   Изображения и PDF смотрим как есть, HTML — в изолированной вкладке,
+   документы (Word, Excel, презентации, тексты) — в модальном окне. */
+function openFileViewer(item) {
+  const ext = String(item.name).split('.').pop().toLowerCase();
+  /* Архивы, видео и прочие двоичные файлы смотреть нечем — сразу сохраняем. */
+  if (/^(zip|rar|7z|tar|gz|tgz|bz2|xz|exe|msi|dll|so|dylib|bin|iso|dmg|apk|jar|mp4|webm|mov|avi|mkv|mp3|wav|flac|ogg|opus|ttf|otf|woff2?|eot|psd|ai|sketch|fig|sqlite|db)$/.test(ext)) {
+    window.open(fileUrl(item.path, true), '_blank');
+    return;
+  }
+  if (ext === 'html' || ext === 'htm') {
+    window.open(`/api/projects/${state.activeProjectId}/preview?path=${encodeURIComponent(item.path)}`, '_blank');
+    return;
+  }
+  if (ext === 'pdf') {
+    if (!/Mobi|Android/i.test(navigator.userAgent)) {
+      window.open(fileUrl(item.path, false), '_blank');
+      return;
+    }
+  } else if (/^(png|jpe?g|webp|gif|bmp|avif|svg)$/.test(ext)) {
+    previewImage(item);
+    return;
+  }
+  showFilePreview(item);
+}
+
+async function showFilePreview(item) {
+  const modal = openModal({
+    title: item.name,
+    className: 'viewer',
+    body: '<div class="files-empty"><div class="spin-lg"></div></div>',
+    actions: [
+      { id: 'download', label: 'Скачать', kind: 'quiet', onClick: () => { window.open(fileUrl(item.path, true), '_blank'); return false; } },
+      { label: 'Закрыть', kind: 'quiet' },
+    ],
+  });
+  const body = modal.querySelector('.modal-body');
+  let data;
+  try {
+    data = await api(`/api/projects/${state.activeProjectId}/file-preview?path=${encodeURIComponent(item.path)}`);
+  } catch (error) {
+    body.innerHTML = '';
+    body.appendChild(el('p', 'viewer-note', `Не удалось открыть файл: ${error.message}`));
+    return;
+  }
+  body.innerHTML = '';
+  body.appendChild(el('div', 'viewer-meta', `${data.kindLabel || 'файл'} · ${fmtSize(data.size)}`));
+  const text = String(data.text || '');
+  const isMarkdown = /^(md|markdown)$/i.test(String(item.name).split('.').pop());
+  if (!text) {
+    const reason = (data.warnings && data.warnings[0]) || 'Содержимое этого формата нельзя показать — скачайте файл.';
+    body.appendChild(el('p', 'viewer-note', reason));
+    return;
+  }
+  if (data.kind === 'xlsx') {
+    body.appendChild(renderSheetPreview(text));
+  } else if (isMarkdown) {
+    const md = el('div', 'md viewer-md');
+    md.innerHTML = renderMarkdown(text);
+    body.appendChild(md);
+  } else {
+    const pre = el('pre', 'viewer-text');
+    pre.textContent = text;
+    body.appendChild(pre);
+  }
+  for (const warning of data.warnings || []) body.appendChild(el('p', 'viewer-note', warning));
+}
+
+/* Таблицу из Excel показываем настоящей таблицей: блоки «## Лист «Имя»»
+   из серверного разбора превращаем в отдельные листы с прокруткой. */
+function renderSheetPreview(text) {
+  const wrap = el('div', 'viewer-sheets');
+  for (const block of String(text).split(/\n{2,}(?=## Лист «)/)) {
+    const match = block.match(/^## Лист «([^»]+)»\n?([\s\S]*)$/);
+    const sheetName = match ? match[1] : '';
+    const rowsText = (match ? match[2] : block).replace(/\n+$/, '');
+    if (sheetName) wrap.appendChild(el('div', 'viewer-sheet-name', sheetName));
+    const rows = rowsText ? rowsText.split('\n').map((line) => line.split('\t')) : [];
+    if (!rows.length) {
+      wrap.appendChild(el('p', 'viewer-note', 'Пусто'));
+      continue;
+    }
+    const table = el('table', 'viewer-table');
+    const tbody = el('tbody');
+    /* Первую строку считаем шапкой, если в ней нет чисел, — так отчёты читаются
+       как в Excel, а обычные таблицы без шапки не искажаются. */
+    const hasHeader =
+      rows.length > 1 && rows[0].every((cell) => !/\d/.test(cell)) && rows.slice(1).some((r) => r.some((c) => /\d/.test(c)));
+    rows.forEach((cells, index) => {
+      const tr = el('tr');
+      const isHead = hasHeader && index === 0;
+      for (const cell of cells) {
+        const td = el(isHead ? 'th' : 'td', '', formatCell(cell));
+        tr.appendChild(td);
+      }
+      tbody.appendChild(tr);
+    });
+    table.appendChild(tbody);
+    const scroller = el('div', 'viewer-table-wrap');
+    scroller.appendChild(table);
+    wrap.appendChild(scroller);
+  }
+  return wrap;
+}
+
+/* Числа в таблице показываем с разрядами — «1 344 000» читается лучше, чем «1344000». */
+function formatCell(value) {
+  const text = String(value ?? '');
+  if (!/^-?\d+(\.\d+)?$/.test(text) || text.length < 5) return text;
+  const num = Number(text);
+  return num.toLocaleString('ru-RU', { maximumFractionDigits: 2 });
 }
 
 /* Загрузка файлов в проект. dir — папка внутри проекта ('.' — корень):
@@ -1391,11 +1506,11 @@ function openContextMenu(anchor, items) {
   }, 0);
 }
 
-function openModal({ title, body, actions = [], wide = false, onMount }) {
+function openModal({ title, body, actions = [], wide = false, className = '', onMount }) {
   const root = $('#modalRoot');
   root.innerHTML = '';
   root.classList.remove('hidden');
-  const modal = el('div', `modal${wide ? ' wide' : ''}`);
+  const modal = el('div', `modal${wide ? ' wide' : ''}${className ? ` ${className}` : ''}`);
   const head = el('div', 'modal-head');
   head.appendChild(el('div', 'modal-title', title));
   const close = el('button', 'btn btn-ghost btn-icon');
@@ -1460,22 +1575,27 @@ function closeModal() {
 let popoverNode = null;
 let popoverAnchor = null;
 let popoverCleanup = null;
+let popoverOnClose = null;
 
 function closePopover() {
   if (popoverCleanup) {
     popoverCleanup();
     popoverCleanup = null;
   }
+  const onClose = popoverOnClose;
+  popoverOnClose = null;
   if (popoverNode) popoverNode.remove();
   popoverNode = null;
   popoverAnchor = null;
+  if (onClose) onClose();
 }
 
-function placePopover(node, anchor) {
+function placePopover(node, anchor, { align = 'anchor' } = {}) {
   const rect = anchor.getBoundingClientRect();
   const width = node.offsetWidth;
   const height = node.offsetHeight;
-  let left = rect.left;
+  /* align: 'sidebar' — держим карточку у левого края панели проектов, как «Новый проект». */
+  let left = align === 'sidebar' ? 10 : rect.left;
   let top = rect.bottom + 8;
   if (left + width > window.innerWidth - 10) left = window.innerWidth - width - 10;
   left = Math.max(10, left);
@@ -1487,7 +1607,7 @@ function placePopover(node, anchor) {
   node.style.top = `${top}px`;
 }
 
-function openPopover({ anchor, title = '', body, actions = [], onMount }) {
+function openPopover({ anchor, title = '', body, actions = [], onMount, onClose = null, align = 'anchor' }) {
   closePopover();
   const node = el('div', 'popover');
   node.setAttribute('role', 'dialog');
@@ -1504,7 +1624,8 @@ function openPopover({ anchor, title = '', body, actions = [], onMount }) {
   if (actions.length) {
     const row = el('div', 'popover-actions');
     for (const action of actions) {
-      const button = el('button', `btn ${action.kind === 'primary' ? 'btn-primary' : 'btn-quiet'}`);
+      const kind = action.kind === 'primary' ? 'btn-primary' : action.kind === 'danger' ? 'btn-danger' : 'btn-quiet';
+      const button = el('button', `btn ${kind}`);
       button.type = 'button';
       button.textContent = action.label;
       button.addEventListener('click', async () => {
@@ -1529,7 +1650,8 @@ function openPopover({ anchor, title = '', body, actions = [], onMount }) {
   document.body.appendChild(node);
   popoverNode = node;
   popoverAnchor = anchor;
-  placePopover(node, anchor);
+  popoverOnClose = onClose;
+  placePopover(node, anchor, { align });
 
   const onDocDown = (event) => {
     if (node.contains(event.target)) return;
@@ -1614,10 +1736,22 @@ function promptDialog({ title, label, value = '', placeholder = '', confirm = '�
 function confirmDialog(title, text, confirmLabel = 'Подтвердить', danger = false) {
   return new Promise((resolve) => {
     let settled = false;
+    const root = $('#modalRoot');
+    const cleanup = () => {
+      root.removeEventListener('mousedown', onBackdrop);
+      document.removeEventListener('keydown', onKey);
+    };
     const finish = (value) => {
       if (settled) return;
       settled = true;
+      cleanup();
       resolve(value);
+    };
+    const onBackdrop = (event) => {
+      if (event.target === root) finish(false);
+    };
+    const onKey = (event) => {
+      if (event.key === 'Escape') finish(false);
     };
     openModal({
       title,
@@ -1627,8 +1761,30 @@ function confirmDialog(title, text, confirmLabel = 'Подтвердить', dan
         { label: confirmLabel, kind: danger ? 'danger' : 'primary', onClick: () => finish(true) },
       ],
     });
-    $('#modalRoot').addEventListener('mousedown', (event) => {
-      if (event.target === $('#modalRoot')) finish(false);
+    root.addEventListener('mousedown', onBackdrop);
+    document.addEventListener('keydown', onKey);
+  });
+}
+
+/* Подтверждение в виде карточки у левой панели — тем же блоком, что и «Новый проект». */
+function confirmPopover({ anchor, title, text, confirmLabel = 'Удалить' }) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+    openPopover({
+      anchor,
+      align: 'sidebar',
+      title,
+      body: el('p', 'popover-text', text),
+      actions: [
+        { label: 'Отмена', kind: 'quiet', onClick: () => finish(false) },
+        { label: confirmLabel, kind: 'danger', onClick: () => finish(true) },
+      ],
+      onClose: () => finish(false),
     });
   });
 }
@@ -1655,32 +1811,34 @@ function openUserMenu(event) {
 }
 
 function openProjectMenu(event, project) {
+  const anchor = event.currentTarget;
   const items = [
     { label: 'Переименовать', icon: ICONS.pen, action: () => renameProject(project) },
     { label: 'Новый диалог', icon: ICONS.file, action: () => newChatFor(project) },
   ];
   if (state.workflows.length) {
-    items.push({ label: 'Переместить в workflow', icon: ICONS.folder, action: () => moveProjectModal(project) });
+    items.push({ label: 'Переместить в папку', icon: ICONS.folder, action: () => moveProjectModal(project) });
   }
-  items.push({ sep: true }, { label: 'Удалить проект', icon: ICONS.trash, danger: true, action: () => deleteProject(project) });
-  openContextMenu(event.currentTarget, items);
+  items.push({ sep: true }, { label: 'Удалить проект', icon: ICONS.trash, danger: true, action: () => deleteProject(project, anchor) });
+  openContextMenu(anchor, items);
 }
 
 function openWorkflowMenu(event, workflow) {
   const anchor = event.currentTarget;
   openContextMenu(anchor, [
     { label: 'Новый проект в папке', icon: ICONS.folder, action: () => createProjectModal({ workflowId: workflow.id, anchor }) },
-    { label: 'Переименовать workflow', icon: ICONS.pen, action: () => renameWorkflow(workflow) },
+    { label: 'Переименовать папку', icon: ICONS.pen, action: () => renameWorkflow(workflow) },
     { sep: true },
-    { label: 'Удалить workflow', icon: ICONS.trash, danger: true, action: () => deleteWorkflow(workflow) },
+    { label: 'Удалить папку', icon: ICONS.trash, danger: true, action: () => deleteWorkflow(workflow, anchor) },
   ]);
 }
 
 function openChatMenu(event, chat) {
-  openContextMenu(event.currentTarget, [
+  const anchor = event.currentTarget;
+  openContextMenu(anchor, [
     { label: 'Переименовать', icon: ICONS.pen, action: () => renameChat(chat) },
     { sep: true },
-    { label: 'Удалить диалог', icon: ICONS.trash, danger: true, action: () => deleteChat(chat) },
+    { label: 'Удалить диалог', icon: ICONS.trash, danger: true, action: () => deleteChat(chat, anchor) },
   ]);
 }
 
@@ -1697,13 +1855,14 @@ async function renameProject(project) {
   }
 }
 
-async function deleteProject(project) {
-  const ok = await confirmDialog(
-    'Удалить проект?',
-    `Все диалоги и файлы проекта «${project.name}» будут удалены безвозвратно.`,
-    'Удалить проект',
-    true,
-  );
+async function deleteProject(project, anchor = null) {
+  if (!anchor) return;
+  const ok = await confirmPopover({
+    anchor,
+    title: 'Удалить проект?',
+    text: `Проект «${project.name}» и его диалоги с файлами удалятся безвозвратно.`,
+    confirmLabel: 'Удалить проект',
+  });
   if (!ok) return;
   try {
     await api(`/api/projects/${project.id}`, { method: 'DELETE' });
@@ -1763,11 +1922,9 @@ async function newChat() {
 
 /* ---------------------- проекты и workflow ---------------------- */
 
-const NEW_WORKFLOW_VALUE = '__new_workflow__';
-
-function workflowSelectField({ value = '', allowNew = true, allowNone = true } = {}) {
+function workflowSelectField({ value = '', allowNone = true } = {}) {
   const field = el('label', 'field');
-  field.appendChild(el('span', 'field-label', 'Workflow — папка проектов'));
+  field.appendChild(el('span', 'field-label', 'Папка проектов'));
   const select = el('select');
   if (allowNone) {
     const none = el('option');
@@ -1779,12 +1936,6 @@ function workflowSelectField({ value = '', allowNew = true, allowNone = true } =
     const option = el('option');
     option.value = workflow.id;
     option.textContent = workflow.name;
-    select.appendChild(option);
-  }
-  if (allowNew) {
-    const option = el('option');
-    option.value = NEW_WORKFLOW_VALUE;
-    option.textContent = '+ Новый workflow…';
     select.appendChild(option);
   }
   select.value = value;
@@ -1802,27 +1953,11 @@ function createProjectModal({ workflowId = '', anchor = null } = {}) {
   nameInput.setAttribute('aria-label', 'Название проекта');
   form.appendChild(nameInput);
 
-  /* Папка (workflow) выбирается прямо здесь: отдельной кнопки в шапке больше нет,
-     а «+ Новый workflow…» в списке остаётся единственным входом в создание папки. */
-  const workflowField = workflowId ? null : workflowSelectField({ value: '', allowNew: true });
-  if (workflowField) {
-    form.appendChild(workflowField.field);
-    workflowField.select.addEventListener('change', () => {
-      if (workflowField.select.value !== NEW_WORKFLOW_VALUE) return;
-      workflowField.select.value = '';
-      closePopover();
-      createWorkflowModal();
-    });
-  }
-
+  /* В окне «Новый проект» — только название: папка создаётся отдельной строкой
+     внизу списка, а «Новый проект в папке» запускается из меню папки. */
   const submit = async () => {
     const name = nameInput.value.trim() || 'Новый проект';
-    const chosenWorkflow = folder ? workflowId : workflowField ? workflowField.select.value : '';
-    if (chosenWorkflow === NEW_WORKFLOW_VALUE) {
-      closePopover();
-      createWorkflowModal();
-      return false;
-    }
+    const chosenWorkflow = folder ? workflowId : '';
     try {
       const created = await api('/api/projects', {
         method: 'POST',
@@ -1867,29 +2002,9 @@ function createProjectModal({ workflowId = '', anchor = null } = {}) {
   });
 }
 
-async function createWorkflowModal(anchor = null) {
-  const name = await promptDialog({
-    title: 'Новый workflow',
-    label: 'Название workflow — папки проектов',
-    placeholder: 'Например: Клиенты 2026',
-    confirm: 'Создать',
-  });
-  if (!name) return;
-  try {
-    const created = await api('/api/workflows', { method: 'POST', body: { name } });
-    state.workflows.push(created.workflow);
-    state.collapsedWorkflows.delete(created.workflow.id);
-    renderSidebar();
-    toast(`Workflow «${created.workflow.name}» создан`, 'ok');
-    createProjectModal({ workflowId: created.workflow.id, anchor: anchor || null });
-  } catch (error) {
-    toast(error.message);
-  }
-}
-
 async function renameWorkflow(workflow) {
   const name = await promptDialog({
-    title: 'Название workflow',
+    title: 'Название папки',
     label: 'Как назвать папку проектов?',
     value: workflow.name,
   });
@@ -1904,16 +2019,17 @@ async function renameWorkflow(workflow) {
   }
 }
 
-async function deleteWorkflow(workflow) {
+async function deleteWorkflow(workflow, anchor = null) {
   const count = state.projects.filter((project) => project.workflowId === workflow.id).length;
-  const ok = await confirmDialog(
-    'Удалить workflow?',
-    count
-      ? `Папка «${workflow.name}» будет удалена. Проекты (${count}) останутся — они перейдут в общий список, файлы и диалоги сохранятся.`
-      : `Папка «${workflow.name}» будет удалена.`,
-    'Удалить папку',
-    true,
-  );
+  if (!anchor) return;
+  const ok = await confirmPopover({
+    anchor,
+    title: 'Удалить папку проектов?',
+    text: count
+      ? `Папка «${workflow.name}» удалится, проекты (${count}) останутся в общем списке.`
+      : `Папка «${workflow.name}» удалится.`,
+    confirmLabel: 'Удалить папку',
+  });
   if (!ok) return;
   try {
     await api(`/api/workflows/${workflow.id}`, { method: 'DELETE' });
@@ -1923,7 +2039,7 @@ async function deleteWorkflow(workflow) {
       if (project.workflowId === workflow.id) project.workflowId = null;
     }
     renderSidebar();
-    toast('Workflow удалён', 'ok');
+    toast('Папка удалена', 'ok');
   } catch (error) {
     toast(error.message);
   }
@@ -1931,11 +2047,11 @@ async function deleteWorkflow(workflow) {
 
 function moveProjectModal(project) {
   if (!state.workflows.length) {
-    toast('Сначала создайте workflow');
+    toast('Сначала создайте папку проектов');
     return;
   }
   const form = el('form', 'form-grid');
-  const { field, select } = workflowSelectField({ value: project.workflowId || '', allowNew: false });
+  const { field, select } = workflowSelectField({ value: project.workflowId || '' });
   form.appendChild(field);
   form.appendChild(el('p', 'form-hint', 'Файлы и диалоги проекта останутся на месте.'));
   openModal({
@@ -1979,8 +2095,14 @@ async function renameChat(chat) {
   }
 }
 
-async function deleteChat(chat) {
-  const ok = await confirmDialog('Удалить диалог?', `Диалог «${chat.title}» будет удалён.`, 'Удалить', true);
+async function deleteChat(chat, anchor = null) {
+  if (!anchor) return;
+  const ok = await confirmPopover({
+    anchor,
+    title: 'Удалить диалог?',
+    text: `Диалог «${chat.title}» будет удалён вместе с сообщениями.`,
+    confirmLabel: 'Удалить',
+  });
   if (!ok) return;
   try {
     await api(`/api/chats/${chat.id}`, { method: 'DELETE' });

@@ -47,7 +47,7 @@ export function approvalMessage({ username, projectName, chatTitle, spentUsd, li
     `Пользователь: <b>${escapeTelegram(username)}</b>`,
     `Проект: ${escapeTelegram(projectName)}`,
     chatTitle ? `Диалог: ${escapeTelegram(chatTitle)}` : null,
-    `Израсходовано: <b>$${spentUsd.toFixed(2)}</b> при лимите $${limitUsd.toFixed(2)}`,
+    `Израсходовано: <b>$${spentUsd.toFixed(2)}</b> при пороге $${limitUsd.toFixed(2)} за одну задачу`,
     `Время: ${escapeTelegram(when)}`,
     '',
     'Работа пользователя приостановлена до вашего ответа.',

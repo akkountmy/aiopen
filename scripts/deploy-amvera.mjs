@@ -1,5 +1,5 @@
-// Р Р°Р·РІС‘СЂС‚С‹РІР°РЅРёРµ dsh-open-web РІ Amvera С‡РµСЂРµР· MCP РїР»Р°С‚С„РѕСЂРјС‹.
-// РЎРµРєСЂРµС‚С‹ Р±РµСЂСѓС‚СЃСЏ РёР· РѕРєСЂСѓР¶РµРЅРёСЏ Рё РІ Р¶СѓСЂРЅР°Р» РЅРµ РїРµС‡Р°С‚Р°СЋС‚СЃСЏ.
+// Развёртывание dsh-open-web в Amvera через MCP платформы.
+// Секреты берутся из окружения и в журнал не печатаются.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -13,7 +13,7 @@ function creds() {
   const out = {};
   for (const key of ['DEEPSEEK_API_KEY', 'OPENROUTER_API_KEY']) {
     const m = text.match(new RegExp(`^\\s*${key}\\s*:\\s*(\\S+)\\s*$`, 'm'));
-    if (!m) throw new Error(`РІ ~/.dsh/.credentials.yaml РЅРµС‚ ${key}`);
+    if (!m) throw new Error(`в ~/.dsh/.credentials.yaml нет ${key}`);
     out[key] = m[1].replace(/^["']|["']$/g, '');
   }
   return out;
@@ -23,48 +23,57 @@ const mode = process.argv[2] || 'status';
 
 if (mode === 'status') {
   for (const [title, tool, args] of [
-    ['РџСЂРѕРµРєС‚', 'getProject', { slug: SLUG }],
-    ['РџРµСЂРµРјРµРЅРЅС‹Рµ', 'listEnvVars', { slug: SLUG }],
-    ['Р¤Р°Р№Р»С‹', 'listFiles', { slug: SLUG, path: '/', branch: 'master' }],
-    ['Р”РѕРјРµРЅС‹', 'listDomains', { slug: SLUG }],
+    ['Проект', 'getProject', { slug: SLUG }],
+    ['Переменные', 'listEnvVars', { slug: SLUG }],
+    ['Файлы', 'listFiles', { slug: SLUG, path: '/', branch: 'master' }],
+    ['Домены', 'listDomains', { slug: SLUG }],
   ]) {
     console.log(`\n==== ${title} ====`);
     try {
       const r = await callTool(tool, args);
-      console.log(r.isError ? 'РћРЁРР‘РљРђ: ' + r.text : r.text.slice(0, 3000));
+      console.log(r.isError ? 'ОШИБКА: ' + r.text : r.text.slice(0, 3000));
     } catch (error) {
-      console.log('РЅРµ СѓРґР°Р»РѕСЃСЊ: ' + error.message.slice(0, 300));
+      console.log('не удалось: ' + error.message.slice(0, 300));
     }
   }
-} else if (mode === 'files') {
-  const files = [
-    'server.mjs',
-    'amvera.yaml',
-    'package.json',
-    'README.md',
-    ...fs.readdirSync(path.join(ROOT, 'src')).map((f) => `src/${f}`),
-    ...fs.readdirSync(path.join(ROOT, 'public')).map((f) => `public/${f}`),
-  ].filter((rel) => fs.statSync(path.join(ROOT, rel)).isFile());
+} else if (mode === 'files' || mode === 'push') {
+  const targets = mode === 'push' ? process.argv.slice(3) : null;
+  const files =
+    targets && targets.length
+      ? targets
+      : [
+          'server.mjs',
+          'amvera.yaml',
+          'package.json',
+          'README.md',
+          ...fs.readdirSync(path.join(ROOT, 'src')).map((f) => `src/${f}`),
+          ...fs.readdirSync(path.join(ROOT, 'public')).map((f) => `public/${f}`),
+          ...fs.readdirSync(path.join(ROOT, 'assets', 'fonts')).map((f) => `assets/fonts/${f}`),
+        ].filter((rel) => fs.statSync(path.join(ROOT, rel)).isFile());
 
-  for (const rel of files) {
-    const text = fs.readFileSync(path.join(ROOT, rel), 'utf8');
+  for (const raw of files) {
+    /* аргументы из PowerShell приходят с обратными слэшами — дальше работаем как с posix-путём */
+    const rel = raw.replace(/\\/g, '/');
+    const full = path.join(ROOT, rel);
+    const binary = /\.(ttf|otf|woff2?|png|jpe?g|gif|ico|zip|pdf)$/i.test(rel);
     const dir = path.posix.dirname(rel);
     const r = await callTool('uploadFiles', {
       slug: SLUG,
       filePath: '',
-      fileBase64: '',
-      fileText: text,
+      fileBase64: binary ? fs.readFileSync(full).toString('base64') : '',
+      fileText: binary ? '' : fs.readFileSync(full, 'utf8'),
       filename: path.basename(rel),
       path: dir === '.' ? '/' : '/' + dir,
       commitMessage: `dsh-open-web: ${rel}`,
       branch: 'master',
     });
-    console.log(`${rel} (${(text.length / 1024).toFixed(1)} РљР‘): ${r.isError ? 'РћРЁРР‘РљРђ ' + r.text.slice(0, 300) : r.text.slice(0, 160).replace(/\s+/g, ' ')}`);
+    const size = (fs.statSync(full).size / 1024).toFixed(1);
+    console.log(`${rel} (${size} КБ): ${r.isError ? 'ОШИБКА ' + r.text.slice(0, 300) : r.text.slice(0, 160).replace(/\s+/g, ' ')}`);
   }
 } else if (mode === 'env') {
   const keys = creds();
   const adminPassword = String(process.env.DSHOW_ADMIN_PASSWORD || '');
-  if (!adminPassword) throw new Error('Р·Р°РґР°Р№С‚Рµ DSHOW_ADMIN_PASSWORD РІ РѕРєСЂСѓР¶РµРЅРёРё');
+  if (!adminPassword) throw new Error('задайте DSHOW_ADMIN_PASSWORD в окружении');
   const vars = [
     { name: 'DSHOW_HOST', value: '0.0.0.0', isSecret: false, type: 'RUN' },
     { name: 'DSHOW_PORT', value: '3123', isSecret: false, type: 'RUN' },
@@ -91,23 +100,23 @@ if (mode === 'status') {
   if (process.env.DSHOW_TASK_STEP_USD) {
     vars.push({ name: 'DSHOW_TASK_STEP_USD', value: process.env.DSHOW_TASK_STEP_USD, isSecret: false, type: 'RUN' });
   }
-  console.log('РћС‚РїСЂР°РІР»СЏСЋ РїРµСЂРµРјРµРЅРЅС‹Рµ: ' + vars.map((v) => v.name + (v.isSecret ? ' (СЃРµРєСЂРµС‚)' : '')).join(', '));
+  console.log('Отправляю переменные: ' + vars.map((v) => v.name + (v.isSecret ? ' (секрет)' : '')).join(', '));
   const r = await callTool('createEnvVars', { slug: SLUG, envVarsJson: JSON.stringify(vars) });
-  console.log(r.isError ? 'РћРЁРР‘РљРђ: ' + r.text.slice(0, 800) : r.text.slice(0, 1200));
+  console.log(r.isError ? 'ОШИБКА: ' + r.text.slice(0, 800) : r.text.slice(0, 1200));
 } else if (mode === 'build') {
   const r = await callTool('rebuildProject', { slug: SLUG });
-  console.log(r.isError ? 'РћРЁРР‘РљРђ: ' + r.text.slice(0, 800) : r.text.slice(0, 800));
+  console.log(r.isError ? 'ОШИБКА: ' + r.text.slice(0, 800) : r.text.slice(0, 800));
 } else if (mode === 'logs') {
   for (const [title, tool, args] of [
-    ['РЎР±РѕСЂРєР°', 'getBuildLogs', { slug: SLUG }],
-    ['Р—Р°РїСѓСЃРє', 'getRunLogs', { slug: SLUG }],
+    ['Сборка', 'getBuildLogs', { slug: SLUG }],
+    ['Запуск', 'getRunLogs', { slug: SLUG }],
   ]) {
     console.log(`\n==== ${title} ====`);
     const r = await callTool(tool, args);
-    console.log(r.isError ? 'РћРЁРР‘РљРђ: ' + r.text.slice(0, 800) : r.text.slice(-4000));
+    console.log(r.isError ? 'ОШИБКА: ' + r.text.slice(0, 800) : r.text.slice(-4000));
   }
 } else if (mode === 'domain') {
   const r = await callTool('createDomain', { slug: SLUG });
-  console.log(r.isError ? 'РћРЁРР‘РљРђ: ' + r.text.slice(0, 800) : r.text.slice(0, 800));
+  console.log(r.isError ? 'ОШИБКА: ' + r.text.slice(0, 800) : r.text.slice(0, 800));
 }
 

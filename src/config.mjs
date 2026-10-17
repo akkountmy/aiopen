@@ -118,6 +118,17 @@ export const BUDGET = {
   stepUsd: usdFromEnv('DSHOW_TASK_STEP_USD', 5),
 };
 
+/**
+ * Порог для одной задачи с учётом того, что администратор уже разрешил.
+ * Одобрение может только ПОДНЯТЬ порог: крошечные значения, оставшиеся от
+ * ранних версий (например, $0.0005 в старых проектах), не опускают его до нуля —
+ * иначе дешёвая задача сразу упирается в «лимит $0.00» и уходит на подтверждение.
+ */
+export function taskLimitUsd(storedBudgetUsd) {
+  const stored = Number(storedBudgetUsd);
+  return Number.isFinite(stored) && stored > BUDGET.limitUsd ? stored : BUDGET.limitUsd;
+}
+
 /** Уведомления администратору в Telegram (бот «Василина»). */
 export const TELEGRAM = {
   token: process.env.DSHOW_TG_TOKEN || '',

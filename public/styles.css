@@ -17,7 +17,7 @@
   --danger: #f25a5a;
   --danger-ink: #f3b4b4;
   --amber: #f7ad31;
-  --whale: #f92121;
+  --whale: #848683;
   --tint: rgba(255, 255, 255, 0.014);
   --code-bg: rgba(255, 255, 255, 0.07);
   --overlay: rgba(21, 21, 23, 0.82);
@@ -28,7 +28,7 @@
   --font: -apple-system, BlinkMacSystemFont, "Segoe UI", "Inter", "Helvetica Neue", Arial, "Noto Sans", sans-serif;
   --mono: "SF Mono", "JetBrains Mono", "Fira Code", Consolas, "Liberation Mono", monospace;
   --shadow: 0 18px 44px rgba(0, 0, 0, 0.45);
-  --sidebar: 272px;
+  --sidebar: 288px;
   --files: 288px;
   --head-h: 52px;
   color-scheme: dark;
@@ -178,11 +178,11 @@ svg {
 }
 
 .auth-card {
-  width: min(380px, 100%);
+  width: min(330px, 100%);
   background: var(--layer-1);
   border: 1px solid var(--line);
-  border-radius: 16px;
-  padding: 30px 28px 24px;
+  border-radius: 14px;
+  padding: 22px 20px 18px;
   box-shadow: var(--shadow);
 }
 
@@ -193,10 +193,23 @@ svg {
   min-width: 0;
 }
 
+/* Р›РѕРіРѕС‚РёРї DeepSeek РїРѕ С†РµРЅС‚СЂСѓ РІРµСЂС…Р° РєР°СЂС‚РѕС‡РєРё РІС…РѕРґР°. */
 .auth-mark {
-  width: 40px;
-  height: 40px;
-  margin-bottom: 18px;
+  width: 34px;
+  height: 34px;
+  margin: 0 auto 16px;
+}
+
+.auth-card .field {
+  margin-bottom: 12px;
+}
+
+.auth-card .field input {
+  height: 38px;
+}
+
+.auth-card .btn-block {
+  margin-top: 4px;
 }
 
 .whale {
@@ -213,15 +226,8 @@ svg {
   letter-spacing: 0.2px;
 }
 
-.auth-title {
-  font-size: 19px;
-  font-weight: 600;
-  margin: 0 0 6px;
-  letter-spacing: -0.2px;
-}
-
 .auth-alt {
-  margin: 14px 0 0;
+  margin: 12px 0 0;
   text-align: center;
   font-size: 12.5px;
   color: var(--text-3);
@@ -467,6 +473,13 @@ svg {
   grid-template-columns: var(--sidebar) minmax(0, 1fr) var(--files);
 }
 
+/* Панель «Файлы проекта» закрыта — колонка диалога не растягивается на всю
+   ширину: длинные строки читаются хуже, а кнопки уезжают далеко от текста. */
+.app:not(.with-files) .thread,
+.app:not(.with-files) .composer {
+  width: min(780px, 100%);
+}
+
 .sidebar {
   display: flex;
   flex-direction: column;
@@ -617,7 +630,7 @@ svg {
   height: 14px;
 }
 
-/* --------------------- workflow: папки проектов --------------------- */
+/* --------------------- workflow: РїР°РїРєРё РїСЂРѕРµРєС‚РѕРІ --------------------- */
 
 .sidebar-actions-first {
   display: flex;
@@ -630,7 +643,7 @@ svg {
   min-width: 0;
 }
 
-/* Загрузка файлов в проект: заметная кнопка с подписью вместо иконки-стрелки. */
+/* Р—Р°РіСЂСѓР·РєР° С„Р°Р№Р»РѕРІ РІ РїСЂРѕРµРєС‚: Р·Р°РјРµС‚РЅР°СЏ РєРЅРѕРїРєР° СЃ РїРѕРґРїРёСЃСЊСЋ РІРјРµСЃС‚Рѕ РёРєРѕРЅРєРё-СЃС‚СЂРµР»РєРё. */
 .files-actions {
   display: flex;
   flex-direction: column;
@@ -829,26 +842,43 @@ svg {
   background: var(--layer-hover);
 }
 
-/* Блок пользователя вверху боковой панели — над кнопкой «Новый проект». */
-.sidebar-user {
-  flex: none;
-  padding: 10px 10px 0;
+/* РљРѕРјРїР°РєС‚РЅС‹Р№ Р±Р»РѕРє РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ РІ РїСЂР°РІРѕРј РІРµСЂС…РЅРµРј СѓРіР»Сѓ, СЂСЏРґРѕРј СЃ РєРЅРѕРїРєРѕР№ С‚РµРјС‹. */
+.user-chip-top {
+  width: auto;
+  max-width: 210px;
+  height: 34px;
+  padding: 0 5px 0 4px;
+  gap: 7px;
+  border: 1px solid transparent;
+  border-radius: 999px;
 }
 
-.sidebar-user .user-chip {
-  min-width: 0;
-  padding: 5px 8px 5px 6px;
+.user-chip-top:hover {
+  background: var(--layer-hover);
+  border-color: var(--line);
 }
 
-.sidebar-user .user-meta {
-  gap: 1px;
+.user-chip-top .avatar {
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+  font-size: 11px;
 }
 
-.sidebar-user .chev {
-  width: 13px;
-  height: 13px;
-  color: var(--text-4);
-  flex: none;
+.user-chip-top .user-meta {
+  flex: 0 1 auto;
+  gap: 0;
+}
+
+.user-chip-top .user-name {
+  font-size: 12.5px;
+  line-height: 1.25;
+  max-width: 140px;
+}
+
+.user-chip-top .chev {
+  width: 12px;
+  height: 12px;
 }
 
 .avatar {
@@ -965,7 +995,7 @@ svg {
 }
 
 .thread {
-  width: min(820px, 100%);
+  width: min(1240px, 100%);
   margin: 0 auto;
   padding: 28px 24px 20px;
   display: flex;
@@ -1044,7 +1074,7 @@ svg {
 }
 
 .msg-user .bubble {
-  max-width: min(560px, 92%);
+  max-width: min(760px, 88%);
   background: var(--layer-2);
   border: 1px solid var(--line);
   border-radius: 14px 14px 4px 14px;
@@ -1063,7 +1093,7 @@ svg {
   flex-wrap: wrap;
   gap: 6px;
   justify-content: flex-end;
-  max-width: min(560px, 92%);
+  max-width: min(760px, 88%);
 }
 
 .msg-assistant {
@@ -1088,8 +1118,8 @@ svg {
 }
 
 .md {
-  font-size: 14.5px;
-  line-height: 1.62;
+  font-size: 15px;
+  line-height: 1.66;
   color: var(--text);
   overflow-wrap: anywhere;
 }
@@ -1466,7 +1496,7 @@ svg {
 }
 
 .composer {
-  width: min(820px, 100%);
+  width: min(1240px, 100%);
   margin: 0 auto;
   background: var(--layer-1);
   border: 1px solid var(--line-strong);
@@ -1587,8 +1617,8 @@ svg {
   }
 }
 
-/* Голосовой ввод показывается одной строкой прямо в поле ввода:
-   строка диктовки заменяет textarea, поэтому высота композера не меняется. */
+/* Р“РѕР»РѕСЃРѕРІРѕР№ РІРІРѕРґ РїРѕРєР°Р·С‹РІР°РµС‚СЃСЏ РѕРґРЅРѕР№ СЃС‚СЂРѕРєРѕР№ РїСЂСЏРјРѕ РІ РїРѕР»Рµ РІРІРѕРґР°:
+   СЃС‚СЂРѕРєР° РґРёРєС‚РѕРІРєРё Р·Р°РјРµРЅСЏРµС‚ textarea, РїРѕСЌС‚РѕРјСѓ РІС‹СЃРѕС‚Р° РєРѕРјРїРѕР·РµСЂР° РЅРµ РјРµРЅСЏРµС‚СЃСЏ. */
 .dictation-bar {
   display: none;
   align-items: center;
@@ -1735,7 +1765,7 @@ svg {
   scrollbar-color: var(--layer-3) transparent;
 }
 
-/* Подсказка во всю панель, пока над ней держат файлы с компьютера. */
+/* РџРѕРґСЃРєР°Р·РєР° РІРѕ РІСЃСЋ РїР°РЅРµР»СЊ, РїРѕРєР° РЅР°Рґ РЅРµР№ РґРµСЂР¶Р°С‚ С„Р°Р№Р»С‹ СЃ РєРѕРјРїСЊСЋС‚РµСЂР°. */
 .files-drop-hint {
   position: absolute;
   inset: 6px;
@@ -1758,7 +1788,7 @@ svg {
   display: flex;
 }
 
-/* Файл из панели можно утащить мышью на рабочий стол. */
+/* Р¤Р°Р№Р» РёР· РїР°РЅРµР»Рё РјРѕР¶РЅРѕ СѓС‚Р°С‰РёС‚СЊ РјС‹С€СЊСЋ РЅР° СЂР°Р±РѕС‡РёР№ СЃС‚РѕР». */
 .file-row[draggable='true'] {
   cursor: grab;
 }
@@ -1859,64 +1889,65 @@ svg {
 }
 
 .modal {
-  width: min(520px, 100%);
-  max-height: 84vh;
+  width: min(400px, 100%);
+  max-height: 82vh;
   display: flex;
   flex-direction: column;
   background: var(--layer-1);
   border: 1px solid var(--line-strong);
-  border-radius: 14px;
+  border-radius: 12px;
   box-shadow: var(--shadow);
   overflow: hidden;
 }
 
 .modal.wide {
-  width: min(720px, 100%);
+  width: min(640px, 100%);
 }
 
 .modal-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 16px 18px 12px;
+  padding: 11px 14px 9px;
   border-bottom: 1px solid var(--line);
   flex: none;
 }
 
 .modal-title {
-  font-size: 14.5px;
+  font-size: 13.5px;
   font-weight: 600;
 }
 
 .modal-body {
-  padding: 16px 18px;
+  padding: 12px 14px;
   overflow-y: auto;
-  font-size: 13.5px;
+  font-size: 12.5px;
+  line-height: 1.5;
   color: var(--text-2);
 }
 
 .modal-body p {
-  margin: 0 0 12px;
+  margin: 0 0 10px;
   color: var(--text-2);
 }
 
 .modal-foot {
   display: flex;
   justify-content: flex-end;
-  gap: 8px;
-  padding: 12px 18px 16px;
+  gap: 6px;
+  padding: 9px 14px 11px;
   border-top: 1px solid var(--line);
   flex: none;
 }
 
 .modal-foot .btn {
-  height: 34px;
-  padding: 0 14px;
-  font-size: 13px;
+  height: 30px;
+  padding: 0 12px;
+  font-size: 12.5px;
 }
 
 .modal-foot .btn-primary {
-  height: 34px;
+  height: 30px;
 }
 
 /* ------------------------------ popover ------------------------------ */
@@ -1924,7 +1955,7 @@ svg {
 .popover {
   position: fixed;
   z-index: 80;
-  width: 296px;
+  width: min(calc(var(--sidebar) - 20px), calc(100vw - 20px));
   max-width: calc(100vw - 20px);
   padding: 14px;
   background: var(--layer-1);
@@ -1950,6 +1981,14 @@ svg {
   font-size: 12.5px;
   font-weight: 600;
   color: var(--text);
+}
+
+/* Пояснение в карточке-подтверждении: тот же ритм, что у «Нового проекта». */
+.popover-text {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text-2);
 }
 
 .popover-input {
@@ -2128,7 +2167,7 @@ svg {
   color: var(--danger-ink);
 }
 
-/* Запросы на тяжёлые задачи в панели администратора */
+/* Р—Р°РїСЂРѕСЃС‹ РЅР° С‚СЏР¶С‘Р»С‹Рµ Р·Р°РґР°С‡Рё РІ РїР°РЅРµР»Рё Р°РґРјРёРЅРёСЃС‚СЂР°С‚РѕСЂР° */
 .admin-section-title {
   margin: 18px 0 8px;
   font-size: 11px;
@@ -2258,6 +2297,98 @@ svg {
   margin: 0 auto;
 }
 
+/* -------------------------- просмотр файла -------------------------- */
+
+.modal.viewer {
+  width: min(980px, 100%);
+  max-height: 88vh;
+}
+
+.modal.viewer .modal-body {
+  padding: 12px 16px 16px;
+  font-size: 13px;
+}
+
+.modal.viewer .preview-img {
+  max-height: 76vh;
+}
+
+.viewer-meta {
+  margin: 0 0 10px;
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+
+.viewer-text {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--text);
+}
+
+.viewer-note {
+  margin: 10px 0 0;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.viewer-md {
+  color: var(--text);
+}
+
+.viewer-sheet-name {
+  margin: 14px 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+.viewer-sheets > .viewer-sheet-name:first-child {
+  margin-top: 0;
+}
+
+.viewer-table-wrap {
+  max-height: 60vh;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.viewer-table {
+  border-collapse: collapse;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.viewer-table td,
+.viewer-table th {
+  padding: 4px 8px;
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  color: var(--text-2);
+  text-align: left;
+  vertical-align: top;
+}
+
+.viewer-table th {
+  font-weight: 600;
+  color: var(--text);
+  background: var(--layer-2);
+  position: sticky;
+  top: 0;
+}
+
+.viewer-table td:last-child {
+  border-right: 0;
+}
+
+.viewer-table tr:last-child td {
+  border-bottom: 0;
+}
+
 /* ------------------------------- toast ------------------------------- */
 
 .toast-root {
@@ -2297,7 +2428,7 @@ svg {
   color: var(--warn-ink, #a8721a);
 }
 
-/* Плашка о стоимости задачи в переписке */
+/* РџР»Р°С€РєР° Рѕ СЃС‚РѕРёРјРѕСЃС‚Рё Р·Р°РґР°С‡Рё РІ РїРµСЂРµРїРёСЃРєРµ */
 .msg-budget {
   display: flex;
   align-items: flex-start;
@@ -2425,14 +2556,31 @@ svg {
   .attach-strip {
     padding: 8px 8px 2px;
   }
+  /* Подсказки на телефоне — по две в ряд: четыре кнопки занимают два ряда. */
   .suggestions {
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 7px;
+    width: 100%;
+  }
+  .suggestion {
+    padding: 9px 10px;
+    font-size: 12px;
+    line-height: 1.35;
   }
   .topbar {
     padding: 0 8px 0 10px;
   }
   .stats {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .user-chip-top {
+    max-width: 40px;
+    padding: 0 4px;
+    gap: 0;
+  }
+  .user-chip-top .user-meta,
+  .user-chip-top .chev {
+    display: none;
   }
 }
 

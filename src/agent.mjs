@@ -12,7 +12,7 @@ function contentText(message) {
   if (typeof content === 'string') return content;
   if (Array.isArray(content)) {
     return content
-      .map((part) => (typeof part === 'string' ? part : part?.type === 'text' ? part.text : part?.type === 'image_url' ? '[РёР·РѕР±СЂР°Р¶РµРЅРёРµ]' : ''))
+      .map((part) => (typeof part === 'string' ? part : part?.type === 'text' ? part.text : part?.type === 'image_url' ? '[изображение]' : ''))
       .join('\n');
   }
   return '';
@@ -30,16 +30,16 @@ function messageCost(message) {
 
 function friendlyError(error) {
   const status = error?.status;
-  if (error?.name === 'AbortError') return 'Р“РµРЅРµСЂР°С†РёСЏ РѕСЃС‚Р°РЅРѕРІР»РµРЅР°.';
-  if (status === 401 || status === 403) return 'РќРµС‚ РґРѕСЃС‚СѓРїР° Рє СЃРµСЂРІРёСЃСѓ. РЎРѕРѕР±С‰РёС‚Рµ Р°РґРјРёРЅРёСЃС‚СЂР°С‚РѕСЂСѓ.';
-  if (status === 429) return 'РЎР»РёС€РєРѕРј РјРЅРѕРіРѕ Р·Р°РїСЂРѕСЃРѕРІ РїРѕРґСЂСЏРґ. РџРѕРґРѕР¶РґРёС‚Рµ РїР°СЂСѓ СЃРµРєСѓРЅРґ Рё РїРѕРІС‚РѕСЂРёС‚Рµ.';
-  if (status === 402) return 'Р—Р°РєРѕРЅС‡РёР»СЃСЏ Р±Р°Р»Р°РЅСЃ СЃРµСЂРІРёСЃР°. РЎРѕРѕР±С‰РёС‚Рµ Р°РґРјРёРЅРёСЃС‚СЂР°С‚РѕСЂСѓ.';
-  if (status >= 500) return 'РЎРµСЂРІРёСЃ РІСЂРµРјРµРЅРЅРѕ РїРµСЂРµРіСЂСѓР¶РµРЅ. РџРѕРїСЂРѕР±СѓР№С‚Рµ РµС‰С‘ СЂР°Р·.';
+  if (error?.name === 'AbortError') return 'Генерация остановлена.';
+  if (status === 401 || status === 403) return 'Нет доступа к сервису. Сообщите администратору.';
+  if (status === 429) return 'Слишком много запросов подряд. Подождите пару секунд и повторите.';
+  if (status === 402) return 'Закончился баланс сервиса. Сообщите администратору.';
+  if (status >= 500) return 'Сервис временно перегружен. Попробуйте ещё раз.';
   const message = String(error?.message || '');
   if (/fetch failed|ENOTFOUND|ECONNREFUSED|network|socket/i.test(message)) {
-    return 'РќРµС‚ СЃРІСЏР·Рё СЃ СЃРµСЂРІРёСЃРѕРј. РџСЂРѕРІРµСЂСЊС‚Рµ РёРЅС‚РµСЂРЅРµС‚ Рё РїРѕРІС‚РѕСЂРёС‚Рµ.';
+    return 'Нет связи с сервисом. Проверьте интернет и повторите.';
   }
-  return 'РќРµ СѓРґР°Р»РѕСЃСЊ РїРѕР»СѓС‡РёС‚СЊ РѕС‚РІРµС‚. РџРѕРїСЂРѕР±СѓР№С‚Рµ РµС‰С‘ СЂР°Р·.';
+  return 'Не удалось получить ответ. Попробуйте ещё раз.';
 }
 
 export function describeFailure(error) {
@@ -49,7 +49,7 @@ export function describeFailure(error) {
 async function requestCompletion(body, { signal, onDelta, onReasoning }) {
   const key = getDeepSeekKey();
   if (!key) {
-    const error = new Error('РљР»СЋС‡ СЃРµСЂРІРёСЃР° РЅРµ РЅР°СЃС‚СЂРѕРµРЅ');
+    const error = new Error('Ключ сервиса не настроен');
     error.status = 401;
     throw error;
   }
@@ -173,13 +173,13 @@ function buildUserContent(text, images) {
 }
 
 /**
- * Р’С‹РїРѕР»РЅСЏРµС‚ РѕРґРёРЅ С…РѕРґ Р°РіРµРЅС‚Р°: СЃС‚СЂРёРјРёС‚ РѕС‚РІРµС‚ Рё РІС‹РїРѕР»РЅСЏРµС‚ РёРЅСЃС‚СЂСѓРјРµРЅС‚С‹.
+ * Выполняет один ход агента: стримит ответ и выполняет инструменты.
  * @param {object} params
- * @param {string} params.workspace РїСѓС‚СЊ СЂР°Р±РѕС‡РµР№ РїР°РїРєРё РїСЂРѕРµРєС‚Р°
+ * @param {string} params.workspace путь рабочей папки проекта
  * @param {{history: Array, memory: string}} params.chat
- * @param {string} params.userText С‚РµРєСЃС‚ РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ СЃ СѓР¶Рµ РІСЃС‚Р°РІР»РµРЅРЅС‹РјРё РІС‹РґРµСЂР¶РєР°РјРё РёР· С„Р°Р№Р»РѕРІ
- * @param {string[]} params.images data-url РёР·РѕР±СЂР°Р¶РµРЅРёР№ С‚РµРєСѓС‰РµРіРѕ СЃРѕРѕР±С‰РµРЅРёСЏ
- * @param {Function} params.emit СЃРѕР±С‹С‚РёСЏ РґР»СЏ UI
+ * @param {string} params.userText текст пользователя с уже вставленными выдержками из файлов
+ * @param {string[]} params.images data-url изображений текущего сообщения
+ * @param {Function} params.emit события для UI
  * @param {AbortSignal} params.signal
  */
 export async function runTurn({ workspace, chat, projectName, userName, userText, images = [], emit, signal, budget = null }) {
@@ -202,7 +202,7 @@ export async function runTurn({ workspace, chat, projectName, userName, userText
           chat.memory = truncate(merged, CONTEXT.summaryChars);
         }
       } catch {
-        /* Р±РµР· РїР°РјСЏС‚Рё С‚РѕР¶Рµ СЂР°Р±РѕС‚Р°РµС‚ */
+        /* без памяти тоже работает */
       }
     }
   }
@@ -237,7 +237,7 @@ export async function runTurn({ workspace, chat, projectName, userName, userText
         },
       );
     } catch (error) {
-      // РќРµРєРѕС‚РѕСЂС‹Рµ РјР°СЂС€СЂСѓС‚С‹ РЅРµ РїСЂРёРЅРёРјР°СЋС‚ reasoning_effort вЂ” РїРѕРІС‚РѕСЂСЏРµРј Р±РµР· РЅРµРіРѕ.
+      // Некоторые маршруты не принимают reasoning_effort — повторяем без него.
       if (error?.status === 400 && /reasoning_effort|unsupported|unknown/i.test(error?.raw || '')) {
         result = await requestCompletion(
           {
@@ -316,9 +316,9 @@ export async function runTurn({ workspace, chat, projectName, userName, userText
       if (brokenArguments) {
         status = 'error';
         content =
-          'РћС€РёР±РєР° РёРЅСЃС‚СЂСѓРјРµРЅС‚Р°: Р°СЂРіСѓРјРµРЅС‚С‹ РІС‹Р·РѕРІР° РїСЂРёС€Р»Рё РѕР±СЂРµР·Р°РЅРЅС‹РјРё (СЃР»РёС€РєРѕРј РґР»РёРЅРЅС‹Р№ РѕС‚РІРµС‚). ' +
-          'РќРµ РїРѕРІС‚РѕСЂСЏР№ С‚РѕС‚ Р¶Рµ РІС‹Р·РѕРІ С†РµР»РёРєРѕРј: РґР»СЏ Р±РѕР»СЊС€РѕРіРѕ С„Р°Р№Р»Р° СЃРЅР°С‡Р°Р»Р° write_file СЃ РїРµСЂРІРѕР№ С‡Р°СЃС‚СЊСЋ (4вЂ“8 РљР‘), ' +
-          'Р·Р°С‚РµРј append_file СЃ РѕСЃС‚Р°Р»СЊРЅС‹РјРё С‡Р°СЃС‚СЏРјРё.';
+          'Ошибка инструмента: аргументы вызова пришли обрезанными (слишком длинный ответ). ' +
+          'Не повторяй тот же вызов целиком: для большого файла сначала write_file с первой частью (4–8 КБ), ' +
+          'затем append_file с остальными частями.';
         emit({
           type: 'tool',
           id: toolId,
@@ -326,10 +326,10 @@ export async function runTurn({ workspace, chat, projectName, userName, userText
           label,
           summary,
           status: 'error',
-          detail: 'Р°СЂРіСѓРјРµРЅС‚С‹ РѕР±СЂРµР·Р°РЅС‹',
+          detail: 'аргументы обрезаны',
           ms: 0,
         });
-        console.warn(`[tool] ${call.function.name}: Р°СЂРіСѓРјРµРЅС‚С‹ РѕР±СЂРµР·Р°РЅС‹`);
+        console.warn(`[tool] ${call.function.name}: аргументы обрезаны`);
       } else {
         try {
           const executed = await executeTool(call.function.name, args, { workspace, signal });
@@ -346,7 +346,7 @@ export async function runTurn({ workspace, chat, projectName, userName, userText
           });
         } catch (error) {
           status = 'error';
-          content = `РћС€РёР±РєР° РёРЅСЃС‚СЂСѓРјРµРЅС‚Р°: ${error.message}`;
+          content = `Ошибка инструмента: ${error.message}`;
           console.warn(`[tool] ${call.function.name}: ${error.message}`);
           emit({
             type: 'tool',
@@ -364,7 +364,7 @@ export async function runTurn({ workspace, chat, projectName, userName, userText
       chat.history.push({
         role: 'tool',
         tool_call_id: call.id,
-        content: content || 'Р“РѕС‚РѕРІРѕ.',
+        content: content || 'Готово.',
       });
       if (signal.aborted) throw Object.assign(new Error('aborted'), { name: 'AbortError' });
     }
@@ -372,7 +372,7 @@ export async function runTurn({ workspace, chat, projectName, userName, userText
   }
 
   if (steps >= CONTEXT.maxSteps) {
-    const note = '\n\n_Р”РѕСЃС‚РёРіРЅСѓС‚ РїСЂРµРґРµР» С€Р°РіРѕРІ РґР»СЏ РѕРґРЅРѕР№ Р·Р°РґР°С‡Рё вЂ” СѓС‚РѕС‡РЅРёС‚Рµ, С‡С‚Рѕ РїСЂРѕРґРѕР»Р¶РёС‚СЊ._';
+    const note = '\n\n_Достигнут предел шагов для одной задачи — уточните, что продолжить._';
     finalText += note;
     emit({ type: 'delta', text: note });
   }
@@ -385,7 +385,7 @@ export async function generateTitle(text, { signal } = {}) {
   if (!clean) return '';
   try {
     const raw = await simpleCompletion(
-      [{ role: 'user', content: `РџСЂРёРґСѓРјР°Р№ РєРѕСЂРѕС‚РєРѕРµ РЅР°Р·РІР°РЅРёРµ (2вЂ“5 СЃР»РѕРІ) РґР»СЏ РґРёР°Р»РѕРіР° РїРѕ РїРµСЂРІРѕР№ СЂРµРїР»РёРєРµ. РўРѕР»СЊРєРѕ РЅР°Р·РІР°РЅРёРµ, Р±РµР· РєР°РІС‹С‡РµРє Рё С‚РѕС‡РєРё.\n\nР РµРїР»РёРєР°: ${clean.slice(0, 500)}` }],
+      [{ role: 'user', content: `Придумай короткое название (2–5 слов) для диалога по первой реплике. Только название, без кавычек и точки.\n\nРеплика: ${clean.slice(0, 500)}` }],
       { maxTokens: 400, signal, effort: 'low' },
     );
     return raw.replace(/^["В«В»'`]+|["В«В»'`]+$/g, '').replace(/\s+/g, ' ').slice(0, 80);

@@ -1,5 +1,5 @@
 ﻿// Р’СЂРµРјРµРЅРЅС‹Р№ РїРѕРјРѕС‰РЅРёРє РґР»СЏ СЂР°Р·РІС‘СЂС‚С‹РІР°РЅРёСЏ dsh-open-web РІ Amvera (MCP РїР»Р°С‚С„РѕСЂРјС‹).
-// РўРѕРєРµРЅ Р±РµСЂС‘С‚СЃСЏ РёР· %TEMP%\amvera-token.json (СЃРѕР·РґР°С‘С‚СЃСЏ amvera-login.mjs).
+// Токен берётся из %TEMP%\amvera-token.json (создаётся amvera-login.mjs).
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';

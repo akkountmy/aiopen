@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { DATA_DIR, LIMITS, MODEL } from './config.mjs';
 import { detectKind, extractDocumentText } from './docparse.mjs';
+import { createDocumentPdf, createPresentationPdf } from './pdf.mjs';
 import { describeImage } from './vision.mjs';
 import { fetchUrl, webSearch } from './search.mjs';
 import { escapeHtml, formatBytes, safeName, truncate } from './util.mjs';
@@ -546,6 +547,52 @@ export const TOOL_DEFS = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'create_pdf',
+      description:
+        'Создать настоящий PDF-файл (.pdf) в проекте. Презентация: layout «slides» — по странице на слайд 16:9 (обложка добавляется при cover: true). Документ: layout «document» — A4, разделы с абзацами и списками. Используй для любой просьбы «сделай в PDF».',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Имя файла, например «Презентация.pdf».' },
+          layout: { type: 'string', enum: ['slides', 'document'], description: 'slides — презентация, document — документ A4.' },
+          title: { type: 'string', description: 'Заголовок презентации или документа.' },
+          subtitle: { type: 'string', description: 'Подзаголовок: для обложки или под заголовком документа.' },
+          kicker: { type: 'string', description: 'Надзаголовок обложки, 2–4 слова.' },
+          cover: { type: 'boolean', description: 'Добавить титульную страницу к презентации.' },
+          slides: {
+            type: 'array',
+            description: 'Слайды презентации.',
+            items: {
+              type: 'object',
+              properties: {
+                title: { type: 'string' },
+                paragraphs: { type: 'array', items: { type: 'string' } },
+                bullets: { type: 'array', items: { type: 'string' } },
+                note: { type: 'string', description: 'Короткая подпись внизу слайда.' },
+              },
+              required: ['title'],
+            },
+          },
+          sections: {
+            type: 'array',
+            description: 'Разделы документа.',
+            items: {
+              type: 'object',
+              properties: {
+                heading: { type: 'string' },
+                paragraphs: { type: 'array', items: { type: 'string' } },
+                bullets: { type: 'array', items: { type: 'string' } },
+              },
+            },
+          },
+        },
+        required: ['path'],
+      },
+    },
+  },
 ];
 
 export const TOOL_LABELS = {
@@ -565,6 +612,7 @@ export const TOOL_LABELS = {
   run_python: 'Расчёты',
   create_excel: 'Создание Excel',
   create_word: 'Создание Word',
+  create_pdf: 'Создание PDF',
 };
 
 export function toolSummary(name, args) {
@@ -578,6 +626,7 @@ export function toolSummary(name, args) {
     case 'write_file':
     case 'create_excel':
     case 'create_word':
+    case 'create_pdf':
       return args.path || '';
     case 'move_path':
       return `${args.from || ''} → ${args.to || ''}`;
@@ -889,6 +938,48 @@ export async function executeTool(name, args, ctx) {
       ensureDirFor(full);
       fs.writeFileSync(full, buf);
       return { text: `Word создан: ${rel}`, meta: { path: rel, created: true } };
+    }
+    case 'create_pdf': {
+      const rel = String(args.path || 'document.pdf');
+      if (!rel.toLowerCase().endsWith('.pdf')) throw new Error('Имя файла должно заканчиваться на .pdf');
+      ensureFreeSpace(LIMITS.minFreeBytes);
+      /* модель иногда присылает список строкой — принимаем и такое */
+      const toList = (value) =>
+        Array.isArray(value) ? value.map((item) => String(item)) : typeof value === 'string' ? value.split('\n') : [];
+      const slides = Array.isArray(args.slides) ? args.slides : [];
+      const sections = Array.isArray(args.sections) ? args.sections : [];
+      const asSlides = String(args.layout || '').toLowerCase() === 'slides' || (!sections.length && slides.length > 0);
+      const buf = asSlides
+        ? createPresentationPdf({
+            title: args.title,
+            subtitle: args.subtitle,
+            kicker: args.kicker,
+            cover: args.cover === true,
+            slides: slides.map((slide) => ({
+              title: slide?.title,
+              paragraphs: toList(slide?.paragraphs),
+              bullets: toList(slide?.bullets),
+              note: slide?.note,
+            })),
+          })
+        : createDocumentPdf({
+            title: args.title,
+            subtitle: args.subtitle,
+            sections: sections.map((section) => ({
+              heading: section?.heading,
+              paragraphs: toList(section?.paragraphs),
+              bullets: toList(section?.bullets),
+            })),
+          });
+      if (!buf.length) throw new Error('Не удалось собрать PDF: нет текста');
+      const full = assertInside(root, resolveSafe(root, rel));
+      ensureDirFor(full);
+      fs.writeFileSync(full, buf);
+      const pages = (buf.toString('latin1').match(/\/Type \/Page(?!s)/g) || []).length;
+      return {
+        text: `PDF создан: ${rel} (${pages} стр., ${Math.max(1, Math.round(buf.length / 1024))} КБ)`,
+        meta: { path: rel, created: true, pages },
+      };
     }
     default:
       throw new Error(`Инструмент ${name} недоступен`);
