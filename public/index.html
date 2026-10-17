@@ -20,7 +20,7 @@
         <div class="auth-mark" aria-hidden="true">
           <svg class="whale" viewBox="0 0 24 24"><path d="M23.748 4.651c-.254-.124-.364.113-.512.233-.051.04-.094.09-.137.137-.372.397-.806.657-1.373.626-.829-.046-1.537.214-2.163.848-.133-.782-.575-1.248-1.247-1.548-.352-.155-.708-.311-.955-.65-.172-.24-.219-.509-.305-.774-.055-.16-.11-.323-.293-.35-.2-.031-.278.136-.356.276-.313.572-.434 1.202-.422 1.84.027 1.436.633 2.58 1.838 3.393.137.094.172.187.129.323-.082.28-.18.553-.266.833-.055.179-.137.218-.328.14a5.5 5.5 0 0 1-1.737-1.179c-.857-.828-1.631-1.743-2.597-2.46a12 12 0 0 0-.689-.47c-.985-.957.13-1.743.387-1.836.27-.098.094-.433-.778-.428-.872.003-1.67.295-2.687.685a3 3 0 0 1-.465.136 9.6 9.6 0 0 0-2.883-.101c-1.885.21-3.39 1.1-4.497 2.622C.082 8.776-.231 10.854.152 13.02c.403 2.284 1.568 4.175 3.36 5.653 1.857 1.533 3.997 2.284 6.438 2.14 1.482-.085 3.132-.284 4.994-1.86.47.234.962.328 1.78.398.629.058 1.235-.031 1.705-.129.735-.155.684-.836.418-.961-2.155-1.004-1.682-.595-2.112-.926 1.095-1.295 2.768-3.598 3.284-6.733.05-.346.115-.834.108-1.114-.004-.171.035-.238.23-.257a4.2 4.2 0 0 0 1.545-.475c1.397-.763 1.96-2.016 2.093-3.517.02-.23-.004-.467-.247-.588M11.58 18.168c-2.088-1.642-3.101-2.183-3.52-2.16-.39.024-.32.472-.234.763.09.288.207.487.371.74.114.167.192.416-.113.603-.673.416-1.842-.14-1.897-.168-1.361-.801-2.5-1.86-3.301-3.306-.775-1.393-1.225-2.888-1.299-4.482-.02-.385.094-.522.477-.592a4.7 4.7 0 0 1 1.53-.038c2.131.311 3.946 1.264 5.467 2.774.868.86 1.525 1.887 2.202 2.89.72 1.066 1.494 2.082 2.48 2.915.348.291.626.513.892.677-.802.09-2.14.109-3.055-.615zm1.001-6.44a.306.306 0 0 1 .415-.287.3.3 0 0 1 .113.074.3.3 0 0 1 .086.214c0 .17-.136.307-.308.307a.303.303 0 0 1-.306-.307m3.11 1.596c-.2.081-.4.151-.591.16a1.25 1.25 0 0 1-.798-.254c-.274-.23-.47-.358-.551-.758a1.7 1.7 0 0 1 .015-.588c.07-.327-.007-.537-.238-.727-.188-.156-.426-.199-.689-.199a.6.6 0 0 1-.254-.078.253.253 0 0 1-.114-.358 1 1 0 0 1 .192-.21c.356-.202.767-.136 1.146.016.352.144.618.408 1.001.782.392.451.462.576.685.915.176.264.336.536.446.848.066.194-.02.353-.25.45" /></svg>
         </div>
-        <h1 class="auth-title">Вход в рабочее пространство</h1>
+        <h1 id="authTitle" class="auth-title">Вход в рабочее пространство</h1>
         <form id="loginForm" autocomplete="on">
           <label class="field">
             <span class="field-label">Логин</span>
@@ -32,29 +32,51 @@
           </label>
           <p id="loginError" class="field-error" role="alert"></p>
           <button id="loginSubmit" class="btn btn-primary btn-block" type="submit">Войти</button>
+          <p id="authAlt" class="auth-alt hidden">
+            Нет аккаунта?
+            <button id="authSwitchToSignup" class="auth-link" type="button">Создать</button>
+          </p>
+        </form>
+        <form id="signupForm" class="hidden" autocomplete="on">
+          <label class="field">
+            <span class="field-label">Логин</span>
+            <input id="signupUser" type="text" name="username" autocomplete="username" spellcheck="false" required />
+          </label>
+          <label class="field">
+            <span class="field-label">Пароль</span>
+            <input id="signupPass" type="password" name="password" autocomplete="new-password" required />
+          </label>
+          <label class="field">
+            <span class="field-label">Пароль ещё раз</span>
+            <input id="signupPass2" type="password" name="password2" autocomplete="new-password" required />
+          </label>
+          <p id="signupError" class="field-error" role="alert"></p>
+          <button id="signupSubmit" class="btn btn-primary btn-block" type="submit">Создать аккаунт</button>
+          <p class="auth-alt">
+            Уже есть аккаунт?
+            <button id="authSwitchToLogin" class="auth-link" type="button">Войти</button>
+          </p>
         </form>
       </div>
     </section>
 
     <div id="app" class="app hidden">
       <aside class="sidebar" id="sidebar">
+        <div class="sidebar-user">
+          <button id="userChip" class="user-chip" type="button" title="Учётная запись">
+            <span id="userAvatar" class="avatar">?</span>
+            <span class="user-meta">
+              <span id="userName" class="user-name"></span>
+            </span>
+            <svg class="chev" viewBox="0 0 20 20" aria-hidden="true"><path d="M6 8l4 4 4-4" /></svg>
+          </button>
+        </div>
+
         <div class="sidebar-head">
           <div class="sidebar-actions sidebar-actions-first">
             <button id="newProjectBtn" class="btn btn-ghost btn-new" type="button" title="Новый проект">
               <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4v12M4 10h12" /></svg>
               <span>Новый проект</span>
-            </button>
-            <button
-              id="newWorkflowBtn"
-              class="btn btn-ghost btn-new-folder"
-              type="button"
-              title="Новый workflow — папка проектов"
-              aria-label="Новый workflow, папка проектов"
-            >
-              <svg viewBox="0 0 20 20" aria-hidden="true">
-                <path d="M3 6.5A1.5 1.5 0 014.5 5h3l1.5 2h6.5A1.5 1.5 0 0117 8.5v6A1.5 1.5 0 0115.5 16h-11A1.5 1.5 0 013 14.5v-8z" />
-                <path d="M10 10.4v3.6M8.2 12.2h3.6" />
-              </svg>
             </button>
           </div>
         </div>
@@ -75,14 +97,6 @@
             </div>
           </div>
           <div class="topbar-right">
-            <button id="userChip" class="user-chip user-chip-top" type="button" title="Учётная запись">
-              <span id="userAvatar" class="avatar">?</span>
-              <span class="user-meta">
-                <span id="userName" class="user-name"></span>
-                <span id="userRole" class="user-role"></span>
-              </span>
-              <svg class="chev" viewBox="0 0 20 20" aria-hidden="true"><path d="M6 8l4 4 4-4" /></svg>
-            </button>
             <button id="themeToggle" class="btn btn-ghost btn-icon" type="button" title="Светлая тема" aria-label="Переключить тему">
               <svg class="icon-moon" viewBox="0 0 20 20" aria-hidden="true"><path d="M16 11.5A6.5 6.5 0 018.5 4a6.5 6.5 0 107.5 7.5z" /></svg>
               <svg class="icon-sun hidden" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="3.6" /><path d="M10 2v1.8M10 16.2V18M2 10h1.8M16.2 10H18M4.3 4.3l1.3 1.3M14.4 14.4l1.3 1.3M15.7 4.3l-1.3 1.3M5.6 14.4l-1.3 1.3" /></svg>
@@ -137,9 +151,6 @@
         <div class="files-head">
           <div class="files-title">Файлы проекта</div>
           <div class="files-head-actions">
-            <button id="filesUploadBtn" class="btn btn-ghost btn-icon" type="button" title="Загрузить файл" aria-label="Загрузить файл">
-              <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 15V4M5.5 8.5L10 4l4.5 4.5" /></svg>
-            </button>
             <button id="exportProjectBtn" class="btn btn-ghost btn-icon" type="button" title="Скачать проект архивом" aria-label="Скачать проект архивом">
               <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4v11M5.5 10.5L10 15l4.5-4.5M4 17h12" /></svg>
             </button>
@@ -149,7 +160,15 @@
           </div>
         </div>
         <div id="filesCrumb" class="files-crumb"></div>
+        <div class="files-actions">
+          <button id="filesUploadBtn" class="btn files-upload" type="button" title="Загрузить файлы в папку проекта — или перетащите их в список ниже">
+            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 15V4M5.5 8.5L10 4l4.5 4.5" /></svg>
+            <span id="filesUploadLabel">Загрузить файлы</span>
+          </button>
+          <span class="files-drop-note">или перетащите файлы с компьютера</span>
+        </div>
         <div id="filesList" class="files-list"></div>
+        <div id="filesDropHint" class="files-drop-hint" aria-hidden="true">Отпустите, чтобы добавить в проект</div>
       </aside>
       <div id="backdrop" class="backdrop" aria-hidden="true"></div>
     </div>

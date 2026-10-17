@@ -51,6 +51,7 @@ const state = {
   filesOpen: true,
   filesPath: '.',
   filesLoading: false,
+  dragOut: false,
   expanded: new Set(),
   collapsedWorkflows: new Set(),
   lastTitle: '',
@@ -347,6 +348,57 @@ async function onLogin(event) {
   }
 }
 
+async function onSignup(event) {
+  event.preventDefault();
+  const button = $('#signupSubmit');
+  const errorBox = $('#signupError');
+  errorBox.textContent = '';
+  const password = $('#signupPass').value;
+  if (password !== $('#signupPass2').value) {
+    errorBox.textContent = 'Пароли не совпадают';
+    return;
+  }
+  button.disabled = true;
+  button.textContent = 'Создаём…';
+  try {
+    const payload = await api('/api/signup', {
+      method: 'POST',
+      body: { username: $('#signupUser').value.trim(), password },
+    });
+    $('#signupPass').value = '';
+    $('#signupPass2').value = '';
+    await startApp(payload);
+  } catch (error) {
+    errorBox.textContent = error.message || 'Не удалось создать аккаунт';
+  } finally {
+    button.disabled = false;
+    button.textContent = 'Создать аккаунт';
+  }
+}
+
+/* Открытая регистрация включается на сервере (DSHOW_OPEN_SIGNUP=1).
+   Пока она выключена, ссылки «Создать» на экране входа нет вовсе. */
+async function syncSignupAvailability() {
+  const alt = $('#authAlt');
+  if (!alt) return;
+  try {
+    const config = await api('/api/auth-config');
+    alt.classList.toggle('hidden', !config.signupOpen);
+  } catch {
+    alt.classList.add('hidden');
+  }
+}
+
+function switchAuthForm(mode) {
+  const signup = mode === 'signup';
+  $('#loginForm').classList.toggle('hidden', signup);
+  $('#signupForm').classList.toggle('hidden', !signup);
+  $('#authTitle').textContent = signup ? 'Создание аккаунта' : 'Вход в рабочее пространство';
+  $('#signupError').textContent = '';
+  if (signup) setTimeout(() => $('#signupUser').focus(), 30);
+  else setTimeout(() => $('#loginUser').focus(), 30);
+}
+
 /* ------------------------------ app init ------------------------------ */
 
 async function startApp(payload) {
@@ -356,7 +408,6 @@ async function startApp(payload) {
   hideAuth();
   $('#boot').classList.add('hidden');
   $('#userName').textContent = state.user.displayName || state.user.username;
-  $('#userRole').textContent = state.user.role === 'admin' ? 'Администратор' : 'Пользователь';
   $('#userAvatar').textContent = (state.user.displayName || state.user.username || '?').trim().charAt(0);
   if (!state.projects.length) {
     try {
@@ -1130,7 +1181,7 @@ function renderFiles() {
     list.appendChild(up);
   }
   if (!state.files.length) {
-    list.appendChild(el('div', 'files-empty', 'Пока пусто. Создайте файл в диалоге или загрузите свой.'));
+    list.appendChild(el('div', 'files-empty', 'Пока пусто. Перетащите файлы сюда или нажмите «Загрузить файлы».'));
     return;
   }
   for (const item of state.files) {
@@ -1139,11 +1190,30 @@ function renderFiles() {
     const isImage = /\.(png|jpe?g|webp|gif|bmp)$/i.test(item.name);
     row.innerHTML = `<span class="f-icon">${item.dir ? ICONS.folder : isImage ? ICONS.image : ICONS.file}</span>`;
     const name = el('span', 'f-name', item.name);
-    name.title = item.path;
+    name.title = item.dir ? item.path : `${item.path} — потяните мышью, чтобы сохранить на компьютер`;
     row.appendChild(name);
     if (!item.dir) row.appendChild(el('span', 'f-size', fmtSize(item.size)));
     const actions = el('div', 'f-actions');
     if (!item.dir) {
+      /* Файл можно утащить мышью из панели на рабочий стол (или в любую папку):
+         Chrome скачивает по DownloadURL, остальные браузеры берут ссылку из uri-list. */
+      row.draggable = true;
+      row.addEventListener('dragstart', (event) => {
+        state.dragOut = true;
+        const url = new URL(fileUrl(item.path, true), location.origin).href;
+        const fileName = item.name.replace(/:/g, '_');
+        try {
+          event.dataTransfer.effectAllowed = 'copy';
+          event.dataTransfer.setData('DownloadURL', `${mimeOf(fileName)}:${fileName}:${url}`);
+          event.dataTransfer.setData('text/uri-list', url);
+          event.dataTransfer.setData('text/plain', fileName);
+        } catch {
+          /* старые браузеры без DataTransfer.setData */
+        }
+      });
+      row.addEventListener('dragend', () => {
+        state.dragOut = false;
+      });
       const download = el('button', 'btn btn-ghost btn-icon');
       download.type = 'button';
       download.title = 'Скачать';
@@ -1196,6 +1266,31 @@ function fileUrl(relPath, download = false) {
   return `/api/projects/${state.activeProjectId}/file?path=${encodeURIComponent(relPath)}${suffix}`;
 }
 
+/* Тип файла нужен, чтобы система знала, чем открыть файл, вытащенный из панели. */
+function mimeOf(fileName) {
+  const ext = String(fileName).split('.').pop().toLowerCase();
+  const map = {
+    png: 'image/png',
+    jpg: 'image/jpeg',
+    jpeg: 'image/jpeg',
+    webp: 'image/webp',
+    gif: 'image/gif',
+    svg: 'image/svg+xml',
+    pdf: 'application/pdf',
+    txt: 'text/plain',
+    md: 'text/markdown',
+    csv: 'text/csv',
+    json: 'application/json',
+    html: 'text/html',
+    htm: 'text/html',
+    zip: 'application/zip',
+    docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  };
+  return map[ext] || 'application/octet-stream';
+}
+
 function previewImage(item) {
   openModal({
     title: item.name,
@@ -1204,25 +1299,49 @@ function previewImage(item) {
   });
 }
 
-async function uploadToProject(fileList) {
+/* Загрузка файлов в проект. dir — папка внутри проекта ('.' — корень):
+   файл попадает туда, где пользователь сейчас находится в «Файлах проекта». */
+async function uploadToProject(fileList, dir = state.filesPath) {
   const files = Array.from(fileList || []);
-  for (const file of files) {
-    try {
-      const response = await fetch(`/api/projects/${state.activeProjectId}/upload?path=${encodeURIComponent(`uploads/${file.name}`)}`, {
-        method: 'POST',
-        credentials: 'same-origin',
-        headers: { 'Content-Type': file.type || 'application/octet-stream', 'X-Filename': encodeURIComponent(file.name) },
-        body: file,
-      });
-      if (!response.ok) {
-        const data = await response.json().catch(() => ({}));
-        throw new Error(data.error || 'Не удалось загрузить');
-      }
-    } catch (error) {
-      toast(error.message);
-    }
+  if (!files.length) return;
+  if (!state.activeProjectId) {
+    toast('Сначала выберите проект');
+    return;
   }
-  loadFiles(state.filesPath);
+  const folder = dir && dir !== '.' ? String(dir).replace(/\/+$/, '') : '';
+  const button = $('#filesUploadBtn');
+  const label = $('#filesUploadLabel');
+  const previousLabel = label ? label.textContent : '';
+  if (button) button.disabled = true;
+  if (label) label.textContent = 'Загружаем…';
+  let added = 0;
+  try {
+    for (const file of files) {
+      try {
+        const rel = folder ? `${folder}/${file.name}` : file.name;
+        const response = await fetch(`/api/projects/${state.activeProjectId}/upload?path=${encodeURIComponent(rel)}`, {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': file.type || 'application/octet-stream', 'X-Filename': encodeURIComponent(file.name) },
+          body: file,
+        });
+        if (!response.ok) {
+          const data = await response.json().catch(() => ({}));
+          throw new Error(data.error || `Не удалось загрузить «${file.name}»`);
+        }
+        added += 1;
+      } catch (error) {
+        toast(error.message);
+      }
+    }
+  } finally {
+    if (button) button.disabled = false;
+    if (label) label.textContent = previousLabel;
+  }
+  if (added) {
+    toast(added === 1 ? 'Файл добавлен в проект' : `Добавлено файлов: ${added}`, 'ok');
+    await loadFiles(state.filesPath);
+  }
 }
 
 /* ------------------------------ modals ------------------------------ */
@@ -1683,12 +1802,31 @@ function createProjectModal({ workflowId = '', anchor = null } = {}) {
   nameInput.setAttribute('aria-label', 'Название проекта');
   form.appendChild(nameInput);
 
+  /* Папка (workflow) выбирается прямо здесь: отдельной кнопки в шапке больше нет,
+     а «+ Новый workflow…» в списке остаётся единственным входом в создание папки. */
+  const workflowField = workflowId ? null : workflowSelectField({ value: '', allowNew: true });
+  if (workflowField) {
+    form.appendChild(workflowField.field);
+    workflowField.select.addEventListener('change', () => {
+      if (workflowField.select.value !== NEW_WORKFLOW_VALUE) return;
+      workflowField.select.value = '';
+      closePopover();
+      createWorkflowModal();
+    });
+  }
+
   const submit = async () => {
     const name = nameInput.value.trim() || 'Новый проект';
+    const chosenWorkflow = folder ? workflowId : workflowField ? workflowField.select.value : '';
+    if (chosenWorkflow === NEW_WORKFLOW_VALUE) {
+      closePopover();
+      createWorkflowModal();
+      return false;
+    }
     try {
       const created = await api('/api/projects', {
         method: 'POST',
-        body: { name, workflowId: workflowId || null },
+        body: { name, workflowId: chosenWorkflow || null },
       });
       const project = { ...created.project, chats: [] };
       state.projects.unshift(project);
@@ -1697,7 +1835,7 @@ function createProjectModal({ workflowId = '', anchor = null } = {}) {
       state.chat = null;
       state.attachments = [];
       state.expanded.add(project.id);
-      if (workflowId) state.collapsedWorkflows.delete(workflowId);
+      if (chosenWorkflow) state.collapsedWorkflows.delete(chosenWorkflow);
       renderAttachStrip();
       renderSidebar();
       renderThread();
@@ -1743,7 +1881,7 @@ async function createWorkflowModal(anchor = null) {
     state.collapsedWorkflows.delete(created.workflow.id);
     renderSidebar();
     toast(`Workflow «${created.workflow.name}» создан`, 'ok');
-    createProjectModal({ workflowId: created.workflow.id, anchor: anchor || $('#newWorkflowBtn') });
+    createProjectModal({ workflowId: created.workflow.id, anchor: anchor || null });
   } catch (error) {
     toast(error.message);
   }
@@ -2480,9 +2618,11 @@ async function checkSpelling() {
 /* ------------------------------ wiring ------------------------------ */
 
 $('#loginForm').addEventListener('submit', onLogin);
+$('#signupForm').addEventListener('submit', onSignup);
+$('#authSwitchToSignup').addEventListener('click', () => switchAuthForm('signup'));
+$('#authSwitchToLogin').addEventListener('click', () => switchAuthForm('login'));
 $('#userChip').addEventListener('click', openUserMenu);
 $('#newProjectBtn').addEventListener('click', (event) => createProjectModal({ anchor: event.currentTarget }));
-$('#newWorkflowBtn').addEventListener('click', (event) => createWorkflowModal(event.currentTarget));
 $('#composer').addEventListener('submit', sendMessage);
 $('#stopBtn').addEventListener('click', stopGeneration);
 $('#attachBtn').addEventListener('click', () => $('#fileInput').click());
@@ -2598,6 +2738,56 @@ const composer = $('#composer');
 composer.addEventListener('drop', (event) => {
   if (event.dataTransfer?.files?.length) uploadFiles(event.dataTransfer.files);
 });
+
+/* Перетаскивание файлов с компьютера в панель «Файлы проекта»: файл сразу
+   сохраняется в проект (в ту папку, которая открыта), а не прикрепляется к сообщению. */
+const filesPanel = $('#filesPanel');
+
+function dragCarriesFiles(event) {
+  return Array.from(event.dataTransfer?.types || []).includes('Files');
+}
+
+['dragenter', 'dragover'].forEach((type) => {
+  filesPanel.addEventListener(type, (event) => {
+    if (!dragCarriesFiles(event)) return;
+    // Новый drag с файлами сбрасывает след от предыдущего перетаскивания наружу.
+    state.dragOut = false;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'copy';
+    filesPanel.classList.add('dragover');
+  });
+});
+
+['dragleave', 'drop'].forEach((type) => {
+  filesPanel.addEventListener(type, (event) => {
+    if (type === 'dragleave' && filesPanel.contains(event.relatedTarget)) return;
+    filesPanel.classList.remove('dragover');
+  });
+});
+
+filesPanel.addEventListener('drop', (event) => {
+  const files = event.dataTransfer?.files;
+  if (!files || !files.length) return;
+  event.preventDefault();
+  if (state.dragOut) return;
+  uploadToProject(files, state.filesPath);
+});
+
+/* Файл, вытащенный из панели, не должен открываться в самой странице:
+   гасим переход, если его бросили мимо рабочего стола. */
+document.addEventListener('dragover', (event) => {
+  if (state.dragOut) event.preventDefault();
+});
+document.addEventListener('drop', (event) => {
+  if (!state.dragOut) return;
+  event.preventDefault();
+  state.dragOut = false;
+});
+/* dragend приходит, даже если файл бросили мимо окна — сбрасываем флаг всегда. */
+document.addEventListener('dragend', () => {
+  state.dragOut = false;
+});
+
 document.addEventListener('paste', (event) => {
   const items = Array.from(event.clipboardData?.items || []);
   const files = items.filter((item) => item.kind === 'file').map((item) => item.getAsFile()).filter(Boolean);
@@ -2617,4 +2807,5 @@ document.addEventListener('paste', (event) => {
       showAuth();
     }
   }
+  syncSignupAvailability();
 })();

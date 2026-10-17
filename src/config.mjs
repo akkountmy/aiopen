@@ -69,6 +69,13 @@ export const SECURITY = {
   scrypt: { N: 16384, r: 8, p: 1, keylen: 32 },
 };
 
+/* Свободная регистрация: по умолчанию выключена, включается DSHOW_OPEN_SIGNUP=1.
+   Пока выключена, аккаунты создаёт только администратор. */
+export const SIGNUP = {
+  open: process.env.DSHOW_OPEN_SIGNUP === '1',
+  maxPerIpPerHour: Number(process.env.DSHOW_SIGNUP_PER_HOUR || 3),
+};
+
 /** Служебная модель. Наружу (в интерфейс) не выводится. */
 export const MODEL = {
   baseURL: process.env.DSHOW_MODEL_BASE || 'https://api.deepseek.com',

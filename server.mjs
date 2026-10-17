@@ -12,6 +12,7 @@ import {
   PUBLIC_DIR,
   SECURITY,
   SESSION,
+  SIGNUP,
   TRUST_PROXY,
   costUsd,
   ensureDirs,
@@ -46,6 +47,7 @@ const loginIpHits = new RateLimiter({ windowMs: SECURITY.loginWindowMs, max: SEC
 const loginUserHits = new RateLimiter({ windowMs: SECURITY.loginWindowMs, max: SECURITY.loginMaxPerUser });
 const transcribeHits = new RateLimiter({ windowMs: 60 * 60 * 1000, max: 120 });
 const proofreadHits = new RateLimiter({ windowMs: 60 * 60 * 1000, max: 240 });
+const signupHits = new RateLimiter({ windowMs: 60 * 60 * 1000, max: SIGNUP.maxPerIpPerHour });
 const busyUsers = new Map();
 const attachmentQueue = new Set();
 
@@ -355,6 +357,31 @@ async function handleLogin(req, res) {
   }
   loginUserHits.reset(username.toLowerCase());
   loginIpHits.reset(ip);
+  const token = issueSession(store, user.id, { ip, ua: req.headers['user-agent'] });
+  store.touchLogin(user.id);
+  sendJson(res, 200, bootstrapPayload(user), { 'Set-Cookie': sessionCookie(token, SESSION.ttlMs, TRUST_PROXY) });
+}
+
+async function handleSignup(req, res) {
+  if (!SIGNUP.open) return sendError(res, 403, 'Свободная регистрация выключена');
+  const ip = clientIp(req);
+  const gate = signupHits.check(ip);
+  if (!gate.ok) {
+    return sendError(res, 429, `Слишком много регистраций. Повторите через ${Math.ceil(gate.retryAfterMs / 60000)} мин.`);
+  }
+  const body = await readJsonBody(req);
+  const username = String(body.username || '').trim();
+  const password = String(body.password || '');
+  const problem = usernameProblem(username) || passwordProblem(password);
+  if (problem) return sendError(res, 400, problem);
+  signupHits.hit(ip);
+  if (store.getUserByUsername(username)) return sendError(res, 409, 'Такой логин уже занят');
+  let user = null;
+  try {
+    user = store.createUser({ username, password, displayName: username.slice(0, 80), role: 'user' });
+  } catch {
+    return sendError(res, 409, 'Такой логин уже занят');
+  }
   const token = issueSession(store, user.id, { ip, ua: req.headers['user-agent'] });
   store.touchLogin(user.id);
   sendJson(res, 200, bootstrapPayload(user), { 'Set-Cookie': sessionCookie(token, SESSION.ttlMs, TRUST_PROXY) });
@@ -819,6 +846,10 @@ async function route(req, res) {
   try {
     // --- публичные ---
     if (pathname === '/api/login' && method === 'POST') return await handleLogin(req, res);
+    if (pathname === '/api/auth-config' && method === 'GET') {
+      return sendJson(res, 200, { signupOpen: SIGNUP.open });
+    }
+    if (pathname === '/api/signup' && method === 'POST') return await handleSignup(req, res);
     if (pathname === '/api/logout' && method === 'POST') {
       const cookies = parseCookies(req.headers.cookie);
       if (cookies[SESSION.cookie]) store.dropSession(sessionKey(cookies[SESSION.cookie]));
