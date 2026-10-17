@@ -1,0 +1,11 @@
+version: null
+meta:
+  environment: nodejs
+  toolchain:
+    name: npm
+    version: 20
+run:
+  scriptName: server.mjs
+  persistenceMount: /data
+  containerPort: 3123
+serviceType: compute

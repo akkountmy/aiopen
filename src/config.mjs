@@ -1,0 +1,172 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+export const ROOT = path.resolve(here, '..');
+
+export const DATA_DIR = process.env.DSHOW_DATA_DIR
+  ? path.resolve(process.env.DSHOW_DATA_DIR)
+  : path.join(ROOT, 'data');
+
+export const PUBLIC_DIR = path.join(ROOT, 'public');
+export const WORKSPACES_DIR = path.join(DATA_DIR, 'workspaces');
+export const CHATS_DIR = path.join(DATA_DIR, 'chats');
+export const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
+export const LOGS_DIR = path.join(DATA_DIR, 'logs');
+export const INDEX_FILE = path.join(DATA_DIR, 'index.json');
+
+export const HOST = process.env.DSHOW_HOST || '127.0.0.1';
+export const PORT = Number(process.env.DSHOW_PORT || 3123);
+
+/** За обратным прокси (Amvera и подобные) реальный IP приходит в X-Forwarded-For. */
+export const TRUST_PROXY = process.env.DSHOW_TRUST_PROXY === '1';
+
+/** Уровень контекста: средний. Значения можно переопределить окружением —
+ *  это удобно для тестов и для тонкой настройки облака без правки кода. */
+export const CONTEXT = {
+  profile: 'medium',
+  historyTokens: Number(process.env.DSHOW_HISTORY_TOKENS || 24000),
+  toolResultChars: 12000,
+  summaryChars: 2200,
+  keepRecentMessages: Number(process.env.DSHOW_KEEP_RECENT || 8),
+  maxSteps: 30,
+  maxOutputTokens: 16000,
+};
+
+const MB = 1024 * 1024;
+
+export const LIMITS = {
+  jsonBody: 8 * MB,
+  uploadBody: 160 * MB,
+  maxAttachmentBytes: Number(process.env.DSHOW_MAX_ATTACHMENT_MB || 128) * MB,
+  /** Не принимать файлы, если на диске останется меньше этого запаса. */
+  minFreeBytes: Number(process.env.DSHOW_MIN_FREE_MB || 64) * MB,
+  /** Файлы крупнее этого не разбираем в память — только сохраняем и предупреждаем. */
+  maxParseBytes: Number(process.env.DSHOW_MAX_PARSE_MB || 32) * MB,
+  maxFileTextChars: 200000,
+  maxAttachmentsPerMessage: 24,
+  attachmentsContextChars: 60000,
+  agentConcurrencyPerUser: 1,
+  pythonTimeoutMs: 60000,
+  fetchTimeoutMs: 30000,
+  transcribeBody: 24 * MB,
+  proofreadChars: 24000,
+};
+
+export const SESSION = {
+  cookie: 'dshow_session',
+  ttlMs: 7 * 24 * 60 * 60 * 1000,
+  sliding: true,
+};
+
+export const SECURITY = {
+  loginWindowMs: 10 * 60 * 1000,
+  loginMaxPerIp: 12,
+  loginMaxPerUser: 6,
+  passwordMinLength: 8,
+  scrypt: { N: 16384, r: 8, p: 1, keylen: 32 },
+};
+
+/** Служебная модель. Наружу (в интерфейс) не выводится. */
+export const MODEL = {
+  baseURL: process.env.DSHOW_MODEL_BASE || 'https://api.deepseek.com',
+  name: process.env.DSHOW_MODEL || 'deepseek-flash',
+  effort: process.env.DSHOW_EFFORT || 'high',
+  visionFallback: true,
+};
+
+/**
+ * Оценка стоимости работы модели — только для внутреннего учёта и предупреждений.
+ * Наружу ни цена, ни модель не показываются.
+ */
+export const PRICING = {
+  inputPerM: Number(process.env.DSHOW_PRICE_IN || 0.28),
+  outputPerM: Number(process.env.DSHOW_PRICE_OUT || 0.42),
+};
+
+export function costUsd(tokensIn = 0, tokensOut = 0) {
+  const inCost = (Number(tokensIn) || 0) / 1e6 * PRICING.inputPerM;
+  const outCost = (Number(tokensOut) || 0) / 1e6 * PRICING.outputPerM;
+  return inCost + outCost;
+}
+
+/**
+ * Порог «тяжёлой» задачи: стоимость ОДНОЙ задачи. Пока задача дешевле порога,
+ * она идёт молча, в фоне, без уведомлений. Когда перевалила — работа
+ * приостанавливается, пользователь получает предупреждение, а администратор
+ * запрос на подтверждение. Смысл именно в дорогих задачах (≈ $5 и выше),
+ * а не в накопленном расходе проекта: сотня мелких задач не должна упираться
+ * в лимит.
+ */
+function usdFromEnv(name, fallback) {
+  const value = Number(process.env[name]);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+export const BUDGET = {
+  limitUsd: usdFromEnv('DSHOW_TASK_LIMIT_USD', 5),
+  /** Сколько добавляется к порогу после одобрения администратора. */
+  stepUsd: usdFromEnv('DSHOW_TASK_STEP_USD', 5),
+};
+
+/** Уведомления администратору в Telegram (бот «Василина»). */
+export const TELEGRAM = {
+  token: process.env.DSHOW_TG_TOKEN || '',
+  chatId: process.env.DSHOW_TG_CHAT || '660339011',
+  publicUrl: process.env.DSHOW_PUBLIC_URL || 'https://dshopen-vladimir00177.msk1.amvera.tech',
+};
+
+/**
+ * Цепочка бесплатных визуальных моделей для распознавания изображений.
+ * Используется только на стороне сервера.
+ */
+export const VISION = {
+  baseURL: 'https://openrouter.ai/api/v1',
+  timeoutMs: 45000,
+  totalBudgetMs: 100000,
+  attemptsPerModel: 2,
+  maxTokens: 3000,
+  maxImageBytes: 8 * 1024 * 1024,
+  models: [
+    'dots-studio/dots-3-note-preview:free',
+    'qwen/qwen3.8-27b:free',
+    'inclusionai/ling-3.0-flash-vl',
+    'google/gemini-2.5-flash',
+    'google/gemma-3-12b-it',
+  ],
+};
+
+export const ADMIN = {
+  username: process.env.DSHOW_ADMIN_USER || 'DSHOPENWEB',
+  password: process.env.DSHOW_ADMIN_PASSWORD || '',
+  displayName: 'Администратор',
+};
+
+/**
+ * Распознавание речи. Как и визуальные модели — только на сервере.
+ * Первыми идут бесплатные модели, дальше дешёвый резерв.
+ */
+export const ASR = {
+  baseURL: 'https://openrouter.ai/api/v1',
+  timeoutMs: 45000,
+  attemptsPerModel: 2,
+  maxTokens: 1600,
+  maxAudioBytes: 16 * 1024 * 1024,
+  models: [
+    'google/gemini-2.5-flash-lite',
+    'mistralai/voxtral-small-24b-2507',
+    'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free',
+  ],
+};
+
+export function ensureDirs() {
+  for (const dir of [DATA_DIR, WORKSPACES_DIR, CHATS_DIR, UPLOADS_DIR, LOGS_DIR]) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+}
+
+export function dataHome() {
+  return process.env.DSH_HOME || path.join(os.homedir(), '.dsh');
+}

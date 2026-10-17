@@ -1,0 +1,2620 @@
+const $ = (selector, root = document) => root.querySelector(selector);
+const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
+
+function plural(count, one, few, many) {
+  const n = Math.abs(Number(count) || 0) % 100;
+  const n1 = n % 10;
+  if (n > 10 && n < 20) return many;
+  if (n1 > 1 && n1 < 5) return few;
+  if (n1 === 1) return one;
+  return many;
+}
+
+const ICONS = {
+  folder:
+    '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 6.5A1.5 1.5 0 014.5 5h3l1.5 2h6.5A1.5 1.5 0 0117 8.5v6A1.5 1.5 0 0115.5 16h-11A1.5 1.5 0 013 14.5v-8z"/></svg>',
+  file: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 3.5A1.5 1.5 0 016.5 2h4L15 6.5v10A1.5 1.5 0 0113.5 18h-7A1.5 1.5 0 015 16.5v-13z"/><path d="M10.5 2v4.5H15"/></svg>',
+  image:
+    '<svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="4" width="14" height="12" rx="1.6"/><circle cx="7.4" cy="8.2" r="1.1"/><path d="M3.5 14l4-4 3 3 2.4-2.4 3.6 3.6"/></svg>',
+  dots: '<svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="4.5" cy="10" r="1.4"/><circle cx="10" cy="10" r="1.4"/><circle cx="15.5" cy="10" r="1.4"/></svg>',
+  download:
+    '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4v9M6.2 9.5L10 13.3l3.8-3.8M4 16h12"/></svg>',
+  trash:
+    '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 6h12M8 6V4.5A1.5 1.5 0 019.5 3h1A1.5 1.5 0 0112 4.5V6M6 6l.8 9.6A1.5 1.5 0 018.3 17h3.4a1.5 1.5 0 001.5-1.4L14 6"/></svg>',
+  copy: '<svg viewBox="0 0 20 20" aria-hidden="true"><rect x="7" y="7" width="9" height="10" rx="1.5"/><path d="M13 7V5.5A1.5 1.5 0 0011.5 4H5.5A1.5 1.5 0 004 5.5v7A1.5 1.5 0 005.5 14H7"/></svg>',
+  check: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 10.5l4 4 8-9"/></svg>',
+  key: '<svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="7.5" cy="12.5" r="3.5"/><path d="M10 10l6-6M14 6l1.5 1.5M16 4l1.5 1.5"/></svg>',
+  users:
+    '<svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="7.5" cy="7" r="2.6"/><path d="M3 16c0-2.2 2-3.6 4.5-3.6S12 13.8 12 16"/><path d="M13 5.2a2.4 2.4 0 010 4.6M14 12.6c1.9.3 3 1.6 3 3.4"/></svg>',
+  logout:
+    '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M12 4H5.5A1.5 1.5 0 004 5.5v9A1.5 1.5 0 005.5 16H12"/><path d="M11 10h6M14.5 7L17.5 10l-3 3"/></svg>',
+  pen: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M13.5 4.5l2 2L7 15H5v-2z"/></svg>',
+  archive:
+    '<svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="4" width="14" height="12" rx="1.5"/><path d="M3 8h14M9 4v4"/></svg>',
+  upload:
+    '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 15V4M5.5 8.5L10 4l4.5 4.5"/></svg>',
+};
+
+const WHALE_SVG =
+  '<svg class="whale" viewBox="0 0 24 24" aria-hidden="true"><path d="M23.748 4.651c-.254-.124-.364.113-.512.233-.051.04-.094.09-.137.137-.372.397-.806.657-1.373.626-.829-.046-1.537.214-2.163.848-.133-.782-.575-1.248-1.247-1.548-.352-.155-.708-.311-.955-.65-.172-.24-.219-.509-.305-.774-.055-.16-.11-.323-.293-.35-.2-.031-.278.136-.356.276-.313.572-.434 1.202-.422 1.84.027 1.436.633 2.58 1.838 3.393.137.094.172.187.129.323-.082.28-.18.553-.266.833-.055.179-.137.218-.328.14a5.5 5.5 0 0 1-1.737-1.179c-.857-.828-1.631-1.743-2.597-2.46a12 12 0 0 0-.689-.47c-.985-.957.13-1.743.387-1.836.27-.098.094-.433-.778-.428-.872.003-1.67.295-2.687.685a3 3 0 0 1-.465.136 9.6 9.6 0 0 0-2.883-.101c-1.885.21-3.39 1.1-4.497 2.622C.082 8.776-.231 10.854.152 13.02c.403 2.284 1.568 4.175 3.36 5.653 1.857 1.533 3.997 2.284 6.438 2.14 1.482-.085 3.132-.284 4.994-1.86.47.234.962.328 1.78.398.629.058 1.235-.031 1.705-.129.735-.155.684-.836.418-.961-2.155-1.004-1.682-.595-2.112-.926 1.095-1.295 2.768-3.598 3.284-6.733.05-.346.115-.834.108-1.114-.004-.171.035-.238.23-.257a4.2 4.2 0 0 0 1.545-.475c1.397-.763 1.96-2.016 2.093-3.517.02-.23-.004-.467-.247-.588M11.58 18.168c-2.088-1.642-3.101-2.183-3.52-2.16-.39.024-.32.472-.234.763.09.288.207.487.371.74.114.167.192.416-.113.603-.673.416-1.842-.14-1.897-.168-1.361-.801-2.5-1.86-3.301-3.306-.775-1.393-1.225-2.888-1.299-4.482-.02-.385.094-.522.477-.592a4.7 4.7 0 0 1 1.53-.038c2.131.311 3.946 1.264 5.467 2.774.868.86 1.525 1.887 2.202 2.89.72 1.066 1.494 2.082 2.48 2.915.348.291.626.513.892.677-.802.09-2.14.109-3.055-.615zm1.001-6.44a.306.306 0 0 1 .415-.287.3.3 0 0 1 .113.074.3.3 0 0 1 .086.214c0 .17-.136.307-.308.307a.303.303 0 0 1-.306-.307m3.11 1.596c-.2.081-.4.151-.591.16a1.25 1.25 0 0 1-.798-.254c-.274-.23-.47-.358-.551-.758a1.7 1.7 0 0 1 .015-.588c.07-.327-.007-.537-.238-.727-.188-.156-.426-.199-.689-.199a.6.6 0 0 1-.254-.078.253.253 0 0 1-.114-.358 1 1 0 0 1 .192-.21c.356-.202.767-.136 1.146.016.352.144.618.408 1.001.782.392.451.462.576.685.915.176.264.336.536.446.848.066.194-.02.353-.25.45" /></svg>';
+
+const state = {
+  user: null,
+  projects: [],
+  workflows: [],
+  activeProjectId: null,
+  activeChatId: null,
+  chat: null,
+  attachments: [],
+  streaming: false,
+  abort: null,
+  filesOpen: true,
+  filesPath: '.',
+  filesLoading: false,
+  expanded: new Set(),
+  collapsedWorkflows: new Set(),
+  lastTitle: '',
+};
+
+/* Панель «Файлы проекта» по умолчанию открыта; выбор пользователя запоминаем. */
+const FILES_PREF_KEY = 'dshow.filesOpen';
+
+function filesPrefOpen() {
+  // На узких экранах панель файлов — выдвижной ящик: всегда стартуем закрытыми.
+  if (window.matchMedia('(max-width: 1100px)').matches) return false;
+  try {
+    return localStorage.getItem(FILES_PREF_KEY) !== '0';
+  } catch {
+    return true;
+  }
+}
+
+function rememberFilesPref(open) {
+  if (window.matchMedia('(max-width: 1100px)').matches) return;
+  try {
+    localStorage.setItem(FILES_PREF_KEY, open ? '1' : '0');
+  } catch {
+    /* приватный режим — просто не запоминаем */
+  }
+}
+
+function el(tag, cls, text) {
+  const node = document.createElement(tag);
+  if (cls) node.className = cls;
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
+
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function fmtSize(bytes) {
+  if (!bytes) return '';
+  if (bytes < 1024) return `${bytes} Б`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} КБ`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} МБ`;
+}
+
+function fmtUsd(value) {
+  return `$${Number(value || 0).toFixed(2)}`;
+}
+
+function toast(message, type = 'error') {
+  const root = $('#toastRoot');
+  const node = el('div', `toast ${type}`, message);
+  root.appendChild(node);
+  setTimeout(() => {
+    node.style.opacity = '0';
+    node.style.transition = 'opacity .2s ease';
+    setTimeout(() => node.remove(), 220);
+  }, 5200);
+}
+
+/* ------------------------------ markdown ------------------------------ */
+
+const copyStore = new Map();
+let copySeq = 0;
+
+function inlineMd(text) {
+  const codes = [];
+  let src = text.replace(/`([^`\n]+)`/g, (_, code) => {
+    const id = `\u0001${codes.length}\u0001`;
+    codes.push(code);
+    return id;
+  });
+  src = src
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/__([^_]+)__/g, '<strong>$1</strong>')
+    .replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, '$1<em>$2</em>')
+    .replace(/~~([^~]+)~~/g, '<del>$1</del>')
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+  src = src.replace(/(^|[\s(])(https?:\/\/[^\s<)\]]+)/g, (m, pre, url) => `${pre}<a href="${url}" target="_blank" rel="noopener noreferrer">${url}</a>`);
+  src = src.replace(/\u0001(\d+)\u0001/g, (_, idx) => `<code>${codes[Number(idx)]}</code>`);
+  return src;
+}
+
+function renderMarkdown(raw) {
+  const codeBlocks = [];
+  let src = String(raw ?? '');
+  src = src.replace(/```([\w+#.-]*)\r?\n?([\s\S]*?)```/g, (_, lang, code) => {
+    codeBlocks.push({ lang: lang || '', code: code.replace(/\n$/, '') });
+    return `\u0000${codeBlocks.length - 1}\u0000`;
+  });
+  src = escapeHtml(src);
+
+  const lines = src.split(/\r?\n/);
+  const out = [];
+  let paragraph = [];
+  let listStack = [];
+  let i = 0;
+
+  const flushParagraph = () => {
+    if (paragraph.length) {
+      out.push(`<p>${inlineMd(paragraph.join(' ').trim())}</p>`);
+      paragraph = [];
+    }
+  };
+  const closeLists = () => {
+    while (listStack.length) out.push(`</${listStack.pop()}>`);
+  };
+
+  const splitRow = (line) =>
+    line
+      .replace(/^\s*\|/, '')
+      .replace(/\|\s*$/, '')
+      .split('|')
+      .map((cell) => cell.trim());
+
+  while (i < lines.length) {
+    const line = lines[i];
+    const codeMatch = line.match(/^\u0000(\d+)\u0000$/);
+
+    if (codeMatch) {
+      flushParagraph();
+      closeLists();
+      const block = codeBlocks[Number(codeMatch[1])];
+      const id = `code-${++copySeq}`;
+      copyStore.set(id, block.code);
+      const lang = block.lang ? `<span>${escapeHtml(block.lang)}</span>` : '<span>код</span>';
+      out.push(
+        `<pre><div class="code-head">${lang}<button type="button" data-copy-code="${id}">Копировать</button></div><code>${escapeHtml(block.code)}</code></pre>`,
+      );
+      i++;
+      continue;
+    }
+
+    if (!line.trim()) {
+      flushParagraph();
+      closeLists();
+      i++;
+      continue;
+    }
+
+    if (/^\s*(---+|\*\*\*+|___+)\s*$/.test(line)) {
+      flushParagraph();
+      closeLists();
+      out.push('<hr/>');
+      i++;
+      continue;
+    }
+
+    const heading = line.match(/^\s*(#{1,4})\s+(.*)$/);
+    if (heading) {
+      flushParagraph();
+      closeLists();
+      const level = heading[1].length;
+      out.push(`<h${level}>${inlineMd(heading[2].trim())}</h${level}>`);
+      i++;
+      continue;
+    }
+
+    if (/^\s*>\s?/.test(line)) {
+      flushParagraph();
+      closeLists();
+      const quote = [];
+      while (i < lines.length && /^\s*>\s?/.test(lines[i])) {
+        quote.push(lines[i].replace(/^\s*>\s?/, ''));
+        i++;
+      }
+      out.push(`<blockquote>${inlineMd(quote.join(' '))}</blockquote>`);
+      continue;
+    }
+
+    if (line.includes('|') && i + 1 < lines.length && /^\s*\|?[\s:|-]+\|[\s:|-]*$/.test(lines[i + 1]) && lines[i + 1].includes('-')) {
+      flushParagraph();
+      closeLists();
+      const header = splitRow(line);
+      i += 2;
+      const rows = [];
+      while (i < lines.length && lines[i].includes('|') && lines[i].trim()) {
+        rows.push(splitRow(lines[i]));
+        i++;
+      }
+      const head = header.map((cell) => `<th>${inlineMd(cell)}</th>`).join('');
+      const body = rows
+        .map((row) => `<tr>${row.map((cell) => `<td>${inlineMd(cell)}</td>`).join('')}</tr>`)
+        .join('');
+      out.push(`<div class="table-wrap"><table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`);
+      continue;
+    }
+
+    const listMatch = line.match(/^(\s*)([-*+]|\d+\.)\s+(.*)$/);
+    if (listMatch) {
+      flushParagraph();
+      const indent = Math.floor(listMatch[1].replace(/\t/g, '  ').length / 2);
+      const type = /\d+\./.test(listMatch[2]) ? 'ol' : 'ul';
+      const level = Math.min(indent, 3);
+      while (listStack.length > level + 1) out.push(`</${listStack.pop()}>`);
+      if (listStack.length === level + 1 && listStack[listStack.length - 1] !== type) {
+        out.push(`</${listStack.pop()}>`);
+      }
+      while (listStack.length < level + 1) {
+        out.push(`<${type}>`);
+        listStack.push(type);
+      }
+      out.push(`<li>${inlineMd(listMatch[3].trim())}</li>`);
+      i++;
+      continue;
+    }
+
+    closeLists();
+    paragraph.push(line.trim());
+    i++;
+  }
+
+  flushParagraph();
+  closeLists();
+  return out.join('');
+}
+
+/* ------------------------------ api ------------------------------ */
+
+async function api(path, options = {}) {
+  const { method = 'GET', body, raw, headers = {}, signal } = options;
+  const init = { method, credentials: 'same-origin', headers: { ...headers }, signal };
+  if (body !== undefined && !raw) {
+    init.headers['Content-Type'] = 'application/json';
+    init.body = JSON.stringify(body);
+  } else if (raw) {
+    init.body = body;
+  }
+  const response = await fetch(path, init);
+  if (response.status === 401) {
+    showAuth();
+    const error = new Error('unauthorized');
+    error.unauthorized = true;
+    throw error;
+  }
+  let data = {};
+  try {
+    data = await response.json();
+  } catch {
+    data = {};
+  }
+  if (!response.ok) {
+    const error = new Error(data.error || `Ошибка ${response.status}`);
+    error.status = response.status;
+    throw error;
+  }
+  return data;
+}
+
+/* ------------------------------ auth ------------------------------ */
+
+function showAuth() {
+  state.streaming = false;
+  state.user = null;
+  state.chat = null;
+  $('#app').classList.add('hidden');
+  $('#boot').classList.add('hidden');
+  $('#auth').classList.remove('hidden');
+  setTimeout(() => $('#loginUser').focus(), 40);
+}
+
+function hideAuth() {
+  $('#auth').classList.add('hidden');
+  $('#app').classList.remove('hidden');
+  // Поле ввода измеряем уже после того, как контейнер стал видимым.
+  syncInputPlaceholder();
+  requestAnimationFrame(() => autoResize());
+  setTimeout(autoResize, 80);
+}
+
+async function onLogin(event) {
+  event.preventDefault();
+  const button = $('#loginSubmit');
+  const errorBox = $('#loginError');
+  errorBox.textContent = '';
+  button.disabled = true;
+  button.textContent = 'Вход…';
+  try {
+    const payload = await api('/api/login', {
+      method: 'POST',
+      body: { username: $('#loginUser').value.trim(), password: $('#loginPass').value },
+    });
+    $('#loginPass').value = '';
+    await startApp(payload);
+  } catch (error) {
+    if (!error.unauthorized) errorBox.textContent = error.message || 'Не удалось войти';
+  } finally {
+    button.disabled = false;
+    button.textContent = 'Войти';
+  }
+}
+
+/* ------------------------------ app init ------------------------------ */
+
+async function startApp(payload) {
+  state.user = payload.user;
+  state.projects = payload.projects || [];
+  state.workflows = payload.workflows || [];
+  hideAuth();
+  $('#boot').classList.add('hidden');
+  $('#userName').textContent = state.user.displayName || state.user.username;
+  $('#userRole').textContent = state.user.role === 'admin' ? 'Администратор' : 'Пользователь';
+  $('#userAvatar').textContent = (state.user.displayName || state.user.username || '?').trim().charAt(0);
+  if (!state.projects.length) {
+    try {
+      const created = await api('/api/projects', { method: 'POST', body: { name: 'Мой проект' } });
+      state.projects.push({ ...created.project, chats: [] });
+    } catch {
+      /* ignore */
+    }
+  }
+  const first = state.projects[0];
+  state.expanded.clear();
+  if (first) {
+    state.expanded.add(first.id);
+    state.activeProjectId = first.id;
+  }
+  renderSidebar();
+  const existingChat = first?.chats?.[0];
+  if (existingChat) await openChat(existingChat.id);
+  else renderThread();
+  updateCrumbs();
+  if (state.activeProjectId && filesPrefOpen()) toggleFiles(true);
+  $('#input').focus();
+}
+
+function activeProject() {
+  return state.projects.find((project) => project.id === state.activeProjectId) || null;
+}
+
+function workflowOf(project) {
+  if (!project.workflowId) return null;
+  return state.workflows.find((workflow) => workflow.id === project.workflowId) || null;
+}
+
+function projectNode(project) {
+  const wrap = el('div', `project${project.id === state.activeProjectId ? ' active' : ''}${project.workflowId ? ' in-workflow' : ''}`);
+  const row = el('div', 'project-row');
+  row.innerHTML = `<span class="f-icon">${ICONS.folder}</span><span class="p-name">${escapeHtml(project.name)}</span>`;
+  const count = el('span', 'p-count', project.chats?.length ? String(project.chats.length) : '');
+  row.appendChild(count);
+
+  const plus = el('button', 'row-plus');
+  plus.type = 'button';
+  plus.title = 'Новый диалог в проекте';
+  plus.setAttribute('aria-label', 'Новый диалог в проекте');
+  plus.innerHTML = '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 5v10M5 10h10"/></svg>';
+  plus.addEventListener('click', (event) => {
+    event.stopPropagation();
+    newChatFor(project);
+  });
+  row.appendChild(plus);
+
+  const menuBtn = el('button', 'row-menu');
+  menuBtn.type = 'button';
+  menuBtn.title = 'Действия с проектом';
+  menuBtn.innerHTML = ICONS.dots;
+  menuBtn.addEventListener('click', (event) => {
+    event.stopPropagation();
+    openProjectMenu(event, project);
+  });
+  row.appendChild(menuBtn);
+  row.addEventListener('click', () => {
+    state.activeProjectId = project.id;
+    state.expanded.add(project.id);
+    renderSidebar();
+    renderThread();
+    updateCrumbs();
+    closeSidebar();
+  });
+  wrap.appendChild(row);
+
+  if (state.expanded.has(project.id) && project.chats?.length) {
+    const list = el('div', 'chat-list');
+    for (const chat of project.chats) {
+      const chatRow = el('div', `chat-row${chat.id === state.activeChatId ? ' active' : ''}`);
+      const title = el('span', 'c-title', chat.title || 'Новый диалог');
+      title.title = chat.title || '';
+      chatRow.appendChild(title);
+      const chatMenu = el('button', 'row-menu');
+      chatMenu.type = 'button';
+      chatMenu.title = 'Действия с диалогом';
+      chatMenu.innerHTML = ICONS.dots;
+      chatMenu.addEventListener('click', (event) => {
+        event.stopPropagation();
+        openChatMenu(event, chat);
+      });
+      chatRow.appendChild(chatMenu);
+      chatRow.addEventListener('click', () => openChat(chat.id));
+      list.appendChild(chatRow);
+    }
+    wrap.appendChild(list);
+  }
+  return wrap;
+}
+
+function workflowNode(workflow) {
+  const collapsed = state.collapsedWorkflows.has(workflow.id);
+  const node = el('div', `workflow${collapsed ? ' collapsed' : ''}`);
+  const projects = state.projects.filter((project) => project.workflowId === workflow.id);
+  const row = el('div', 'workflow-row');
+  row.setAttribute('role', 'button');
+  row.title = collapsed ? 'Развернуть папку' : 'Свернуть папку';
+  row.innerHTML = `<span class="workflow-caret"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M6 8l4 4 4-4"/></svg></span><span class="w-icon">${ICONS.folder}</span><span class="w-name">${escapeHtml(workflow.name)}</span>`;
+  row.appendChild(el('span', 'w-count', String(projects.length)));
+  const menuBtn = el('button', 'row-menu');
+  menuBtn.type = 'button';
+  menuBtn.title = 'Действия с workflow';
+  menuBtn.innerHTML = ICONS.dots;
+  menuBtn.addEventListener('click', (event) => {
+    event.stopPropagation();
+    openWorkflowMenu(event, workflow);
+  });
+  row.appendChild(menuBtn);
+  row.addEventListener('click', () => {
+    if (state.collapsedWorkflows.has(workflow.id)) state.collapsedWorkflows.delete(workflow.id);
+    else state.collapsedWorkflows.add(workflow.id);
+    renderSidebar();
+  });
+  node.appendChild(row);
+
+  const body = el('div', 'workflow-body');
+  if (!projects.length) body.appendChild(el('div', 'workflow-empty', 'Папка пуста'));
+  for (const project of projects) body.appendChild(projectNode(project));
+  node.appendChild(body);
+  return node;
+}
+
+function renderSidebar() {
+  const root = $('#projectList');
+  root.innerHTML = '';
+  if (!state.projects.length && !state.workflows.length) {
+    root.appendChild(el('div', 'files-empty', 'Пока нет проектов'));
+    return;
+  }
+  for (const project of state.projects) {
+    if (workflowOf(project)) continue;
+    root.appendChild(projectNode(project));
+  }
+  for (const workflow of state.workflows) root.appendChild(workflowNode(workflow));
+}
+
+function updateCrumbs() {
+  const project = activeProject();
+  $('#crumbProject').textContent = project ? project.name : '';
+  $('#crumbChat').textContent = state.chat?.title || 'Новый диалог';
+  document.title = state.chat?.title ? `${state.chat.title} — Рабочее пространство` : 'Рабочее пространство';
+  if (!$('#filesBtn').disabled) {
+    /* nothing */
+  }
+}
+
+async function openChat(chatId) {
+  if (state.streaming) return;
+  try {
+    const data = await api(`/api/chats/${chatId}`);
+    state.chat = data.chat;
+    state.activeChatId = chatId;
+    state.activeProjectId = state.chat.projectId;
+    state.expanded.add(state.activeProjectId);
+    state.attachments = [];
+    renderAttachStrip();
+    renderSidebar();
+    renderThread();
+    updateCrumbs();
+    if (state.filesOpen) loadFiles('.');
+    closeSidebar();
+    $('#input').focus();
+  } catch (error) {
+    if (!error.unauthorized) toast(error.message);
+  }
+}
+
+async function ensureChat() {
+  if (state.chat) return state.chat;
+  if (!state.activeProjectId) {
+    const created = await api('/api/projects', { method: 'POST', body: { name: 'Мой проект' } });
+    state.projects.push({ ...created.project, chats: [] });
+    state.activeProjectId = created.project.id;
+  }
+  const project = activeProject();
+  const created = await api(`/api/projects/${state.activeProjectId}/chats`, { method: 'POST', body: {} });
+  const chat = { id: created.chat.id, projectId: state.activeProjectId, title: 'Новый диалог', messages: [] };
+  if (project) {
+    project.chats = project.chats || [];
+    project.chats.unshift(created.chat);
+  }
+  state.chat = chat;
+  state.activeChatId = chat.id;
+  state.expanded.add(state.activeProjectId);
+  renderSidebar();
+  updateCrumbs();
+  return state.chat;
+}
+
+/* ------------------------------ thread ------------------------------ */
+
+function nearBottom() {
+  const scroll = $('#scroll');
+  return scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 160;
+}
+
+function scrollToBottom(force = false) {
+  const scroll = $('#scroll');
+  if (force || nearBottom()) {
+    requestAnimationFrame(() => {
+      scroll.scrollTop = scroll.scrollHeight;
+    });
+  }
+}
+
+function renderEmpty() {
+  const thread = $('#thread');
+  thread.innerHTML = '';
+  const empty = el('div', 'empty');
+  empty.innerHTML = `
+    <div class="empty-mark">${WHALE_SVG}</div>
+    <h2 class="empty-title">Чем помочь?</h2>
+    <p class="empty-sub">Поставьте задачу — файлы, расчёты и поиск подключу сам.</p>
+    <div class="suggestions">
+      <button class="suggestion" data-prompt="Проанализируй таблицу из файлов проекта и сделай краткий вывод с ключевыми числами.">Разобрать таблицу и найти главное</button>
+      <button class="suggestion" data-prompt="Распознай текст на изображениях проекта и собери из него структурированный документ.">Распознать текст со скриншотов</button>
+      <button class="suggestion" data-prompt="Подготовь отчёт в Word и Excel по данным проекта, с таблицами и выводами.">Сделать отчёт Word и Excel</button>
+      <button class="suggestion" data-prompt="Найди актуальную информацию по теме в интернете, проверь по первоисточникам и оформи ссылки.">Найти и проверить информацию</button>
+    </div>`;
+  empty.addEventListener('click', (event) => {
+    const button = event.target.closest('[data-prompt]');
+    if (!button) return;
+    const input = $('#input');
+    input.value = button.dataset.prompt;
+    autoResize();
+    input.focus();
+  });
+  thread.appendChild(empty);
+}
+
+function renderChip(tool) {
+  const chip = el('span', `tool-chip ${tool.status === 'ok' ? 'ok' : tool.status === 'error' ? 'err' : ''}`);
+  if (tool.status === 'run') chip.innerHTML = '<span class="spinner"></span>';
+  else if (tool.status === 'error') chip.innerHTML = '<span class="tick">✕</span>';
+  else chip.innerHTML = '<span class="tick">✓</span>';
+  const label = el('span', 't-label', tool.label || tool.name || 'Действие');
+  chip.appendChild(label);
+  if (tool.summary) {
+    const arg = el('span', 't-arg', tool.summary);
+    arg.title = tool.summary;
+    chip.appendChild(arg);
+  }
+  return chip;
+}
+
+function messageActions(text) {
+  const actions = el('div', 'msg-actions');
+  const copy = el('button');
+  copy.type = 'button';
+  copy.innerHTML = `${ICONS.copy}<span>Копировать</span>`;
+  copy.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      copy.querySelector('span').textContent = 'Скопировано';
+      setTimeout(() => {
+        copy.querySelector('span').textContent = 'Копировать';
+      }, 1500);
+    } catch {
+      toast('Не удалось скопировать');
+    }
+  });
+  actions.appendChild(copy);
+  return actions;
+}
+
+function userAttachmentChips(attachments) {
+  const wrap = el('div', 'attachments');
+  for (const att of attachments || []) {
+    const chip = el('span', 'file-chip');
+    chip.innerHTML = `<span class="f-icon">${att.kind === 'image' ? ICONS.image : ICONS.file}</span>`;
+    const name = el('span', 'fc-name', att.name);
+    name.title = att.name;
+    chip.appendChild(name);
+    if (att.size) chip.appendChild(el('span', 'fc-size', fmtSize(att.size)));
+    wrap.appendChild(chip);
+  }
+  return wrap;
+}
+
+function renderMessage(message) {
+  const wrap = el('article', `msg msg-${message.role}`);
+  if (message.role === 'user') {
+    if (message.attachments?.length) wrap.appendChild(userAttachmentChips(message.attachments));
+    if (message.content) {
+      const bubble = el('div', 'bubble');
+      bubble.textContent = message.content;
+      wrap.appendChild(bubble);
+    }
+    return wrap;
+  }
+
+  const head = el('div', 'msg-head');
+  head.innerHTML = '<span class="dot"></span><span>Ассистент</span>';
+  wrap.appendChild(head);
+
+  if (message.tools?.length) {
+    const tools = el('div', 'tools');
+    for (const tool of message.tools) tools.appendChild(renderChip(tool));
+    wrap.appendChild(tools);
+  }
+
+  if (message.error) {
+    const error = el('div', 'msg-error');
+    error.innerHTML = '<span>⚠</span>';
+    error.appendChild(el('span', '', message.error));
+    wrap.appendChild(error);
+  }
+
+  if (message.budget) {
+    const note = el('div', 'msg-budget');
+    note.innerHTML = '<span>⚠</span>';
+    const label =
+      message.budget.status === 'approved'
+        ? `Задача стоила ${fmtUsd(message.budget.spentUsd)} — администратор подтвердил продолжение.`
+        : message.budget.status === 'rejected'
+          ? `Задача стоила ${fmtUsd(message.budget.spentUsd)} — администратор отклонил продолжение.`
+          : `Задача стоила ${fmtUsd(message.budget.spentUsd)} при лимите ${fmtUsd(message.budget.limitUsd)}. Ждёт подтверждения администратора.`;
+    note.appendChild(el('span', '', label));
+    wrap.appendChild(note);
+  }
+
+  if (message.content) {
+    const md = el('div', 'md');
+    md.innerHTML = renderMarkdown(message.content);
+    wrap.appendChild(md);
+  }
+
+  if (message.content) wrap.appendChild(messageActions(message.content));
+  return wrap;
+}
+
+function renderThread() {
+  const thread = $('#thread');
+  if (!state.chat || !state.chat.messages.length) {
+    renderEmpty();
+    return;
+  }
+  thread.innerHTML = '';
+  for (const message of state.chat.messages) {
+    thread.appendChild(renderMessage(message));
+  }
+  scrollToBottom(true);
+}
+
+/* ------------------------------ streaming ------------------------------ */
+
+function setStreaming(active) {
+  state.streaming = active;
+  $('#sendBtn').classList.toggle('hidden', active);
+  $('#stopBtn').classList.toggle('hidden', !active);
+  $('#input').disabled = false;
+}
+
+function getStreamingMessage() {
+  const messages = state.chat?.messages || [];
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role === 'assistant' && messages[i].streaming) return messages[i];
+  }
+  return null;
+}
+
+let renderQueued = false;
+function scheduleStreamRender() {
+  if (renderQueued) return;
+  renderQueued = true;
+  const message = getStreamingMessage();
+  requestAnimationFrame(() => {
+    renderQueued = false;
+    const thread = $('#thread');
+    const nodes = thread.querySelectorAll('.msg-assistant');
+    const target = message && nodes[nodes.length - 1];
+    if (!message || !target) {
+      renderThread();
+      return;
+    }
+    const md = target.querySelector('.md');
+    if (md) md.innerHTML = renderMarkdown(message.content || '') + '<span class="cursor"></span>';
+    else {
+      const block = el('div', 'md');
+      block.innerHTML = renderMarkdown(message.content || '') + '<span class="cursor"></span>';
+      target.appendChild(block);
+    }
+    const toolsWrap = el('div', 'tools');
+    if (message.tools?.length) {
+      for (const tool of message.tools) toolsWrap.appendChild(renderChip(tool));
+      const existing = target.querySelector('.tools');
+      if (existing) existing.replaceWith(toolsWrap);
+      else target.insertBefore(toolsWrap, target.querySelector('.md'));
+    }
+    scrollToBottom();
+  });
+}
+
+async function streamMessage(text, attachmentIds) {
+  const controller = new AbortController();
+  state.abort = controller;
+  const response = await fetch(`/api/chats/${state.chat.id}/messages`, {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text, attachmentIds }),
+    signal: controller.signal,
+  });
+  if (!response.ok) {
+    let data = {};
+    try {
+      data = await response.json();
+    } catch {
+      data = {};
+    }
+    throw new Error(data.error || 'Не удалось отправить сообщение');
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  const handle = (event) => {
+    if (event.type === 'delta') {
+      const message = getStreamingMessage();
+      if (message) {
+        message.content += event.text;
+        scheduleStreamRender();
+      }
+      return;
+    }
+    if (event.type === 'tool') {
+      const message = getStreamingMessage();
+      if (!message) return;
+      message.tools = message.tools || [];
+      const existing = message.tools.find((tool) => tool.id === event.id);
+      if (existing) Object.assign(existing, event);
+      else message.tools.push({ ...event });
+      scheduleStreamRender();
+      return;
+    }
+    if (event.type === 'start') {
+      scheduleStreamRender();
+      return;
+    }
+    if (event.type === 'title') {
+      if (state.chat && event.title) {
+        state.chat.title = event.title;
+        const project = activeProject();
+        const meta = project?.chats?.find((chat) => chat.id === state.chat.id);
+        if (meta) meta.title = event.title;
+        renderSidebar();
+        updateCrumbs();
+      }
+      return;
+    }
+    if (event.type === 'error') {
+      const message = getStreamingMessage();
+      if (message) {
+        message.streaming = false;
+        if (!message.content) message.error = event.message;
+      }
+      if (event.message && !event.aborted) toast(event.message);
+      return;
+    }
+    if (event.type === 'budget') {
+      const message = getStreamingMessage();
+      if (message) {
+        message.budget = {
+          ...(message.budget || {}),
+          spentUsd: event.spentUsd,
+          limitUsd: event.limitUsd,
+          status: 'pending',
+        };
+        scheduleStreamRender();
+      }
+      return;
+    }
+    if (event.type === 'approval') {
+      const message = getStreamingMessage();
+      if (message) {
+        message.budget = {
+          spentUsd: event.approval.spentUsd,
+          limitUsd: event.approval.limitUsd,
+          status: event.approval.status || 'pending',
+        };
+      }
+      toast(`Запрос отправлен администратору: задача стоит ${fmtUsd(event.approval.spentUsd)}.`, 'warn');
+      return;
+    }
+    if (event.type === 'done') {
+      const message = getStreamingMessage();
+      if (message) message.streaming = false;
+    }
+  };
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const blocks = buffer.split('\n\n');
+      buffer = blocks.pop() || '';
+      for (const block of blocks) {
+        for (const line of block.split('\n')) {
+          if (!line.startsWith('data:')) continue;
+          const payload = line.slice(5).trim();
+          if (!payload) continue;
+          try {
+            handle(JSON.parse(payload));
+          } catch {
+            /* ignore */
+          }
+        }
+      }
+    }
+  } finally {
+    const message = getStreamingMessage();
+    if (message) message.streaming = false;
+    state.abort = null;
+    setStreaming(false);
+    renderThread();
+    renderSidebar();
+    if (state.filesOpen) loadFiles(state.filesPath);
+  }
+}
+
+async function sendMessage(event) {
+  if (event) event.preventDefault();
+  if (state.streaming) return;
+  const input = $('#input');
+  const text = input.value.trim();
+  const ready = state.attachments.filter((att) => att.id && att.status !== 'error');
+  const uploading = state.attachments.filter((att) => att.status === 'uploading' || att.status === 'processing');
+  if (!text && !ready.length) return;
+
+  try {
+    await ensureChat();
+  } catch (error) {
+    toast(error.message);
+    return;
+  }
+
+  if (uploading.length) {
+    for (const att of uploading) {
+      if (att.promise) {
+        try {
+          await att.promise;
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+  }
+  const attachments = state.attachments.filter((att) => att.id && att.status !== 'error' && att.status !== 'uploading');
+  const ids = attachments.map((att) => att.id);
+  const attachedMeta = attachments.map((att) => ({
+    id: att.id,
+    name: att.name,
+    kind: att.kind,
+    label: att.label,
+    size: att.size,
+  }));
+
+  input.value = '';
+  autoResize();
+  state.attachments = [];
+  renderAttachStrip();
+
+  const userMessage = { role: 'user', content: text, attachments: attachedMeta, at: new Date().toISOString() };
+  state.chat.messages.push(userMessage);
+  const assistant = { role: 'assistant', content: '', tools: [], streaming: true, at: new Date().toISOString() };
+  state.chat.messages.push(assistant);
+  renderThread();
+  setStreaming(true);
+  scrollToBottom(true);
+
+  try {
+    await streamMessage(text, ids);
+  } catch (error) {
+    if (error.name !== 'AbortError' && !error.unauthorized) toast(error.message || 'Ошибка отправки');
+    const message = getStreamingMessage();
+    if (message) {
+      message.streaming = false;
+      if (!message.content) message.error = error.name === 'AbortError' ? 'Остановлено' : error.message;
+    }
+    setStreaming(false);
+    renderThread();
+  }
+}
+
+function stopGeneration() {
+  if (state.abort) {
+    try {
+      state.abort.abort();
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+/* ------------------------------ attachments ------------------------------ */
+
+function renderAttachStrip() {
+  const strip = $('#attachStrip');
+  strip.innerHTML = '';
+  if (!state.attachments.length) {
+    strip.classList.add('hidden');
+    return;
+  }
+  strip.classList.remove('hidden');
+  for (const att of state.attachments) {
+    const chip = el('span', 'file-chip');
+    chip.innerHTML = `<span class="f-icon">${att.kind === 'image' ? ICONS.image : ICONS.file}</span>`;
+    const name = el('span', 'fc-name', att.name);
+    name.title = att.name;
+    chip.appendChild(name);
+    chip.appendChild(el('span', 'fc-size', fmtSize(att.size)));
+    if (att.status === 'uploading' || att.status === 'processing') {
+      const status = el('span', 'fc-status');
+      status.innerHTML = '<span class="spinner" style="width:10px;height:10px;border-width:1.4px;border-radius:50%;border:1.4px solid rgba(86,134,254,.25);border-top-color:#5686fe;display:inline-block"></span>';
+      chip.appendChild(status);
+    } else if (att.status === 'error') {
+      const status = el('span', 'fc-status', 'ошибка');
+      status.style.color = 'var(--danger)';
+      chip.appendChild(status);
+    } else {
+      chip.appendChild(el('span', 'fc-status ready', '✓'));
+    }
+    const remove = el('button');
+    remove.type = 'button';
+    remove.title = 'Убрать';
+    remove.innerHTML = '<svg viewBox="0 0 20 20"><path d="M5 5l10 10M15 5L5 15"/></svg>';
+    remove.addEventListener('click', () => {
+      state.attachments = state.attachments.filter((item) => item !== att);
+      renderAttachStrip();
+      if (att.id) api(`/api/attachments/${att.id}`, { method: 'DELETE' }).catch(() => {});
+    });
+    chip.appendChild(remove);
+    strip.appendChild(chip);
+  }
+}
+
+async function uploadFiles(fileList) {
+  const files = Array.from(fileList || []);
+  if (!files.length) return;
+  try {
+    await ensureChat();
+  } catch (error) {
+    toast(error.message);
+    return;
+  }
+  for (const file of files) {
+    if (state.attachments.length >= 10) {
+      toast('Можно прикрепить не более 10 файлов');
+      break;
+    }
+    if (file.size > 32 * 1024 * 1024) {
+      toast(`Файл «${file.name}» больше 32 МБ`);
+      continue;
+    }
+    const local = { id: null, name: file.name, size: file.size, kind: file.type?.startsWith('image/') ? 'image' : 'file', status: 'uploading', label: '' };
+    state.attachments.push(local);
+    renderAttachStrip();
+    const task = (async () => {
+      try {
+        const response = await fetch('/api/attachments', {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: {
+            'Content-Type': file.type || 'application/octet-stream',
+            'X-Filename': encodeURIComponent(file.name),
+            'X-Project-Id': state.activeProjectId,
+            'X-Chat-Id': state.chat?.id || '',
+          },
+          body: file,
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.error || 'Не удалось загрузить файл');
+        local.id = data.attachment.id;
+        local.kind = data.attachment.kind;
+        local.label = data.attachment.label;
+        local.status = data.attachment.status;
+        renderAttachStrip();
+        pollAttachment(local);
+      } catch (error) {
+        local.status = 'error';
+        local.error = error.message;
+        renderAttachStrip();
+        toast(error.message);
+      }
+    })();
+    local.promise = task;
+    await task;
+  }
+}
+
+async function pollAttachment(local) {
+  for (let attempt = 0; attempt < 90; attempt++) {
+    if (!state.attachments.includes(local)) return;
+    if (local.status !== 'processing') return;
+    await sleep(1300);
+    try {
+      const data = await api(`/api/attachments/${local.id}`);
+      local.status = data.attachment.status;
+      local.label = data.attachment.label;
+      local.warnings = data.attachment.warnings;
+      if (local.status === 'error') {
+        local.status = 'error';
+        toast('Файл не удалось обработать');
+      }
+      renderAttachStrip();
+      if (local.status !== 'processing') return;
+    } catch {
+      return;
+    }
+  }
+}
+
+/* ------------------------------ files panel ------------------------------ */
+
+function closeSidebar() {
+  $('#app').classList.remove('sidebar-open');
+}
+
+function toggleFiles(force) {
+  const panel = $('#filesPanel');
+  const open = force !== undefined ? force : panel.classList.contains('hidden');
+  if (open && !state.activeProjectId) return;
+  panel.classList.toggle('hidden', !open);
+  const app = $('#app');
+  app.classList.toggle('with-files', open);
+  app.classList.toggle('files-open', open);
+  if (open) app.classList.remove('sidebar-open');
+  state.filesOpen = open;
+  rememberFilesPref(open);
+  if (open) {
+    state.filesPath = '.';
+    loadFiles('.');
+  }
+}
+
+async function loadFiles(relPath) {
+  if (!state.activeProjectId) return;
+  const list = $('#filesList');
+  list.innerHTML = '<div class="files-empty"><div class="spin-lg"></div></div>';
+  state.filesLoading = true;
+  try {
+    const data = await api(`/api/projects/${state.activeProjectId}/files?path=${encodeURIComponent(relPath)}&depth=6`);
+    state.filesPath = relPath;
+    state.files = data.items || [];
+    renderFiles();
+  } catch (error) {
+    list.innerHTML = '';
+    list.appendChild(el('div', 'files-empty', error.message));
+  } finally {
+    state.filesLoading = false;
+  }
+}
+
+function renderFiles() {
+  const list = $('#filesList');
+  const crumb = $('#filesCrumb');
+  crumb.textContent = state.filesPath === '.' ? '/ проект' : `/ ${state.filesPath}`;
+  list.innerHTML = '';
+  if (state.filesPath !== '.') {
+    const up = el('div', 'file-row');
+    up.innerHTML = `<span class="f-icon">${ICONS.folder}</span><span class="f-name">Наверх</span>`;
+    up.addEventListener('click', () => {
+      const parent = state.filesPath.split('/').slice(0, -1).join('/') || '.';
+      loadFiles(parent);
+    });
+    list.appendChild(up);
+  }
+  if (!state.files.length) {
+    list.appendChild(el('div', 'files-empty', 'Пока пусто. Создайте файл в диалоге или загрузите свой.'));
+    return;
+  }
+  for (const item of state.files) {
+    if (state.filesPath !== '.' && !item.path.startsWith(state.filesPath.replace(/\/?$/, '/'))) continue;
+    const row = el('div', 'file-row');
+    const isImage = /\.(png|jpe?g|webp|gif|bmp)$/i.test(item.name);
+    row.innerHTML = `<span class="f-icon">${item.dir ? ICONS.folder : isImage ? ICONS.image : ICONS.file}</span>`;
+    const name = el('span', 'f-name', item.name);
+    name.title = item.path;
+    row.appendChild(name);
+    if (!item.dir) row.appendChild(el('span', 'f-size', fmtSize(item.size)));
+    const actions = el('div', 'f-actions');
+    if (!item.dir) {
+      const download = el('button', 'btn btn-ghost btn-icon');
+      download.type = 'button';
+      download.title = 'Скачать';
+      download.innerHTML = ICONS.download;
+      download.addEventListener('click', async (event) => {
+        event.stopPropagation();
+        window.open(fileUrl(item.path, true), '_blank');
+      });
+      actions.appendChild(download);
+    }
+    const del = el('button', 'btn btn-ghost btn-icon');
+    del.type = 'button';
+    del.title = 'Удалить';
+    del.innerHTML = ICONS.trash;
+    del.addEventListener('click', async (event) => {
+      event.stopPropagation();
+      const ok = await confirmDialog('Удалить файл?', `«${item.path}» будет удалён из проекта.`, 'Удалить', true);
+      if (!ok) return;
+      try {
+        await api(`/api/projects/${state.activeProjectId}/file?path=${encodeURIComponent(item.path)}`, { method: 'DELETE' });
+        loadFiles(state.filesPath);
+      } catch (error) {
+        toast(error.message);
+      }
+    });
+    actions.appendChild(del);
+    row.appendChild(actions);
+    row.addEventListener('click', () => {
+      if (item.dir) loadFiles(item.path);
+      else if (isImage) previewImage(item);
+      else {
+        // HTML-страницу (лендинг) открываем в изолированной вкладке, остальное — как есть.
+        if (/\.html?$/i.test(item.name)) {
+          window.open(
+            `/api/projects/${state.activeProjectId}/preview?path=${encodeURIComponent(item.path)}`,
+            '_blank',
+          );
+        } else {
+          const inline = /\.(pdf|txt|md|csv|json|svg)$/i.test(item.name);
+          window.open(fileUrl(item.path, !inline), '_blank');
+        }
+      }
+    });
+    list.appendChild(row);
+  }
+}
+
+function fileUrl(relPath, download = false) {
+  const suffix = download ? '&download=1' : '';
+  return `/api/projects/${state.activeProjectId}/file?path=${encodeURIComponent(relPath)}${suffix}`;
+}
+
+function previewImage(item) {
+  openModal({
+    title: item.name,
+    body: `<img class="preview-img" alt="${escapeHtml(item.name)}" src="${fileUrl(item.path, false)}"/>`,
+    actions: [{ label: 'Закрыть', kind: 'quiet' }],
+  });
+}
+
+async function uploadToProject(fileList) {
+  const files = Array.from(fileList || []);
+  for (const file of files) {
+    try {
+      const response = await fetch(`/api/projects/${state.activeProjectId}/upload?path=${encodeURIComponent(`uploads/${file.name}`)}`, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': file.type || 'application/octet-stream', 'X-Filename': encodeURIComponent(file.name) },
+        body: file,
+      });
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.error || 'Не удалось загрузить');
+      }
+    } catch (error) {
+      toast(error.message);
+    }
+  }
+  loadFiles(state.filesPath);
+}
+
+/* ------------------------------ modals ------------------------------ */
+
+let menuAnchor = null;
+
+function closeMenus() {
+  menuAnchor = null;
+  $$('.menu').forEach((menu) => menu.remove());
+}
+
+function openContextMenu(anchor, items) {
+  closeMenus();
+  menuAnchor = anchor;
+  const menu = el('div', 'menu');
+  const rect = anchor.getBoundingClientRect();
+  for (const item of items) {
+    if (item.sep) {
+      menu.appendChild(el('div', 'sep'));
+      continue;
+    }
+    const button = el('button', item.danger ? 'danger' : '');
+    button.type = 'button';
+    button.innerHTML = `${item.icon || ''}<span>${escapeHtml(item.label)}</span>`;
+    button.addEventListener('click', () => {
+      closeMenus();
+      item.action();
+    });
+    menu.appendChild(button);
+  }
+  document.body.appendChild(menu);
+  const menuRect = menu.getBoundingClientRect();
+  let left = rect.right - menuRect.width;
+  let top = rect.bottom + 6;
+  if (top + menuRect.height > window.innerHeight - 8) top = rect.top - menuRect.height - 6;
+  left = Math.max(8, Math.min(left, window.innerWidth - menuRect.width - 8));
+  menu.style.left = `${left}px`;
+  menu.style.top = `${Math.max(8, top)}px`;
+  setTimeout(() => {
+    const closer = (event) => {
+      if (!menu.contains(event.target)) {
+        closeMenus();
+        document.removeEventListener('mousedown', closer);
+      }
+    };
+    document.addEventListener('mousedown', closer);
+  }, 0);
+}
+
+function openModal({ title, body, actions = [], wide = false, onMount }) {
+  const root = $('#modalRoot');
+  root.innerHTML = '';
+  root.classList.remove('hidden');
+  const modal = el('div', `modal${wide ? ' wide' : ''}`);
+  const head = el('div', 'modal-head');
+  head.appendChild(el('div', 'modal-title', title));
+  const close = el('button', 'btn btn-ghost btn-icon');
+  close.type = 'button';
+  close.innerHTML = '<svg viewBox="0 0 20 20"><path d="M5 5l10 10M15 5L5 15"/></svg>';
+  close.addEventListener('click', () => closeModal());
+  head.appendChild(close);
+  modal.appendChild(head);
+  const bodyNode = el('div', 'modal-body');
+  if (typeof body === 'string') bodyNode.innerHTML = body;
+  else if (body) bodyNode.appendChild(body);
+  modal.appendChild(bodyNode);
+
+  const foot = el('div', 'modal-foot');
+  const apiActions = { close: closeModal };
+  for (const action of actions) {
+    const button = el('button', `btn ${action.kind === 'primary' ? 'btn-primary' : action.kind === 'danger' ? 'btn-danger' : 'btn-quiet'}`);
+    button.type = 'button';
+    button.textContent = action.label;
+    button.addEventListener('click', async () => {
+      if (!action.onClick) {
+        closeModal();
+        return;
+      }
+      button.disabled = true;
+      try {
+        const result = await action.onClick(apiActions);
+        if (result !== false) closeModal();
+      } finally {
+        button.disabled = false;
+      }
+    });
+    foot.appendChild(button);
+    apiActions[action.id || action.label] = () => button.click();
+  }
+  modal.appendChild(foot);
+  root.appendChild(modal);
+
+  root.onmousedown = (event) => {
+    if (event.target === root) closeModal();
+  };
+  document.onkeydown = (event) => {
+    if (event.key === 'Escape') {
+      closeModal();
+      document.onkeydown = null;
+    }
+  };
+  if (onMount) onMount(bodyNode, modal, apiActions);
+  return modal;
+}
+
+function closeModal() {
+  const root = $('#modalRoot');
+  root.classList.add('hidden');
+  root.innerHTML = '';
+  root.onmousedown = null;
+  document.onkeydown = null;
+}
+
+/* ------------------------------ popover ------------------------------ */
+
+let popoverNode = null;
+let popoverAnchor = null;
+let popoverCleanup = null;
+
+function closePopover() {
+  if (popoverCleanup) {
+    popoverCleanup();
+    popoverCleanup = null;
+  }
+  if (popoverNode) popoverNode.remove();
+  popoverNode = null;
+  popoverAnchor = null;
+}
+
+function placePopover(node, anchor) {
+  const rect = anchor.getBoundingClientRect();
+  const width = node.offsetWidth;
+  const height = node.offsetHeight;
+  let left = rect.left;
+  let top = rect.bottom + 8;
+  if (left + width > window.innerWidth - 10) left = window.innerWidth - width - 10;
+  left = Math.max(10, left);
+  if (top + height > window.innerHeight - 10) {
+    const above = rect.top - height - 8;
+    top = above > 10 ? above : Math.max(10, window.innerHeight - height - 10);
+  }
+  node.style.left = `${left}px`;
+  node.style.top = `${top}px`;
+}
+
+function openPopover({ anchor, title = '', body, actions = [], onMount }) {
+  closePopover();
+  const node = el('div', 'popover');
+  node.setAttribute('role', 'dialog');
+  if (title) {
+    node.appendChild(el('div', 'popover-title', title));
+    node.setAttribute('aria-label', title);
+  }
+  const bodyNode = el('div', 'popover-body');
+  if (typeof body === 'string') bodyNode.innerHTML = body;
+  else if (body) bodyNode.appendChild(body);
+  node.appendChild(bodyNode);
+
+  const api = { close: closePopover };
+  if (actions.length) {
+    const row = el('div', 'popover-actions');
+    for (const action of actions) {
+      const button = el('button', `btn ${action.kind === 'primary' ? 'btn-primary' : 'btn-quiet'}`);
+      button.type = 'button';
+      button.textContent = action.label;
+      button.addEventListener('click', async () => {
+        if (!action.onClick) {
+          closePopover();
+          return;
+        }
+        button.disabled = true;
+        try {
+          const result = await action.onClick(api);
+          if (result !== false) closePopover();
+        } finally {
+          button.disabled = false;
+        }
+      });
+      row.appendChild(button);
+      api[action.id || action.label] = () => button.click();
+    }
+    node.appendChild(row);
+  }
+
+  document.body.appendChild(node);
+  popoverNode = node;
+  popoverAnchor = anchor;
+  placePopover(node, anchor);
+
+  const onDocDown = (event) => {
+    if (node.contains(event.target)) return;
+    if (anchor.contains(event.target)) return;
+    closePopover();
+  };
+  const onKey = (event) => {
+    if (event.key !== 'Escape') return;
+    event.stopPropagation();
+    if (event.target instanceof HTMLElement) event.target.blur();
+    closePopover();
+  };
+  const onViewportChange = () => closePopover();
+  document.addEventListener('mousedown', onDocDown, true);
+  document.addEventListener('keydown', onKey, true);
+  document.addEventListener('scroll', onViewportChange, true);
+  window.addEventListener('resize', onViewportChange);
+
+  popoverCleanup = () => {
+    document.removeEventListener('mousedown', onDocDown, true);
+    document.removeEventListener('keydown', onKey, true);
+    document.removeEventListener('scroll', onViewportChange, true);
+    window.removeEventListener('resize', onViewportChange);
+  };
+
+  if (onMount) onMount(bodyNode, node, api);
+  return node;
+}
+
+function togglePopover(options) {
+  if (popoverAnchor === options.anchor && popoverNode) {
+    closePopover();
+    return null;
+  }
+  return openPopover(options);
+}
+
+function promptDialog({ title, label, value = '', placeholder = '', confirm = 'Сохранить', password = false }) {
+  return new Promise((resolve) => {
+    const form = el('form', 'form-grid');
+    const field = el('label', 'field');
+    field.appendChild(el('span', 'field-label', label));
+    const input = el('input');
+    input.type = password ? 'password' : 'text';
+    input.value = value;
+    input.placeholder = placeholder;
+    input.autocomplete = password ? 'new-password' : 'off';
+    field.appendChild(input);
+    form.appendChild(field);
+    let settled = false;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      resolve(result);
+    };
+    openModal({
+      title,
+      body: form,
+      actions: [
+        { label: 'Отмена', kind: 'quiet', onClick: () => finish(null) },
+        {
+          label: confirm,
+          kind: 'primary',
+          onClick: () => {
+            finish(input.value.trim());
+          },
+        },
+      ],
+    });
+    form.addEventListener('submit', (event) => {
+      event.preventDefault();
+      finish(input.value.trim());
+      closeModal();
+    });
+    setTimeout(() => {
+      input.focus();
+      input.select();
+    }, 40);
+  });
+}
+
+function confirmDialog(title, text, confirmLabel = 'Подтвердить', danger = false) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+    openModal({
+      title,
+      body: `<p>${escapeHtml(text)}</p>`,
+      actions: [
+        { label: 'Отмена', kind: 'quiet', onClick: () => finish(false) },
+        { label: confirmLabel, kind: danger ? 'danger' : 'primary', onClick: () => finish(true) },
+      ],
+    });
+    $('#modalRoot').addEventListener('mousedown', (event) => {
+      if (event.target === $('#modalRoot')) finish(false);
+    });
+  });
+}
+
+/* ------------------------------ menus ------------------------------ */
+
+function openUserMenu(event) {
+  const isAdmin = state.user?.role === 'admin';
+  const items = [
+    {
+      label: 'Сменить пароль',
+      icon: ICONS.key,
+      action: () => changePasswordModal(),
+    },
+  ];
+  if (isAdmin) {
+    items.push(
+      { sep: true },
+      { label: 'Пользователи', icon: ICONS.users, action: () => adminModal() },
+    );
+  }
+  items.push({ sep: true }, { label: 'Выйти', icon: ICONS.logout, danger: true, action: () => logout() });
+  openContextMenu(event.currentTarget, items);
+}
+
+function openProjectMenu(event, project) {
+  const items = [
+    { label: 'Переименовать', icon: ICONS.pen, action: () => renameProject(project) },
+    { label: 'Новый диалог', icon: ICONS.file, action: () => newChatFor(project) },
+  ];
+  if (state.workflows.length) {
+    items.push({ label: 'Переместить в workflow', icon: ICONS.folder, action: () => moveProjectModal(project) });
+  }
+  items.push({ sep: true }, { label: 'Удалить проект', icon: ICONS.trash, danger: true, action: () => deleteProject(project) });
+  openContextMenu(event.currentTarget, items);
+}
+
+function openWorkflowMenu(event, workflow) {
+  const anchor = event.currentTarget;
+  openContextMenu(anchor, [
+    { label: 'Новый проект в папке', icon: ICONS.folder, action: () => createProjectModal({ workflowId: workflow.id, anchor }) },
+    { label: 'Переименовать workflow', icon: ICONS.pen, action: () => renameWorkflow(workflow) },
+    { sep: true },
+    { label: 'Удалить workflow', icon: ICONS.trash, danger: true, action: () => deleteWorkflow(workflow) },
+  ]);
+}
+
+function openChatMenu(event, chat) {
+  openContextMenu(event.currentTarget, [
+    { label: 'Переименовать', icon: ICONS.pen, action: () => renameChat(chat) },
+    { sep: true },
+    { label: 'Удалить диалог', icon: ICONS.trash, danger: true, action: () => deleteChat(chat) },
+  ]);
+}
+
+async function renameProject(project) {
+  const name = await promptDialog({ title: 'Название проекта', label: 'Как назвать проект?', value: project.name });
+  if (!name || name === project.name) return;
+  try {
+    await api(`/api/projects/${project.id}`, { method: 'PATCH', body: { name } });
+    project.name = name;
+    renderSidebar();
+    updateCrumbs();
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
+async function deleteProject(project) {
+  const ok = await confirmDialog(
+    'Удалить проект?',
+    `Все диалоги и файлы проекта «${project.name}» будут удалены безвозвратно.`,
+    'Удалить проект',
+    true,
+  );
+  if (!ok) return;
+  try {
+    await api(`/api/projects/${project.id}`, { method: 'DELETE' });
+    state.projects = state.projects.filter((item) => item.id !== project.id);
+    if (state.activeProjectId === project.id) {
+      state.activeProjectId = null;
+      state.activeChatId = null;
+      state.chat = null;
+      const first = state.projects[0];
+      if (first) {
+        state.activeProjectId = first.id;
+        state.expanded.add(first.id);
+        if (first.chats?.[0]) await openChat(first.chats[0].id);
+        else {
+          renderThread();
+          updateCrumbs();
+        }
+      } else {
+        renderThread();
+        updateCrumbs();
+      }
+    }
+    renderSidebar();
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
+async function newChatFor(project) {
+  closeSidebar();
+  try {
+    const created = await api(`/api/projects/${project.id}/chats`, { method: 'POST', body: {} });
+    project.chats = project.chats || [];
+    project.chats.unshift(created.chat);
+    state.activeProjectId = project.id;
+    state.expanded.add(project.id);
+    await openChat(created.chat.id);
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
+async function newChat() {
+  const project = activeProject() || state.projects[0];
+  if (!project) {
+    try {
+      const created = await api('/api/projects', { method: 'POST', body: { name: 'Мой проект' } });
+      state.projects.push({ ...created.project, chats: [] });
+      return newChatFor(created.project);
+    } catch (error) {
+      toast(error.message);
+      return;
+    }
+  }
+  newChatFor(project);
+}
+
+/* ---------------------- проекты и workflow ---------------------- */
+
+const NEW_WORKFLOW_VALUE = '__new_workflow__';
+
+function workflowSelectField({ value = '', allowNew = true, allowNone = true } = {}) {
+  const field = el('label', 'field');
+  field.appendChild(el('span', 'field-label', 'Workflow — папка проектов'));
+  const select = el('select');
+  if (allowNone) {
+    const none = el('option');
+    none.value = '';
+    none.textContent = '— Без папки —';
+    select.appendChild(none);
+  }
+  for (const workflow of state.workflows) {
+    const option = el('option');
+    option.value = workflow.id;
+    option.textContent = workflow.name;
+    select.appendChild(option);
+  }
+  if (allowNew) {
+    const option = el('option');
+    option.value = NEW_WORKFLOW_VALUE;
+    option.textContent = '+ Новый workflow…';
+    select.appendChild(option);
+  }
+  select.value = value;
+  field.appendChild(select);
+  return { field, select };
+}
+
+function createProjectModal({ workflowId = '', anchor = null } = {}) {
+  const folder = workflowId ? state.workflows.find((item) => item.id === workflowId) : null;
+  const form = el('form', 'popover-form');
+  const nameInput = el('input', 'popover-input');
+  nameInput.type = 'text';
+  nameInput.placeholder = 'Название проекта';
+  nameInput.autocomplete = 'off';
+  nameInput.setAttribute('aria-label', 'Название проекта');
+  form.appendChild(nameInput);
+
+  const submit = async () => {
+    const name = nameInput.value.trim() || 'Новый проект';
+    try {
+      const created = await api('/api/projects', {
+        method: 'POST',
+        body: { name, workflowId: workflowId || null },
+      });
+      const project = { ...created.project, chats: [] };
+      state.projects.unshift(project);
+      state.activeProjectId = project.id;
+      state.activeChatId = null;
+      state.chat = null;
+      state.attachments = [];
+      state.expanded.add(project.id);
+      if (workflowId) state.collapsedWorkflows.delete(workflowId);
+      renderAttachStrip();
+      renderSidebar();
+      renderThread();
+      updateCrumbs();
+      if (state.filesOpen) loadFiles('.');
+      $('#input').focus();
+      toast(`Проект «${project.name}» создан`, 'ok');
+      return true;
+    } catch (error) {
+      toast(error.message);
+      return false;
+    }
+  };
+
+  togglePopover({
+    anchor: anchor || $('#newProjectBtn'),
+    title: folder ? `Новый проект в «${folder.name}»` : 'Новый проект',
+    body: form,
+    actions: [{ id: 'create', label: 'Создать проект', kind: 'primary', onClick: submit }],
+    onMount: (_body, _node, actions) => {
+      nameInput.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          actions.create();
+        }
+      });
+      setTimeout(() => nameInput.focus(), 30);
+    },
+  });
+}
+
+async function createWorkflowModal(anchor = null) {
+  const name = await promptDialog({
+    title: 'Новый workflow',
+    label: 'Название workflow — папки проектов',
+    placeholder: 'Например: Клиенты 2026',
+    confirm: 'Создать',
+  });
+  if (!name) return;
+  try {
+    const created = await api('/api/workflows', { method: 'POST', body: { name } });
+    state.workflows.push(created.workflow);
+    state.collapsedWorkflows.delete(created.workflow.id);
+    renderSidebar();
+    toast(`Workflow «${created.workflow.name}» создан`, 'ok');
+    createProjectModal({ workflowId: created.workflow.id, anchor: anchor || $('#newWorkflowBtn') });
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
+async function renameWorkflow(workflow) {
+  const name = await promptDialog({
+    title: 'Название workflow',
+    label: 'Как назвать папку проектов?',
+    value: workflow.name,
+  });
+  if (!name || name === workflow.name) return;
+  try {
+    await api(`/api/workflows/${workflow.id}`, { method: 'PATCH', body: { name } });
+    workflow.name = name;
+    renderSidebar();
+    toast('Название обновлено', 'ok');
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
+async function deleteWorkflow(workflow) {
+  const count = state.projects.filter((project) => project.workflowId === workflow.id).length;
+  const ok = await confirmDialog(
+    'Удалить workflow?',
+    count
+      ? `Папка «${workflow.name}» будет удалена. Проекты (${count}) останутся — они перейдут в общий список, файлы и диалоги сохранятся.`
+      : `Папка «${workflow.name}» будет удалена.`,
+    'Удалить папку',
+    true,
+  );
+  if (!ok) return;
+  try {
+    await api(`/api/workflows/${workflow.id}`, { method: 'DELETE' });
+    state.workflows = state.workflows.filter((item) => item.id !== workflow.id);
+    state.collapsedWorkflows.delete(workflow.id);
+    for (const project of state.projects) {
+      if (project.workflowId === workflow.id) project.workflowId = null;
+    }
+    renderSidebar();
+    toast('Workflow удалён', 'ok');
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
+function moveProjectModal(project) {
+  if (!state.workflows.length) {
+    toast('Сначала создайте workflow');
+    return;
+  }
+  const form = el('form', 'form-grid');
+  const { field, select } = workflowSelectField({ value: project.workflowId || '', allowNew: false });
+  form.appendChild(field);
+  form.appendChild(el('p', 'form-hint', 'Файлы и диалоги проекта останутся на месте.'));
+  openModal({
+    title: 'Переместить проект',
+    body: form,
+    actions: [
+      { label: 'Отмена', kind: 'quiet' },
+      {
+        label: 'Переместить',
+        kind: 'primary',
+        onClick: async () => {
+          const target = select.value || null;
+          if ((project.workflowId || null) === target) return true;
+          try {
+            await api(`/api/projects/${project.id}`, { method: 'PATCH', body: { workflowId: target } });
+            project.workflowId = target;
+            renderSidebar();
+            toast('Проект перемещён', 'ok');
+            return true;
+          } catch (error) {
+            toast(error.message);
+            return false;
+          }
+        },
+      },
+    ],
+  });
+}
+
+async function renameChat(chat) {
+  const title = await promptDialog({ title: 'Название диалога', label: 'Как назвать диалог?', value: chat.title });
+  if (!title || title === chat.title) return;
+  try {
+    await api(`/api/chats/${chat.id}`, { method: 'PATCH', body: { title } });
+    chat.title = title;
+    if (state.chat?.id === chat.id) state.chat.title = title;
+    renderSidebar();
+    updateCrumbs();
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
+async function deleteChat(chat) {
+  const ok = await confirmDialog('Удалить диалог?', `Диалог «${chat.title}» будет удалён.`, 'Удалить', true);
+  if (!ok) return;
+  try {
+    await api(`/api/chats/${chat.id}`, { method: 'DELETE' });
+    const project = state.projects.find((item) => item.id === chat.projectId);
+    if (project) project.chats = (project.chats || []).filter((item) => item.id !== chat.id);
+    if (state.activeChatId === chat.id) {
+      state.activeChatId = null;
+      state.chat = null;
+      if (project?.chats?.[0]) await openChat(project.chats[0].id);
+      else {
+        renderThread();
+        updateCrumbs();
+      }
+    }
+    renderSidebar();
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
+async function changePasswordModal() {
+  const form = el('form', 'form-grid');
+  const mk = (label, type) => {
+    const field = el('label', 'field');
+    field.appendChild(el('span', 'field-label', label));
+    const input = el('input');
+    input.type = type;
+    input.autocomplete = 'new-password';
+    field.appendChild(input);
+    form.appendChild(field);
+    return input;
+  };
+  const current = mk('Текущий пароль', 'password');
+  const next = mk('Новый пароль', 'password');
+  const repeat = mk('Повторите новый пароль', 'password');
+  const note = el('p', 'field-error');
+  form.appendChild(note);
+  let settled = false;
+  openModal({
+    title: 'Смена пароля',
+    body: form,
+    actions: [
+      { label: 'Отмена', kind: 'quiet', onClick: () => {} },
+      {
+        label: 'Сохранить',
+        kind: 'primary',
+        onClick: async () => {
+          note.textContent = '';
+          if (next.value !== repeat.value) {
+            note.textContent = 'Пароли не совпадают';
+            return false;
+          }
+          try {
+            await api('/api/account/password', { method: 'POST', body: { current: current.value, next: next.value } });
+            closeModal();
+            toast('Пароль обновлён', 'ok');
+          } catch (error) {
+            note.textContent = error.message;
+          }
+          return false;
+        },
+      },
+    ],
+  });
+  setTimeout(() => current.focus(), 40);
+}
+
+async function logout() {
+  try {
+    await api('/api/logout', { method: 'POST', body: {} });
+  } catch {
+    /* ignore */
+  }
+  state.projects = [];
+  state.chat = null;
+  state.activeChatId = null;
+  state.activeProjectId = null;
+  showAuth();
+}
+
+/* ------------------------------ admin ------------------------------ */
+
+async function adminModal() {
+  const body = el('div', 'admin');
+  body.innerHTML = '<div class="files-empty"><div class="spin-lg"></div></div>';
+  openModal({
+    title: 'Пользователи',
+    wide: true,
+    body,
+    actions: [{ label: 'Закрыть', kind: 'quiet' }],
+  });
+  const refresh = async () => {
+    const [usersData, statsData, approvalsData] = await Promise.all([
+      api('/api/admin/users'),
+      api('/api/admin/stats'),
+      api('/api/admin/approvals').catch(() => ({ approvals: [] })),
+    ]);
+    renderAdmin(body, usersData.users, statsData.overview, approvalsData.approvals || [], refresh);
+  };
+  try {
+    await refresh();
+  } catch (error) {
+    body.innerHTML = '';
+    body.appendChild(el('div', 'files-empty', error.message));
+  }
+}
+
+/* Запросы на подтверждение тяжёлых задач: одобряем или отклоняем прямо здесь. */
+function renderApprovals(body, approvals, refresh) {
+  if (!approvals.length) return;
+  body.appendChild(el('div', 'admin-section-title', 'Запросы на тяжёлые задачи'));
+  const pending = approvals.filter((item) => item.status === 'pending');
+  const decided = approvals.filter((item) => item.status !== 'pending').slice(0, 6);
+  for (const approval of [...pending, ...decided]) {
+    const row = el('div', `approval${approval.status === 'pending' ? '' : ' done'}`);
+    const main = el('div', 'ap-main');
+    main.appendChild(el('div', 'ap-title', `${approval.username} · ${approval.projectName}`));
+    const when = new Date(approval.createdAt).toLocaleString('ru-RU', {
+      day: '2-digit',
+      month: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+    const status =
+      approval.status === 'pending' ? 'ждёт решения' : approval.status === 'approved' ? 'одобрено' : 'отклонено';
+    main.appendChild(
+      el('div', 'ap-sub', `${fmtUsd(approval.spentUsd)} из ${fmtUsd(approval.limitUsd)} · ${when} · ${status}`),
+    );
+    row.appendChild(main);
+
+    const actions = el('div', 'ap-actions');
+    const decide = async (action) => {
+      try {
+        const data = await api(`/api/admin/approvals/${approval.id}`, { method: 'POST', body: { action } });
+        toast(
+          action === 'approve'
+            ? `Продолжение разрешено, новый лимит ${fmtUsd(data.budgetUsd)}`
+            : 'Запрос отклонён',
+          action === 'approve' ? 'ok' : 'error',
+        );
+        if (refresh) await refresh();
+      } catch (error) {
+        toast(error.message);
+      }
+    };
+    if (approval.status !== 'approved') {
+      const approve = el('button', 'btn btn-primary', 'Одобрить');
+      approve.type = 'button';
+      approve.addEventListener('click', () => decide('approve'));
+      actions.appendChild(approve);
+    }
+    if (approval.status === 'pending') {
+      const reject = el('button', 'btn', 'Отклонить');
+      reject.type = 'button';
+      reject.addEventListener('click', () => decide('reject'));
+      actions.appendChild(reject);
+    }
+    row.appendChild(actions);
+    body.appendChild(row);
+  }
+}
+
+function renderAdmin(body, users, overview, approvals = [], refresh = null) {
+  body.innerHTML = '';
+  const stats = el('div', 'stats');
+  const mkStat = (value, label) => {
+    const box = el('div', 'stat');
+    box.appendChild(el('div', 'stat-value', String(value)));
+    box.appendChild(el('div', 'stat-label', label));
+    return box;
+  };
+  stats.appendChild(mkStat(users.length, plural(users.length, 'пользователь', 'пользователя', 'пользователей')));
+  stats.appendChild(mkStat(overview.projects, plural(overview.projects, 'проект', 'проекта', 'проектов')));
+  stats.appendChild(mkStat(overview.chats, plural(overview.chats, 'диалог', 'диалога', 'диалогов')));
+  const messages = overview.total?.messages || 0;
+  stats.appendChild(mkStat(messages, plural(messages, 'сообщение', 'сообщения', 'сообщений')));
+  body.appendChild(stats);
+
+  const form = el('form', 'inline-form');
+  const userField = el('label', 'field');
+  userField.appendChild(el('span', 'field-label', 'Новый логин'));
+  const userInput = el('input');
+  userInput.placeholder = 'например, ivan';
+  userInput.autocomplete = 'off';
+  userField.appendChild(userInput);
+  form.appendChild(userField);
+  const passField = el('label', 'field');
+  passField.appendChild(el('span', 'field-label', 'Пароль'));
+  const passInput = el('input');
+  passInput.type = 'text';
+  passInput.placeholder = 'минимум 8 символов';
+  passInput.autocomplete = 'off';
+  passField.appendChild(passInput);
+  form.appendChild(passField);
+  const createBtn = el('button', 'btn btn-primary', 'Создать');
+  createBtn.type = 'submit';
+  form.appendChild(createBtn);
+  const note = el('p', 'field-error');
+  form.appendChild(note);
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    note.textContent = '';
+    createBtn.disabled = true;
+    try {
+      const data = await api('/api/admin/users', { method: 'POST', body: { username: userInput.value.trim(), password: passInput.value } });
+      users.push({ ...data.user, usage: [] });
+      userInput.value = '';
+      passInput.value = '';
+      renderAdmin(body, users, overview, approvals, refresh);
+    } catch (error) {
+      note.textContent = error.message;
+    } finally {
+      createBtn.disabled = false;
+    }
+  });
+  body.appendChild(form);
+
+  renderApprovals(body, approvals, refresh);
+
+  const list = el('div');
+  for (const user of users) {
+    const row = el('div', 'admin-user');
+    const avatar = el('span', 'avatar', (user.displayName || user.username).charAt(0));
+    row.appendChild(avatar);
+    const main = el('div', 'au-main');
+    const nameLine = el('div', 'au-name');
+    nameLine.textContent = user.displayName || user.username;
+    if (user.role === 'admin') {
+      const badge = el('span', 'badge', 'админ');
+      nameLine.appendChild(badge);
+    }
+    if (user.disabled) {
+      const badge = el('span', 'badge danger', 'заблокирован');
+      nameLine.appendChild(badge);
+    }
+    main.appendChild(nameLine);
+    const last = user.lastLoginAt ? new Date(user.lastLoginAt).toLocaleDateString('ru-RU') : 'ещё не входил';
+    main.appendChild(el('div', 'au-sub', `${user.username} · ${last}`));
+    row.appendChild(main);
+
+    const actions = el('div', 'au-actions');
+    const reset = el('button', 'btn', 'Пароль');
+    reset.type = 'button';
+    reset.addEventListener('click', async () => {
+      const password = await promptDialog({
+        title: 'Новый пароль',
+        label: `Пароль для «${user.username}»`,
+        confirm: 'Сбросить',
+      });
+      if (!password) return;
+      try {
+        await api(`/api/admin/users/${user.id}`, { method: 'PATCH', body: { password } });
+        toast('Пароль изменён', 'ok');
+      } catch (error) {
+        toast(error.message);
+      }
+    });
+    actions.appendChild(reset);
+    if (user.id !== state.user.id) {
+      const block = el('button', 'btn', user.disabled ? 'Разблокировать' : 'Блокировать');
+      block.type = 'button';
+      block.addEventListener('click', async () => {
+        try {
+          await api(`/api/admin/users/${user.id}`, { method: 'PATCH', body: { disabled: !user.disabled } });
+          user.disabled = !user.disabled;
+          renderAdmin(body, users, overview, approvals, refresh);
+        } catch (error) {
+          toast(error.message);
+        }
+      });
+      actions.appendChild(block);
+      const del = el('button', 'btn', 'Удалить');
+      del.type = 'button';
+      del.addEventListener('click', async () => {
+        const ok = await confirmDialog('Удалить пользователя?', `Учётная запись «${user.username}» и все её проекты будут удалены.`, 'Удалить', true);
+        if (!ok) return;
+        try {
+          await api(`/api/admin/users/${user.id}`, { method: 'DELETE' });
+          const idx = users.findIndex((item) => item.id === user.id);
+          if (idx >= 0) users.splice(idx, 1);
+          renderAdmin(body, users, overview, approvals, refresh);
+        } catch (error) {
+          toast(error.message);
+        }
+      });
+      actions.appendChild(del);
+    }
+    row.appendChild(actions);
+    list.appendChild(row);
+  }
+  body.appendChild(list);
+}
+
+/* ------------------------------ composer ------------------------------ */
+
+function autoResize() {
+  const input = $('#input');
+  if (!input) return;
+  const max = Math.max(180, Math.min(420, Math.round(window.innerHeight * 0.42)));
+  input.style.height = 'auto';
+  const next = Math.min(input.scrollHeight + 3, max);
+  input.style.height = `${next}px`;
+  input.style.overflowY = input.scrollHeight > max ? 'auto' : 'hidden';
+}
+
+// На узком экране длинная подсказка переносится в две строки и раздувает поле ввода.
+function syncInputPlaceholder() {
+  const input = $('#input');
+  if (!input) return;
+  const narrow = window.matchMedia('(max-width: 560px)').matches;
+  input.placeholder = narrow ? 'Задайте вопрос…' : 'Спросите или поставьте задачу…';
+}
+
+/* ------------------------------ theme ------------------------------ */
+
+function currentTheme() {
+  return document.documentElement.dataset.theme === 'light' ? 'light' : 'dark';
+}
+
+function applyTheme(theme, persist = true) {
+  const next = theme === 'light' ? 'light' : 'dark';
+  document.documentElement.dataset.theme = next;
+  document.documentElement.style.colorScheme = next;
+  if (persist) {
+    try {
+      localStorage.setItem('dshow-theme', next);
+    } catch {
+      /* ignore */
+    }
+  }
+  const toggle = $('#themeToggle');
+  if (!toggle) return;
+  const light = next === 'light';
+  toggle.title = light ? 'Тёмная тема' : 'Светлая тема';
+  toggle.setAttribute('aria-label', light ? 'Включить тёмную тему' : 'Включить светлую тему');
+  const moon = $('.icon-moon', toggle);
+  const sun = $('.icon-sun', toggle);
+  if (moon) moon.classList.toggle('hidden', light);
+  if (sun) sun.classList.toggle('hidden', !light);
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.setAttribute('content', light ? '#ffffff' : '#151517');
+}
+
+/* ------------------------------ voice input ------------------------------ */
+
+const dictation = {
+  recorder: null,
+  stream: null,
+  chunks: [],
+  startedAt: 0,
+  tick: null,
+  cancelled: false,
+  busy: false,
+};
+
+function setDictationBar(visible, text) {
+  const bar = $('#dictationBar');
+  if (!bar) return;
+  bar.classList.toggle('hidden', !visible);
+  const composer = $('#composer');
+  if (composer) composer.classList.toggle('dictating', visible);
+  if (text) $('#dictationText').textContent = text;
+}
+
+function updateDictationText() {
+  if (!dictation.startedAt) return;
+  const seconds = Math.max(0, Math.floor((Date.now() - dictation.startedAt) / 1000));
+  const mm = Math.floor(seconds / 60);
+  const ss = String(seconds % 60).padStart(2, '0');
+  /* Одна строка: время + короткая подсказка, при нехватке места текст обрезается. */
+  $('#dictationText').textContent = `Слушаю… ${mm}:${ss} · микрофон — закончить`;
+}
+
+function stopDictationStream() {
+  if (dictation.stream) {
+    for (const track of dictation.stream.getTracks()) {
+      try {
+        track.stop();
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+}
+
+function cleanupDictation() {
+  clearInterval(dictation.tick);
+  dictation.tick = null;
+  stopDictationStream();
+  dictation.recorder = null;
+  dictation.stream = null;
+  dictation.chunks = [];
+  dictation.startedAt = 0;
+  const mic = $('#micBtn');
+  if (mic) {
+    mic.classList.remove('active');
+    mic.setAttribute('aria-pressed', 'false');
+    mic.disabled = false;
+  }
+}
+
+async function startDictation() {
+  if (dictation.busy || dictation.recorder) return;
+  if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
+    toast('Голосовой ввод не поддерживается этим браузером');
+    return;
+  }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+    });
+    let mimeType = '';
+    for (const candidate of ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/mp4']) {
+      if (window.MediaRecorder.isTypeSupported?.(candidate)) {
+        mimeType = candidate;
+        break;
+      }
+    }
+    const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+    dictation.stream = stream;
+    dictation.recorder = recorder;
+    dictation.chunks = [];
+    dictation.cancelled = false;
+    dictation.startedAt = Date.now();
+    recorder.addEventListener('dataavailable', (event) => {
+      if (event.data && event.data.size) dictation.chunks.push(event.data);
+    });
+    recorder.addEventListener('stop', () => {
+      finalizeDictation().catch(() => {});
+    });
+    recorder.start(250);
+    const mic = $('#micBtn');
+    mic.classList.add('active');
+    mic.setAttribute('aria-pressed', 'true');
+    setDictationBar(true, 'Слушаю…');
+    updateDictationText();
+    dictation.tick = setInterval(() => {
+      updateDictationText();
+      if (Date.now() - dictation.startedAt > 180000) stopDictation(false);
+    }, 500);
+  } catch (error) {
+    cleanupDictation();
+    setDictationBar(false);
+    const denied = error?.name === 'NotAllowedError' || error?.name === 'SecurityError';
+    toast(denied ? 'Разрешите доступ к микрофону в настройках браузера' : 'Не удалось включить микрофон');
+  }
+}
+
+function stopDictation(cancelled = false) {
+  if (!dictation.recorder) {
+    if (cancelled) setDictationBar(false);
+    return;
+  }
+  dictation.cancelled = cancelled;
+  setDictationBar(true, cancelled ? 'Запись отменена' : 'Обрабатываю запись…');
+  try {
+    if (dictation.recorder.state !== 'inactive') dictation.recorder.stop();
+  } catch {
+    cleanupDictation();
+    setDictationBar(false);
+  }
+}
+
+function encodeWavMono(samples, sampleRate) {
+  const buffer = new ArrayBuffer(44 + samples.length * 2);
+  const view = new DataView(buffer);
+  const writeText = (offset, text) => {
+    for (let i = 0; i < text.length; i++) view.setUint8(offset + i, text.charCodeAt(i));
+  };
+  writeText(0, 'RIFF');
+  view.setUint32(4, 36 + samples.length * 2, true);
+  writeText(8, 'WAVE');
+  writeText(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  writeText(36, 'data');
+  view.setUint32(40, samples.length * 2, true);
+  let offset = 44;
+  for (let i = 0; i < samples.length; i++) {
+    const sample = Math.max(-1, Math.min(1, samples[i]));
+    view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
+    offset += 2;
+  }
+  return new Blob([buffer], { type: 'audio/wav' });
+}
+
+async function blobToWav(blob) {
+  const AudioCtx = window.AudioContext || window.webkitAudioContext;
+  const OfflineCtx = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+  if (!AudioCtx || !OfflineCtx) throw new Error('Браузер не поддерживает обработку звука');
+  const encoded = await blob.arrayBuffer();
+  const ctx = new AudioCtx();
+  let decoded;
+  try {
+    decoded = await new Promise((resolve, reject) => {
+      const promise = ctx.decodeAudioData(encoded, resolve, reject);
+      if (promise && typeof promise.then === 'function') promise.then(resolve, reject);
+    });
+  } finally {
+    ctx.close?.().catch?.(() => {});
+  }
+  const sampleRate = 16000;
+  const frames = Math.max(1, Math.ceil(decoded.duration * sampleRate));
+  const offline = new OfflineCtx(1, frames, sampleRate);
+  const source = offline.createBufferSource();
+  source.buffer = decoded;
+  source.connect(offline.destination);
+  source.start(0);
+  const rendered = await offline.startRendering();
+  return encodeWavMono(rendered.getChannelData(0), sampleRate);
+}
+
+function insertTranscript(text) {
+  const input = $('#input');
+  const start = input.selectionStart ?? input.value.length;
+  const end = input.selectionEnd ?? input.value.length;
+  const before = input.value.slice(0, start);
+  const after = input.value.slice(end);
+  const prefix = before && !/[\s\n]$/.test(before) ? ' ' : '';
+  const suffix = after && !/^[\s\n.,!?;:)]/.test(after) ? ' ' : '';
+  input.value = `${before}${prefix}${text}${suffix}${after}`;
+  const caret = (before + prefix + text).length;
+  input.setSelectionRange(caret, caret);
+  autoResize();
+  input.focus();
+}
+
+async function finalizeDictation() {
+  const chunks = dictation.chunks;
+  const cancelled = dictation.cancelled;
+  const startedAt = dictation.startedAt;
+  const mimeType = dictation.recorder?.mimeType || 'audio/webm';
+  clearInterval(dictation.tick);
+  dictation.tick = null;
+  stopDictationStream();
+  $('#micBtn').classList.remove('active');
+  $('#micBtn').setAttribute('aria-pressed', 'false');
+  $('#micBtn').disabled = false;
+  dictation.recorder = null;
+  dictation.stream = null;
+  dictation.startedAt = 0;
+
+  if (cancelled) {
+    dictation.chunks = [];
+    setDictationBar(false);
+    return;
+  }
+  if (!chunks.length || Date.now() - startedAt < 500) {
+    dictation.chunks = [];
+    setDictationBar(false);
+    toast('Слишком короткая запись');
+    return;
+  }
+
+  dictation.busy = true;
+  $('#micBtn').disabled = true;
+  setDictationBar(true, 'Распознаю речь…');
+  try {
+    const blob = new Blob(chunks, { type: mimeType });
+    const wav = await blobToWav(blob);
+    if (wav.size > 20 * 1024 * 1024) throw new Error('Запись слишком длинная');
+    const response = await fetch('/api/transcribe', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'audio/wav', 'X-Audio-Format': 'wav' },
+      body: wav,
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || `Ошибка ${response.status}`);
+    const text = String(data.text || '').trim();
+    if (!text) {
+      toast('Речь не распознана — попробуйте говорить ближе к микрофону');
+    } else {
+      insertTranscript(text);
+    }
+  } catch (error) {
+    toast(error.message || 'Не удалось распознать речь');
+  } finally {
+    dictation.busy = false;
+    dictation.chunks = [];
+    setDictationBar(false);
+    $('#micBtn').disabled = false;
+  }
+}
+
+function toggleDictation() {
+  if (dictation.busy) return;
+  if (dictation.recorder) stopDictation(false);
+  else startDictation();
+}
+
+/* ------------------------------ spellcheck ------------------------------ */
+
+async function checkSpelling() {
+  if (state.streaming) return;
+  const input = $('#input');
+  const source = input.value;
+  if (!source.trim()) {
+    toast('Сначала введите текст');
+    input.focus();
+    return;
+  }
+  if (source.length > 24000) {
+    toast('Текст длиннее 24 000 символов — проверьте частями');
+    return;
+  }
+  const button = $('#spellBtn');
+  if (button.classList.contains('busy')) return;
+  button.classList.add('busy');
+  button.disabled = true;
+  try {
+    const data = await api('/api/proofread', { method: 'POST', body: { text: source } });
+    const fixed = String(data.text || '').trim();
+    if (fixed && fixed !== source.trim()) {
+      input.value = fixed;
+      autoResize();
+      input.focus();
+      toast('Орфография и пунктуация исправлены', 'ok');
+    } else {
+      toast('Ошибок не найдено', 'ok');
+    }
+  } catch (error) {
+    if (!error.unauthorized) toast(error.message || 'Не удалось проверить текст');
+  } finally {
+    button.classList.remove('busy');
+    button.disabled = false;
+  }
+}
+
+/* ------------------------------ wiring ------------------------------ */
+
+$('#loginForm').addEventListener('submit', onLogin);
+$('#userChip').addEventListener('click', openUserMenu);
+$('#newProjectBtn').addEventListener('click', (event) => createProjectModal({ anchor: event.currentTarget }));
+$('#newWorkflowBtn').addEventListener('click', (event) => createWorkflowModal(event.currentTarget));
+$('#composer').addEventListener('submit', sendMessage);
+$('#stopBtn').addEventListener('click', stopGeneration);
+$('#attachBtn').addEventListener('click', () => $('#fileInput').click());
+$('#fileInput').addEventListener('change', (event) => {
+  uploadFiles(event.target.files);
+  event.target.value = '';
+});
+$('#filesBtn').addEventListener('click', () => toggleFiles());
+$('#filesCloseBtn').addEventListener('click', () => toggleFiles(false));
+$('#filesUploadBtn').addEventListener('click', () => $('#filesPanelInput').click());
+$('#filesPanelInput').addEventListener('change', (event) => {
+  uploadToProject(event.target.files);
+  event.target.value = '';
+});
+$('#exportProjectBtn').addEventListener('click', () => {
+  if (state.activeProjectId) window.open(`/api/projects/${state.activeProjectId}/download`, '_blank');
+});
+$('#sidebarToggle').addEventListener('click', () => {
+  const app = $('#app');
+  const willOpen = !app.classList.contains('sidebar-open');
+  app.classList.toggle('sidebar-open', willOpen);
+  if (willOpen) {
+    app.classList.remove('files-open');
+    if (state.filesOpen) toggleFiles(false);
+  }
+});
+$('#backdrop').addEventListener('click', () => {
+  $('#app').classList.remove('sidebar-open');
+  $('#app').classList.remove('files-open');
+  if (state.filesOpen) toggleFiles(false);
+});
+$('#chatMenuBtn').addEventListener('click', (event) => {
+  if (!state.chat) return;
+  openContextMenu(event.currentTarget, [
+    { label: 'Переименовать диалог', icon: ICONS.pen, action: () => renameChat(state.chat) },
+    { label: 'Файлы проекта', icon: ICONS.folder, action: () => toggleFiles(true) },
+    { label: 'Скачать проект', icon: ICONS.archive, action: () => window.open(`/api/projects/${state.activeProjectId}/download`, '_blank') },
+    { sep: true },
+    { label: 'Удалить диалог', icon: ICONS.trash, danger: true, action: () => deleteChat(state.chat) },
+  ]);
+});
+
+$('#input').addEventListener('input', autoResize);
+window.addEventListener('resize', () => {
+  syncInputPlaceholder();
+  autoResize();
+  // При переходе на узкий экран ящик файлов не должен перекрывать диалог.
+  if (window.matchMedia('(max-width: 1100px)').matches && state.filesOpen) toggleFiles(false);
+});
+window.addEventListener('orientationchange', () => setTimeout(autoResize, 120));
+if (document.fonts && document.fonts.ready) document.fonts.ready.then(autoResize).catch(() => {});
+$('#input').addEventListener('keydown', (event) => {
+  if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
+    event.preventDefault();
+    sendMessage();
+  }
+});
+$('#themeToggle').addEventListener('click', () => {
+  applyTheme(currentTheme() === 'light' ? 'dark' : 'light');
+});
+$('#micBtn').addEventListener('click', toggleDictation);
+$('#dictationCancel').addEventListener('click', () => stopDictation(true));
+$('#spellBtn').addEventListener('click', checkSpelling);
+applyTheme(currentTheme(), false);
+
+$('#thread').addEventListener('click', async (event) => {
+  const button = event.target.closest('[data-copy-code]');
+  if (button) {
+    const text = copyStore.get(button.dataset.copyCode) || '';
+    try {
+      await navigator.clipboard.writeText(text);
+      button.textContent = 'Скопировано';
+      setTimeout(() => {
+        button.textContent = 'Копировать';
+      }, 1400);
+    } catch {
+      toast('Не удалось скопировать');
+    }
+  }
+});
+
+document.addEventListener('click', (event) => {
+  if (event.target.closest('.menu')) return;
+  if (menuAnchor && menuAnchor.contains(event.target)) return;
+  closeMenus();
+});
+
+document.addEventListener('keydown', (event) => {
+  if (event.key !== 'Escape') return;
+  if ($$('.menu').length) {
+    closeMenus();
+    return;
+  }
+  if (!$('#modalRoot').classList.contains('hidden')) closeModal();
+});
+
+/* drag and drop + paste */
+
+const composer = $('#composer');
+['dragenter', 'dragover'].forEach((type) => {
+  composer.addEventListener(type, (event) => {
+    event.preventDefault();
+    composer.classList.add('dragover');
+  });
+});
+['dragleave', 'drop'].forEach((type) => {
+  composer.addEventListener(type, (event) => {
+    event.preventDefault();
+    if (type === 'dragleave' && composer.contains(event.relatedTarget)) return;
+    composer.classList.remove('dragover');
+  });
+});
+composer.addEventListener('drop', (event) => {
+  if (event.dataTransfer?.files?.length) uploadFiles(event.dataTransfer.files);
+});
+document.addEventListener('paste', (event) => {
+  const items = Array.from(event.clipboardData?.items || []);
+  const files = items.filter((item) => item.kind === 'file').map((item) => item.getAsFile()).filter(Boolean);
+  if (files.length) uploadFiles(files);
+});
+
+/* ------------------------------ boot ------------------------------ */
+
+(async function boot() {
+  try {
+    const payload = await api('/api/me');
+    await startApp(payload);
+    $('#boot').classList.add('hidden');
+  } catch (error) {
+    if (!error.unauthorized) {
+      $('#boot').classList.add('hidden');
+      showAuth();
+    }
+  }
+})();

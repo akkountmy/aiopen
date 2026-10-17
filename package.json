@@ -1,0 +1,15 @@
+{
+  "name": "dsh-open-web",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Закрытый веб-сервис рабочего пространства: вход по логину и паролю, проекты, файлы, распознавание документов и изображений.",
+  "type": "module",
+  "main": "server.mjs",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node server.mjs",
+    "smoke": "node test/smoke.mjs"
+  }
+}
