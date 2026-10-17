@@ -515,7 +515,7 @@ function buildSlideDeck({ title, subtitle, kicker, slides, cover }) {
       }
 
       if (note && !remaining.length) {
-        page.text(note, margin, Math.min(bodyTop + usedHeight + 14, height - 88), { size: 12, fill: MUTED });
+        page.text(note, margin, Math.min(bodyTop + usedHeight + 22, height - 88), { size: 12, fill: MUTED });
       }
       if (continuation) {
         page.text('продолжение', width - margin, 44, { size: 9, fill: MUTED, align: 'right' });
