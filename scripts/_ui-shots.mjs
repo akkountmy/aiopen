@@ -153,6 +153,13 @@ const GEOMETRY = `(() => {
     input: r('#input'),
     inputScroll: ta ? { scrollHeight: ta.scrollHeight, clientHeight: ta.clientHeight, overflowY: getComputedStyle(ta).overflowY } : null,
     headerBottoms: [r('.sidebar-head'), r('.topbar'), r('.files-head')].filter(Boolean).map((x) => x.bottom),
+    headBoxes: [['sidebar-head', '.sidebar-head'], ['topbar', '.topbar'], ['files-head', '.files-head']].map(([name, sel]) => {
+      const el = document.querySelector(sel);
+      if (!el) return { name, missing: true };
+      const b = el.getBoundingClientRect();
+      const cs = getComputedStyle(el);
+      return { name, top: Math.round(b.top), height: Math.round(b.height), cssHeight: cs.height, padding: cs.padding, children: el.children.length };
+    }),
     bodyScroll: { scrollWidth: document.documentElement.scrollWidth, clientWidth: document.documentElement.clientWidth },
   };
 })()`;
