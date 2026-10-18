@@ -2,7 +2,10 @@
 <html lang="ru">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content"
+    />
     <meta name="theme-color" content="#151517" />
     <title>DSH Open</title>
     <link rel="icon" href="/favicon.svg?v=__ASSET_VERSION__" type="image/svg+xml" />
@@ -73,6 +76,7 @@
         </div>
 
         <nav id="projectList" class="project-list" aria-label="Проекты"></nav>
+        <div id="sidebarResizer" class="resizer resizer-sidebar" role="separator" aria-orientation="vertical" tabindex="0"></div>
       </aside>
 
       <main class="main">
@@ -88,6 +92,7 @@
             </div>
           </div>
           <div class="topbar-right">
+            <span id="balanceChip" class="balance-chip hidden" aria-label="Баланс"></span>
             <button id="userChip" class="user-chip user-chip-top" type="button" title="Учётная запись">
               <span id="userAvatar" class="avatar">?</span>
               <span class="user-meta">
@@ -146,6 +151,7 @@
       </main>
 
       <aside id="filesPanel" class="files-panel hidden" aria-label="Файлы проекта">
+        <div id="filesResizer" class="resizer resizer-files" role="separator" aria-orientation="vertical" tabindex="0"></div>
         <div class="files-head">
           <div class="files-title">Файлы проекта</div>
           <div class="files-head-actions">

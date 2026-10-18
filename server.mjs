@@ -4,6 +4,7 @@ import path from 'node:path';
 import zlib from 'node:zlib';
 import {
   ADMIN,
+  BILLING,
   BUDGET,
   DATA_DIR,
   HOST,
@@ -14,7 +15,7 @@ import {
   SESSION,
   SIGNUP,
   TRUST_PROXY,
-  costUsd,
+  chargeUsd,
   ensureDirs,
   taskLimitUsd,
 } from './src/config.mjs';
@@ -22,6 +23,7 @@ import { describeFailure, generateTitle, runTurn } from './src/agent.mjs';
 import { transcribeAudio } from './src/asr.mjs';
 import { detectKind, extractDocumentText, kindLabel } from './src/docparse.mjs';
 import { approvalMessage, notifyAdmin } from './src/notify.mjs';
+import { makeOpenToken, readOpenToken } from './src/openlink.mjs';
 import { proofreadText } from './src/proofread.mjs';
 import { keyStatus } from './src/keys.mjs';
 import {
@@ -282,8 +284,15 @@ function chatMeta(chat) {
   };
 }
 
-function usdText(value) {
-  return `$${Number(value || 0).toFixed(2)}`;
+/* Внешний адрес сервиса. Нужен для ссылки, которую открывает Word/Excel:
+   приложение качает файл само, поэтому адрес должен быть публичным. */
+function publicOrigin(req) {
+  const configured = String(process.env.DSHOW_PUBLIC_URL || '').trim();
+  if (configured) return configured.replace(/\/+$/, '');
+  const rawProto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim();
+  const rawHost = String(req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0].trim();
+  const proto = rawProto || (req.socket?.encrypted ? 'https' : 'http');
+  return rawHost ? `${proto}://${rawHost}` : 'https://dshopen-vladimir00177.msk1.amvera.tech';
 }
 
 function projectLimit(project) {
@@ -596,6 +605,13 @@ async function handleMessageStream(req, res, user, chatId) {
         'Предыдущая тяжёлая задача ждёт подтверждения администратора — продолжу, как только он ответит.',
       );
     }
+    if (Number(user.creditUsd || 0) <= 0) {
+      return sendError(
+        res,
+        402,
+        'На балансе закончились средства. Напишите администратору — он пополнит баланс, и можно будет продолжить.',
+      );
+    }
   }
 
   const body = await readJsonBody(req, LIMITS.jsonBody);
@@ -651,17 +667,23 @@ async function handleMessageStream(req, res, user, chatId) {
 
     assistantText = outcome.text || '';
 
-    /* Учитываем стоимость: расход по проекту и суточная статистика использования. */
-    const turnCostUsd = outcome.usage ? costUsd(outcome.usage.tokensIn, outcome.usage.tokensOut) : 0;
-    if (turnCostUsd > 0) store.addProjectSpend(project.id, turnCostUsd);
+    /* Учитываем стоимость: баланс пользователя, расход по проекту и суточная статистика.
+       С баланса списывается итоговая сумма (внутренняя наценка уже внутри chargeUsd),
+       в статистике и в лимите проекта — тоже она, чтобы все цифры сходились. */
+    const chargedUsd = outcome.usage ? chargeUsd(outcome.usage.tokensIn, outcome.usage.tokensOut) : 0;
+    if (chargedUsd > 0) {
+      store.addProjectSpend(project.id, chargedUsd);
+      if (user.role !== 'admin') store.chargeUser(user.id, chargedUsd);
+    }
     if (outcome.usage) {
       store.addUsage(user.id, {
         tokensIn: outcome.usage.tokensIn,
         tokensOut: outcome.usage.tokensOut,
         messages: 1,
-        usd: turnCostUsd,
+        usd: chargedUsd,
       });
     }
+    const balanceUsd = user.role === 'admin' ? null : store.publicUser(user.id).balanceUsd;
 
     /* Задача перевалила за лимит: предупреждаем пользователя и просим администратора. */
     let budgetInfo = null;
@@ -679,9 +701,8 @@ async function handleMessageStream(req, res, user, chatId) {
         approvalStatus: approval.status,
       };
       const note =
-        `\n\nОдна задача обошлась в ${usdText(outcome.budgetHit.spentUsd)} — это выше порога ` +
-        `${usdText(outcome.budgetHit.limitUsd)} за задачу. Я приостановил работу и отправил администратору ` +
-        'запрос на подтверждение: продолжу, как только он разрешит.';
+        '\n\nЗадача получилась очень тяжёлой — это выше порога для одной задачи. Я приостановил работу и ' +
+        'отправил администратору запрос на подтверждение: продолжу, как только он разрешит.';
       assistantText += note;
       stream.emit({ type: 'delta', text: note });
       stream.emit({ type: 'approval', approval: budgetInfo });
@@ -703,7 +724,7 @@ async function handleMessageStream(req, res, user, chatId) {
         stream.emit({ type: 'title', title });
       }
     }
-    stream.emit({ type: 'done', usage: outcome.usage, tools: outcome.tools.length });
+    stream.emit({ type: 'done', usage: outcome.usage, tools: outcome.tools.length, balanceUsd });
   } catch (error) {
     const aborted = error?.name === 'AbortError' || controller.signal.aborted;
     const message = aborted ? 'Остановлено' : describeFailure(error);
@@ -859,6 +880,22 @@ async function route(req, res) {
       return sendJson(res, 200, { ok: true, time: nowIso() });
     }
 
+    /* Ссылка для внешних приложений (Word, Excel, PowerPoint): у них нет
+       cookie браузера, поэтому доступ даёт подписанный одноразовый адрес. */
+    if (parts[1] === 'open' && parts[2] && method === 'GET') {
+      const link = readOpenToken(parts[2]);
+      if (!link) return sendError(res, 403, 'Ссылка на файл устарела — откройте его ещё раз');
+      const project = store.getProject(link.projectId);
+      if (!project) return sendError(res, 404, 'Файл не найден');
+      try {
+        const full = resolveSafe(store.workspaceDir(project.id), link.relPath);
+        if (!fs.existsSync(full) || !fs.statSync(full).isFile()) return sendError(res, 404, 'Файл не найден');
+        return sendFile(res, full, { download: false, name: path.basename(full) });
+      } catch (error) {
+        return sendError(res, error.status || 400, error.message);
+      }
+    }
+
     // --- требуется вход ---
     const user = requireUser(req, res);
     if (!user) return;
@@ -1008,6 +1045,23 @@ async function route(req, res) {
           return sendError(res, 400, error.message);
         }
       }
+      if (parts[3] === 'file-link' && method === 'GET') {
+        /* Подписанная ссылка на файл для Word/Excel/PowerPoint. Живёт 10 минут
+           и открывает только этот файл; сессия и постоянный адрес не нужны. */
+        const rel = url.searchParams.get('path') || '';
+        try {
+          const full = resolveSafe(workspace, rel);
+          if (!fs.existsSync(full) || !fs.statSync(full).isFile()) return sendError(res, 404, 'Файл не найден');
+          const token = makeOpenToken({ projectId: project.id, relPath: rel });
+          const fileName = path.basename(full);
+          return sendJson(res, 200, {
+            url: `${publicOrigin(req)}/api/open/${token}/${encodeURIComponent(fileName)}`,
+            name: fileName,
+          });
+        } catch (error) {
+          return sendError(res, 400, error.message);
+        }
+      }
       if (parts[3] === 'file-preview' && method === 'GET') {
         // Просмотр файла прямо в приложении: текст документа извлекаем на сервере,
         // чтобы Word/Excel/презентации открывались для чтения, а не скачивались.
@@ -1145,11 +1199,20 @@ async function route(req, res) {
       const username = String(body.username || '').trim();
       const problem = usernameProblem(username) || passwordProblem(body.password);
       if (problem) return sendError(res, 400, problem);
+      const role = body.role === 'admin' ? 'admin' : 'user';
+      const hasCredit = body.creditUsd !== undefined && body.creditUsd !== null && body.creditUsd !== '';
+      /* Стартовый баланс нового аккаунта: сколько указал администратор,
+         иначе общая стартовая сумма из настроек. */
+      const startCreditUsd = role === 'admin' ? 0 : hasCredit ? Number(body.creditUsd) : BILLING.migrationCreditUsd;
+      if (!Number.isFinite(startCreditUsd) || startCreditUsd < 0 || startCreditUsd > 10000) {
+        return sendError(res, 400, 'Некорректный стартовый баланс');
+      }
       const created = store.createUser({
         username,
         password: String(body.password),
         displayName: String(body.displayName || username).slice(0, 80),
-        role: body.role === 'admin' ? 'admin' : 'user',
+        role,
+        startCreditUsd,
       });
       return sendJson(res, 200, { user: created });
     }
@@ -1158,6 +1221,16 @@ async function route(req, res) {
       if (!admin) return;
       const target = store.getUser(parts[3]);
       if (!target) return sendError(res, 404, 'Пользователь не найден');
+      if (parts[4] === 'credit' && method === 'POST') {
+        const body = await readJsonBody(req);
+        const amount = Number(body.usd);
+        if (!Number.isFinite(amount) || Math.abs(amount) < 0.01) {
+          return sendError(res, 400, 'Укажите сумму в долларах');
+        }
+        if (Math.abs(amount) > 10000) return sendError(res, 400, 'Слишком большая сумма');
+        const updated = store.grantCredit(target.id, amount);
+        return sendJson(res, 200, { user: updated });
+      }
       if (method === 'PATCH') {
         const body = await readJsonBody(req);
         const patch = {};

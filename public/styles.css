@@ -484,9 +484,57 @@ svg {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  position: relative;
   border-right: 1px solid var(--line);
   background: var(--bg);
   padding: 0 0 10px;
+}
+
+/* Ручки изменения ширины панелей (полная версия). Тонкая линия по центру,
+   рабочая зона — 9 px, чтобы попадать мышью без прицела. */
+.resizer {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 9px;
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.resizer::after {
+  content: '';
+  width: 2px;
+  height: 40px;
+  border-radius: 2px;
+  background: transparent;
+  transition: background 0.15s ease;
+}
+
+.resizer:hover::after,
+.resizer:focus-visible::after,
+.resizer.dragging::after {
+  background: var(--accent);
+}
+
+.resizer:focus-visible {
+  outline: none;
+}
+
+.resizer-sidebar {
+  right: -4px;
+}
+
+.resizer-files {
+  left: -4px;
+}
+
+body.resizing {
+  cursor: col-resize;
+  user-select: none;
 }
 
 .sidebar-head {
@@ -881,6 +929,29 @@ svg {
   height: 12px;
 }
 
+/* Остаток на балансе в шапке: спокойная плашка, без подсказок о цене. */
+.balance-chip {
+  display: inline-flex;
+  align-items: center;
+  height: 26px;
+  padding: 0 9px;
+  margin-right: 2px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--layer-1);
+  color: var(--text-2);
+  font-size: 12px;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.balance-chip.balance-empty {
+  border-color: rgba(242, 90, 90, 0.45);
+  color: var(--danger-ink);
+}
+
 .avatar {
   width: 28px;
   height: 28px;
@@ -1115,6 +1186,28 @@ svg {
   border-radius: 50%;
   background: var(--accent);
   opacity: 0.8;
+  flex: none;
+}
+
+/* Пока агент работает, точка превращается во вращающийся круг с подписью —
+   иначе непонятно, идёт ли ещё работа или ответ уже закончен. */
+.msg-head .work-label {
+  display: none;
+  color: var(--text-4);
+}
+
+.msg.streaming .msg-head .work-label {
+  display: inline;
+}
+
+.msg.streaming .msg-head .dot {
+  width: 13px;
+  height: 13px;
+  background: none;
+  opacity: 1;
+  border: 2px solid rgba(86, 134, 254, 0.28);
+  border-top-color: var(--accent);
+  animation: spin 0.85s linear infinite;
 }
 
 .md {
@@ -1329,7 +1422,8 @@ svg {
   max-width: 240px;
 }
 
-.tool-chip .spinner {
+.tool-chip .spinner,
+.tool-group .spinner {
   width: 11px;
   height: 11px;
   border-radius: 50%;
@@ -1351,6 +1445,110 @@ svg {
 
 .tool-chip.err .tick {
   color: var(--danger);
+}
+
+/* Однотипные шаги агента («Расчёты» ×8) собраны в одну строку со счётчиком,
+   подробности раскрываются по клику. */
+.tools.many {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.tool-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 26px;
+  max-width: 100%;
+  padding: 0 8px 0 10px;
+  border: 1px solid var(--line);
+  background: var(--layer-1);
+  border-radius: 999px;
+  color: var(--text-2);
+  font: inherit;
+  font-size: 11.5px;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 0.14s ease, border-color 0.14s ease;
+}
+
+.tool-group:hover {
+  background: var(--layer-2);
+  border-color: var(--line-strong);
+}
+
+.tool-group .t-label {
+  color: var(--text-2);
+}
+
+.tool-group .t-arg {
+  color: var(--text-4);
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tool-group .tick {
+  color: var(--success);
+  font-size: 11px;
+}
+
+.tool-group.run {
+  border-color: rgba(86, 134, 254, 0.4);
+}
+
+.tool-group.err {
+  border-color: rgba(242, 90, 90, 0.35);
+  color: var(--danger-ink);
+}
+
+.tool-group.err .tick {
+  color: var(--danger);
+}
+
+.tool-group .t-caret {
+  display: inline-flex;
+  color: var(--text-4);
+  transition: transform 0.16s ease;
+}
+
+.tool-group .t-caret svg {
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.tool-group.open .t-caret {
+  transform: rotate(180deg);
+}
+
+.tool-group-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-left: 6px;
+  padding: 2px 0 2px 8px;
+  border-left: 1px solid var(--line);
+}
+
+.tool-group .t-count,
+.tool-chip .t-count {
+  flex: none;
+  min-width: 17px;
+  height: 17px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--layer-3);
+  color: var(--text-3);
+  font-size: 10.5px;
+  font-weight: 550;
+  line-height: 17px;
+  text-align: center;
 }
 
 @keyframes spin {
@@ -2283,6 +2481,11 @@ svg {
   margin: 0;
 }
 
+.inline-form .field.field-credit {
+  flex: 0 0 110px;
+  min-width: 96px;
+}
+
 .inline-form .btn {
   height: 36px;
   padding: 0 13px;
@@ -2490,65 +2693,249 @@ svg {
   z-index: 44;
 }
 
+@keyframes backdrop-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* Плавный выезд панели файлов: она всегда в разметке, а прячется сдвигом,
+   поэтому открытие — анимация, а не мгновенная подмена разметки. */
 @media (max-width: 1100px) {
   :root {
     --sidebar: 244px;
   }
+  /* 861–1100: панель файлов — выезжающий ящик, а ширина проектов задана
+     макетом планшета, поэтому ручки изменения ширины здесь не нужны. */
+  .resizer {
+    display: none;
+  }
   .app.with-files {
     grid-template-columns: var(--sidebar) minmax(0, 1fr);
-  }
-  .app.files-open .backdrop {
-    display: block;
-    z-index: 58;
   }
   .files-panel {
     position: fixed;
     top: 0;
     right: 0;
     bottom: 0;
-    width: min(300px, 92vw);
+    width: min(320px, 92vw);
     z-index: 60;
+    border-radius: 16px 0 0 16px;
     box-shadow: var(--shadow);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    transform: translateX(104%);
+    visibility: hidden;
+    will-change: transform;
+    transition: transform 0.28s cubic-bezier(0.22, 0.61, 0.36, 1), visibility 0s linear 0.28s;
+  }
+  .files-panel.hidden {
+    display: flex !important;
+  }
+  .app.files-open .files-panel {
+    transform: translateX(0);
+    visibility: visible;
+    transition: transform 0.28s cubic-bezier(0.22, 0.61, 0.36, 1);
+  }
+  .app.files-open .backdrop {
+    display: block;
+    z-index: 58;
+    animation: backdrop-in 0.24s ease-out;
   }
 }
 
 @media (max-width: 860px) {
+  :root {
+    --head-h: 56px;
+  }
+  /* Крупнее база: на телефоне 14 px читаются мелко. */
+  body {
+    font-size: 15.5px;
+  }
   .app,
   .app.with-files {
     grid-template-columns: minmax(0, 1fr);
+    /* Высота видимой области: при открытой клавиатуре окно не уезжает вниз. */
+    height: var(--app-h, 100dvh);
   }
+  /* Ящик навигации: выезд сдвигом + затемнение, как у панели файлов. */
   .sidebar {
     position: fixed;
     top: 0;
     bottom: 0;
     left: 0;
-    width: min(300px, 86vw);
+    width: min(320px, 88vw);
     z-index: 45;
-    transform: translateX(-102%);
-    transition: transform 0.2s ease;
+    border-radius: 0 16px 16px 0;
+    /* Вырез телефона: содержимое ящика не должно начинаться под ним. */
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+    transform: translateX(-104%);
+    visibility: hidden;
+    will-change: transform;
     box-shadow: var(--shadow);
+    transition: transform 0.28s cubic-bezier(0.22, 0.61, 0.36, 1), visibility 0s linear 0.28s;
   }
   .app.sidebar-open .sidebar {
     transform: translateX(0);
+    visibility: visible;
+    transition: transform 0.28s cubic-bezier(0.22, 0.61, 0.36, 1);
   }
   .app.sidebar-open .backdrop {
     display: block;
     z-index: 44;
+    animation: backdrop-in 0.24s ease-out;
   }
   .app.files-open .backdrop {
     z-index: 58;
   }
-  .files-panel {
-    width: min(330px, 94vw);
-  }
   .mobile-only {
     display: inline-flex;
   }
-  .thread {
-    padding: 20px 16px 12px;
+
+  /* -------------------------------- шапка -------------------------------- */
+  /* Вырез и скруглённые углы телефона: шапка не должна уезжать под них. */
+  .topbar {
+    height: calc(var(--head-h) + env(safe-area-inset-top, 0px));
+    padding: env(safe-area-inset-top, 0px) max(6px, env(safe-area-inset-right, 0px)) 0
+      max(8px, env(safe-area-inset-left, 0px));
+    gap: 6px;
   }
+  .topbar .btn-icon {
+    width: 40px;
+    height: 40px;
+    border-radius: 11px;
+  }
+  .topbar .btn-icon svg {
+    width: 20px;
+    height: 20px;
+  }
+  /* Тема переехала в меню учётной записи — иначе шапке не хватает места. */
+  #themeToggle {
+    display: none;
+  }
+  .topbar-right {
+    gap: 0;
+  }
+  .crumbs {
+    gap: 6px;
+  }
+  .crumb-project,
+  .crumb-sep {
+    display: none;
+  }
+  .crumb-chat {
+    font-size: 15px;
+    font-weight: 550;
+  }
+  .user-chip-top {
+    height: 40px;
+    max-width: none;
+    padding: 0;
+    gap: 0;
+  }
+  .user-chip-top .avatar {
+    width: 32px;
+    height: 32px;
+    border-radius: 10px;
+    font-size: 12.5px;
+  }
+  .user-chip-top .user-meta,
+  .user-chip-top .chev {
+    display: none;
+  }
+  .balance-chip {
+    height: 30px;
+    padding: 0 10px;
+    margin-right: 4px;
+    font-size: 13px;
+  }
+
+  /* ------------------------------- диалог ------------------------------- */
+  .thread {
+    padding: 18px 14px 10px;
+    gap: 18px;
+    min-height: 100%;
+  }
+  .empty {
+    flex: 1;
+    justify-content: center;
+    padding: 20px 10px 40px;
+  }
+  .empty-title {
+    font-size: 23px;
+  }
+  .empty-sub {
+    font-size: 14.5px;
+  }
+  .msg-user .bubble {
+    font-size: 15.5px;
+    padding: 11px 14px;
+  }
+  .md {
+    font-size: 15.5px;
+    line-height: 1.62;
+  }
+  /* Строки шагов агента на телефоне тоже крупнее — попадать пальцем. */
+  .tool-chip,
+  .tool-group {
+    height: 30px;
+    padding: 0 11px;
+    font-size: 12.5px;
+    gap: 8px;
+  }
+  .tool-group .t-arg,
+  .tool-chip .t-arg {
+    max-width: 150px;
+  }
+  .msg-head .work-label {
+    font-size: 12px;
+  }
+  /* На телефоне таблица шире экрана выглядит обрезанной: разрешаем перенос
+     в ячейках, чтобы обычная таблица влезала целиком. Совсем широкие
+     (много столбцов) по-прежнему листаются вбок — им добавляем растворяющийся
+     край, иначе непонятно, что справа есть продолжение. */
+  .md table {
+    white-space: normal;
+    font-size: 13.5px;
+  }
+  /* .md переносит слова где угодно — в таблице от этого рвутся заголовки
+     («Значени/е»). В ячейках переносим только по словам. */
+  .md th,
+  .md td {
+    padding: 6px 8px;
+    word-break: normal;
+    overflow-wrap: break-word;
+  }
+  .md .table-wrap.scroll-x {
+    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 18px), transparent);
+    mask-image: linear-gradient(to right, #000 calc(100% - 18px), transparent);
+  }
+  /* Подсказки на телефоне — по две в ряд: четыре кнопки занимают два ряда. */
+  .suggestions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    width: 100%;
+  }
+  .suggestion {
+    padding: 12px 13px;
+    font-size: 13.5px;
+    line-height: 1.4;
+  }
+  .stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  /* -------------------------------- ввод -------------------------------- */
   .composer-wrap {
-    padding: 6px 12px calc(10px + env(safe-area-inset-bottom, 0px));
+    padding: 6px max(10px, env(safe-area-inset-right, 0px)) calc(8px + env(safe-area-inset-bottom, 0px))
+      max(10px, env(safe-area-inset-left, 0px));
+  }
+  .composer {
+    padding: 6px 6px 6px 2px;
+    border-radius: 16px;
   }
   .composer-hint {
     display: none;
@@ -2556,31 +2943,314 @@ svg {
   .attach-strip {
     padding: 8px 8px 2px;
   }
-  /* Подсказки на телефоне — по две в ряд: четыре кнопки занимают два ряда. */
-  .suggestions {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 7px;
+  .attach-btn {
+    width: 38px;
+    height: 38px;
+    margin-bottom: 0;
+  }
+  .attach-btn svg {
+    width: 19px;
+    height: 19px;
+  }
+  /* 16 px — иначе iOS сам увеличивает страницу при фокусе, и края уезжают. */
+  #input {
+    font-size: 16px;
+    line-height: 1.45;
+    min-height: 38px;
+    padding: 8px 4px;
+  }
+  .tool-btn {
+    width: 36px;
+    height: 36px;
+    margin-bottom: 1px;
+  }
+  .btn-send,
+  .btn-stop {
+    width: 38px;
+    height: 38px;
+    border-radius: 11px;
+  }
+  .btn-send svg {
+    width: 19px;
+    height: 19px;
+  }
+
+  /* ------------------------------- сайдбар ------------------------------- */
+  .sidebar-head {
+    padding: 0 12px;
+  }
+  .btn-new {
+    height: 40px;
+    font-size: 14px;
+  }
+  .project-row {
+    height: 40px;
+    padding: 0 10px;
+    font-size: 14px;
+  }
+  .chat-list {
+    padding-left: 10px;
+  }
+  .chat-row {
+    height: 38px;
+    padding: 0 10px;
+    font-size: 13.5px;
+  }
+  /* На телефоне наведения нет — меню строк всегда на виду. */
+  .project-row .row-menu,
+  .chat-row .row-menu {
+    opacity: 1;
+  }
+  .row-menu {
+    width: 28px;
+    height: 28px;
+  }
+  .row-menu svg {
+    width: 16px;
+    height: 16px;
+  }
+  .user-chip {
+    padding: 10px 8px;
+  }
+  .user-meta {
+    font-size: 14px;
+  }
+
+  /* ---------------------------- панель файлов ---------------------------- */
+  /* На телефоне панель — полноэкранный лист: половинчатый ящик поверх шапки
+     выглядел как обрезанная страница. Закрытие — крестиком в её заголовке. */
+  .files-panel {
     width: 100%;
+    border-radius: 0;
+    padding-top: env(safe-area-inset-top, 0px);
   }
-  .suggestion {
-    padding: 9px 10px;
+  .files-head {
+    padding: 0 4px 0 14px;
+  }
+  .files-title {
+    font-size: 14.5px;
+  }
+  .files-head-actions .btn-icon {
+    width: 38px;
+    height: 38px;
+  }
+  .files-head-actions svg {
+    width: 18px;
+    height: 18px;
+  }
+  .files-crumb {
+    padding: 10px 14px 4px;
     font-size: 12px;
-    line-height: 1.35;
   }
+  .files-upload {
+    height: 40px;
+    font-size: 13.5px;
+  }
+  .file-row {
+    height: 38px;
+    font-size: 13.5px;
+  }
+
+  /* ------------------------ окна, меню, подсказки ------------------------ */
+  .modal-root {
+    padding: 10px;
+  }
+  .modal {
+    width: 100%;
+    max-height: min(88dvh, 760px);
+  }
+  .modal-title {
+    font-size: 15px;
+  }
+  .modal-head {
+    padding: 12px 14px 10px;
+  }
+  .modal-body {
+    font-size: 14px;
+  }
+  .modal-foot {
+    padding: 10px 14px calc(10px + env(safe-area-inset-bottom, 0px));
+  }
+  .modal-foot .btn,
+  .modal-foot .btn-primary {
+    height: 40px;
+    padding: 0 16px;
+    font-size: 14px;
+  }
+  .popover {
+    width: min(360px, calc(100vw - 16px));
+    padding: 14px;
+  }
+  .popover-title {
+    font-size: 14px;
+  }
+  .popover-text {
+    font-size: 13.5px;
+  }
+  .popover-input {
+    height: 44px;
+    font-size: 16px;
+  }
+  .popover-actions .btn {
+    height: 40px;
+    padding: 0 14px;
+    font-size: 14px;
+  }
+  .menu {
+    min-width: 216px;
+  }
+  .menu button {
+    height: 42px;
+    padding: 0 12px;
+    font-size: 14px;
+  }
+  .menu svg {
+    width: 16px;
+    height: 16px;
+  }
+  .toast-root {
+    left: 10px;
+    right: 10px;
+    bottom: calc(96px + env(safe-area-inset-bottom, 0px));
+    transform: none;
+  }
+  .toast {
+    max-width: none;
+    padding: 11px 14px;
+    font-size: 13.5px;
+  }
+  .field input,
+  .field select {
+    height: 44px;
+    font-size: 16px;
+  }
+  /* Окна ввода (начисление, пароль, переименование): по правилу формы поле
+     было 36 px — на телефоне в него трудно попасть пальцем. */
+  .form-grid .field input,
+  .form-grid .field select {
+    height: 46px;
+  }
+  .form-grid .field .field-label {
+    font-size: 13px;
+  }
+  .field-label {
+    font-size: 13px;
+  }
+  .inline-form .field {
+    min-width: 100%;
+  }
+  .inline-form .field.field-credit {
+    flex: 1 1 100%;
+  }
+  .inline-form .btn {
+    height: 40px;
+    font-size: 13.5px;
+  }
+  .admin-user {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .admin-user .au-name {
+    font-size: 14px;
+  }
+  .admin-user .au-sub {
+    font-size: 12.5px;
+  }
+  .admin-user .au-actions {
+    width: 100%;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  /* Кнопки не растягиваем на всю строку: «Блокировать» и «Удалить» иначе
+     съезжают во вторую строку каждая отдельно и строка становится башней. */
+  .admin-user .au-actions .btn {
+    flex: 0 1 auto;
+    height: 34px;
+    padding: 0 9px;
+    font-size: 12px;
+  }
+  .msg-budget {
+    font-size: 13.5px;
+  }
+}
+
+/* Очень узкие телефоны (320–420 px): шапка и строка ввода иначе съедают место
+   под текст, а длинная подсказка в поле ввода переносится и раздувает его. */
+@media (max-width: 420px) {
   .topbar {
-    padding: 0 8px 0 10px;
+    padding: env(safe-area-inset-top, 0px) max(4px, env(safe-area-inset-right, 0px)) 0
+      max(6px, env(safe-area-inset-left, 0px));
+    gap: 4px;
   }
-  .stats {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+  .topbar .btn-icon {
+    width: 38px;
+    height: 38px;
   }
-  .user-chip-top {
-    max-width: 40px;
-    padding: 0 4px;
+  .topbar .btn-icon svg {
+    width: 19px;
+    height: 19px;
+  }
+  .user-chip-top .avatar {
+    width: 28px;
+    height: 28px;
+    font-size: 11.5px;
+  }
+  .balance-chip {
+    height: 28px;
+    padding: 0 7px;
+    margin-right: 2px;
+    font-size: 12.5px;
+  }
+  .crumb-chat {
+    font-size: 14.5px;
+  }
+  .composer-row {
+    gap: 3px;
+  }
+  .attach-btn {
+    width: 34px;
+    height: 34px;
+  }
+  .tool-btn {
+    width: 32px;
+    height: 32px;
+  }
+  .tool-btn svg {
+    width: 17px;
+    height: 17px;
+  }
+  .btn-send,
+  .btn-stop {
+    width: 36px;
+    height: 36px;
+  }
+  .empty-title {
+    font-size: 21px;
+  }
+}
+
+/* Телефоны и планшеты: наведения нет, поэтому «Скачать» и «Удалить» у файла
+   показываем всегда — иначе на телефоне файл нельзя ни скачать, ни удалить. */
+@media (hover: none), (max-width: 860px) {
+  .file-row {
+    height: 38px;
+    font-size: 13.5px;
+    padding: 0 4px 0 8px;
+  }
+  .file-row .f-actions {
+    display: flex;
     gap: 0;
   }
-  .user-chip-top .user-meta,
-  .user-chip-top .chev {
-    display: none;
+  .file-row .f-actions .btn-icon {
+    width: 30px;
+    height: 30px;
+  }
+  .file-row .f-actions svg {
+    width: 15px;
+    height: 15px;
+  }
+  .file-row .f-size {
+    font-size: 11px;
   }
 }
 

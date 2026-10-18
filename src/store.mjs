@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import {
+  BILLING,
   CHATS_DIR,
   DATA_DIR,
   INDEX_FILE,
@@ -30,6 +31,10 @@ function emptyState() {
   };
 }
 
+function money(value) {
+  return Number((Number(value) || 0).toFixed(6));
+}
+
 function publicUser(user) {
   if (!user) return null;
   return {
@@ -40,6 +45,9 @@ function publicUser(user) {
     createdAt: user.createdAt,
     disabled: Boolean(user.disabled),
     lastLoginAt: user.lastLoginAt || null,
+    /* Баланс в долларах. Из этой суммы уже вычтено всё, что пользователь потратил. */
+    balanceUsd: money(user.creditUsd),
+    spentUsd: money(user.spentUsd),
   };
 }
 
@@ -88,6 +96,9 @@ class Store {
         createdAt: nowIso(),
         disabled: false,
         lastLoginAt: null,
+        creditUsd: 0,
+        spentUsd: 0,
+        grantedUsd: 0,
       });
       this.save();
     }
@@ -119,6 +130,19 @@ class Store {
     for (const project of this.state.projects) {
       if (project.workflowId && !known.has(project.workflowId)) {
         project.workflowId = null;
+        changed = true;
+      }
+    }
+    /* Счётчик в долларах появился позже самих аккаунтов: старым пользователям
+       выдаём стартовый баланс, чтобы в день обновления они не остались без работы. */
+    for (const user of this.state.users) {
+      if (!Number.isFinite(Number(user.creditUsd))) {
+        user.creditUsd = money(BILLING.migrationCreditUsd);
+        user.grantedUsd = user.creditUsd;
+        changed = true;
+      }
+      if (!Number.isFinite(Number(user.spentUsd))) {
+        user.spentUsd = 0;
         changed = true;
       }
     }
@@ -170,13 +194,16 @@ class Store {
     return verifyPassword(password, user?.password);
   }
 
-  createUser({ username, password, displayName, role = 'user' }) {
+  /* startCreditUsd — стартовый баланс. Администратор, создавая аккаунт, сразу
+     даёт на нём рабочую сумму; самостоятельная регистрация начинается с нуля. */
+  createUser({ username, password, displayName, role = 'user', startCreditUsd = 0 }) {
     const name = String(username).trim();
     if (this.getUserByUsername(name)) {
       const err = new Error('Такой логин уже занят');
       err.status = 409;
       throw err;
     }
+    const start = money(startCreditUsd);
     const user = {
       id: uid('u_'),
       username: name,
@@ -187,10 +214,42 @@ class Store {
       createdAt: nowIso(),
       disabled: false,
       lastLoginAt: null,
+      creditUsd: start,
+      spentUsd: 0,
+      grantedUsd: Math.max(0, start),
     };
     this.state.users.push(user);
     this.save();
     return publicUser(user);
+  }
+
+  /** Списать с баланса пользователя сумму в долларах. */
+  chargeUser(id, usd) {
+    const user = this.getUser(id);
+    if (!user) return null;
+    const amount = money(usd);
+    if (!amount) return publicUser(user);
+    user.creditUsd = money(Number(user.creditUsd || 0) - amount);
+    user.spentUsd = money(Number(user.spentUsd || 0) + amount);
+    this.save();
+    return publicUser(user);
+  }
+
+  /** Начислить кредиты (отрицательное значение — списать вручную). */
+  grantCredit(id, usd) {
+    const user = this.getUser(id);
+    if (!user) return null;
+    const amount = money(usd);
+    user.creditUsd = money(Number(user.creditUsd || 0) + amount);
+    if (amount > 0) user.grantedUsd = money(Number(user.grantedUsd || 0) + amount);
+    this.save();
+    return publicUser(user);
+  }
+
+  /** Сколько пользователь уже потратил за всё время (в долларах). */
+  userSpent(id) {
+    const user = this.getUser(id);
+    return money(user?.spentUsd);
   }
 
   updateUser(id, patch) {

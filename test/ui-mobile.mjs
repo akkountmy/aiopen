@@ -135,14 +135,14 @@ try {
   loginStatus === 200 ? ok('вход в сервис') : fail('вход', loginStatus);
 
   // 2. пустой диалог — именно там видны подсказки «Чем помочь?»
+  //    Заводим отдельный проект: сервер отдаёт проекты по updatedAt, поэтому
+  //    свежий оказывается первым, и приложение открывает его единственный
+  //    (пустой) диалог. Так тест не зависит от того, что уже лежит у пользователя.
   const target = await evaluate(
     `(async () => {
-       const boot = await (await fetch('/api/bootstrap')).json();
-       let project = (boot.projects || [])[0];
-       const created = !project;
-       if (!project) project = (await (await fetch('/api/projects', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({name:'Проверка мобильной версии'})})).json()).project;
-       if (!(project.chats || []).length) await fetch('/api/projects/' + project.id + '/chats', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({title:'Мобильная проверка'})});
-       return { id: project.id, created };
+       const project = (await (await fetch('/api/projects', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({name:'Проверка мобильной версии'})})).json()).project;
+       await fetch('/api/projects/' + project.id + '/chats', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({title:'Мобильная проверка'})});
+       return { id: project.id };
      })()`,
   );
 
@@ -185,20 +185,16 @@ try {
 
   for (const [width, height] of [[390, 844], [360, 780], [320, 640]]) await checkWidth(width, height);
 
-  // 3. уборка: удаляем проект только если создали его сами
+  // 3. уборка: свой проект удаляем, чужие не трогаем
   await cdp.send('Emulation.clearDeviceMetricsOverride');
-  if (!target.created) {
-    ok('чужие проекты не тронуты', 'использован существующий проект');
-  } else {
-    const cleaned = await evaluate(
-      `(async () => {
-         const res = await fetch('/api/projects/' + ${JSON.stringify(target.id)}, {method:'DELETE'});
-         const boot = await (await fetch('/api/bootstrap')).json();
-         return { status: res.status, left: (boot.projects || []).length };
-       })()`,
-    );
-    cleaned.status === 200 ? ok('тестовый проект удалён') : fail('уборка проекта', JSON.stringify(cleaned));
-  }
+  const cleaned = await evaluate(
+    `(async () => {
+       const res = await fetch('/api/projects/' + ${JSON.stringify(target.id)}, {method:'DELETE'});
+       const boot = await (await fetch('/api/bootstrap')).json();
+       return { status: res.status, left: (boot.projects || []).length };
+     })()`,
+  );
+  cleaned.status === 200 ? ok('тестовый проект удалён') : fail('уборка проекта', JSON.stringify(cleaned));
 } finally {
   chrome.kill();
   await sleep(400);

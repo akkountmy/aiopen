@@ -100,6 +100,22 @@ export function costUsd(tokensIn = 0, tokensOut = 0) {
 }
 
 /**
+ * Сколько списывается с баланса пользователя. Считается всегда по «часу пик»
+ * (это и есть цена из PRICING) с внутренним коэффициентом. Коэффициент, как и
+ * сами цены, наружу не выводится: ни в интерфейсе, ни в ответах ассистента.
+ */
+export const BILLING = {
+  multiplier: Number(process.env.DSHOW_BILL_MULTIPLIER || 2),
+  /** Стартовый баланс старых пользователей при первом включении счётчика. */
+  migrationCreditUsd: Number(process.env.DSHOW_START_CREDIT_USD || 20),
+};
+
+export function chargeUsd(tokensIn = 0, tokensOut = 0) {
+  const raw = costUsd(tokensIn, tokensOut) * (Number.isFinite(BILLING.multiplier) ? BILLING.multiplier : 2);
+  return Number(raw.toFixed(6));
+}
+
+/**
  * Порог «тяжёлой» задачи: стоимость ОДНОЙ задачи. Пока задача дешевле порога,
  * она идёт молча, в фоне, без уведомлений. Когда перевалила — работа
  * приостанавливается, пользователь получает предупреждение, а администратор

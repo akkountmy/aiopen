@@ -33,6 +33,8 @@ const ICONS = {
     '<svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="4" width="14" height="12" rx="1.5"/><path d="M3 8h14M9 4v4"/></svg>',
   upload:
     '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 15V4M5.5 8.5L10 4l4.5 4.5"/></svg>',
+  theme:
+    '<svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="3.6"/><path d="M10 2.4v1.8M10 15.8v1.8M2.4 10h1.8M15.8 10h1.8M4.6 4.6l1.3 1.3M14.1 14.1l1.3 1.3M15.4 4.6l-1.3 1.3M5.9 14.1l-1.3 1.3"/></svg>',
 };
 
 const WHALE_SVG =
@@ -54,6 +56,7 @@ const state = {
   dragOut: false,
   expanded: new Set(),
   collapsedWorkflows: new Set(),
+  openTools: new Set(),
   lastTitle: '',
 };
 
@@ -103,6 +106,26 @@ function fmtSize(bytes) {
 
 function fmtUsd(value) {
   return `$${Number(value || 0).toFixed(2)}`;
+}
+
+/* Баланс в долларах в правом верхнем углу. У администратора лимита нет,
+   поэтому счётчик ему не показываем; подсказки при наведении тоже нет. */
+function renderBalance() {
+  const chip = $('#balanceChip');
+  if (!chip) return;
+  const user = state.user;
+  const visible = Boolean(user) && user.role !== 'admin';
+  chip.classList.toggle('hidden', !visible);
+  if (!visible) return;
+  chip.textContent = fmtUsd(user.balanceUsd);
+  chip.classList.toggle('balance-empty', Number(user.balanceUsd || 0) <= 0);
+}
+
+function updateBalance(value) {
+  if (!state.user || state.user.role === 'admin') return;
+  if (value === undefined || value === null) return;
+  state.user.balanceUsd = Number(value);
+  renderBalance();
 }
 
 function toast(message, type = 'error') {
@@ -171,6 +194,13 @@ function renderMarkdown(raw) {
       .split('|')
       .map((cell) => cell.trim());
 
+  /* В узкой таблице «12 340 000 ₽» рвалось на три строки по пробелам.
+     Склеиваем разряды и валюту неразрывным пробелом. */
+  const tightNumbers = (text) =>
+    text
+      .replace(/(\d)[ \u00A0](?=\d{3}(?!\d))/g, '$1\u00A0')
+      .replace(/(\d)[ \u00A0](?=[₽$€])/g, '$1\u00A0');
+
   while (i < lines.length) {
     const line = lines[i];
     const codeMatch = line.match(/^\u0000(\d+)\u0000$/);
@@ -236,9 +266,9 @@ function renderMarkdown(raw) {
         rows.push(splitRow(lines[i]));
         i++;
       }
-      const head = header.map((cell) => `<th>${inlineMd(cell)}</th>`).join('');
+      const head = header.map((cell) => `<th>${inlineMd(tightNumbers(cell))}</th>`).join('');
       const body = rows
-        .map((row) => `<tr>${row.map((cell) => `<td>${inlineMd(cell)}</td>`).join('')}</tr>`)
+        .map((row) => `<tr>${row.map((cell) => `<td>${inlineMd(tightNumbers(cell))}</td>`).join('')}</tr>`)
         .join('');
       out.push(`<div class="table-wrap"><table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`);
       continue;
@@ -409,6 +439,7 @@ async function startApp(payload) {
   $('#boot').classList.add('hidden');
   $('#userName').textContent = state.user.displayName || state.user.username;
   $('#userAvatar').textContent = (state.user.displayName || state.user.username || '?').trim().charAt(0);
+  renderBalance();
   if (!state.projects.length) {
     try {
       const created = await api('/api/projects', { method: 'POST', body: { name: 'Мой проект' } });
@@ -428,6 +459,7 @@ async function startApp(payload) {
   if (existingChat) await openChat(existingChat.id);
   else renderThread();
   updateCrumbs();
+  watchWideBlocks();
   if (state.activeProjectId && filesPrefOpen()) toggleFiles(true);
   $('#input').focus();
 }
@@ -657,6 +689,91 @@ function renderChip(tool) {
   return chip;
 }
 
+/* Агент часто делает десятки однотипных шагов («Расчёты» ×8, файл создан
+   дважды). Складываем одинаковые действия в одну строку со счётчиком:
+   подробности — по клику, чтобы лента не превращалась в простыню. */
+function renderTools(tools) {
+  const wrap = el('div', 'tools');
+  if (!tools.length) return wrap;
+
+  const groups = [];
+  const byLabel = new Map();
+  for (const tool of tools) {
+    const label = tool.label || tool.name || 'Действие';
+    let group = byLabel.get(label);
+    if (!group) {
+      group = { label, items: [] };
+      byLabel.set(label, group);
+      groups.push(group);
+    }
+    group.items.push(tool);
+  }
+
+  const many = groups.some((group) => group.items.length > 1);
+  if (many) wrap.classList.add('many');
+
+  for (const group of groups) {
+    if (group.items.length === 1) {
+      wrap.appendChild(renderChip(group.items[0]));
+      continue;
+    }
+    const running = group.items.some((tool) => tool.status === 'run');
+    const failed = group.items.some((tool) => tool.status === 'error');
+    const open = state.openTools.has(group.label);
+    const button = el('button', `tool-group ${running ? 'run' : failed ? 'err' : 'ok'}${open ? ' open' : ''}`);
+    button.type = 'button';
+    button.innerHTML = running
+      ? '<span class="spinner"></span>'
+      : failed
+        ? '<span class="tick">✕</span>'
+        : '<span class="tick">✓</span>';
+    button.appendChild(el('span', 't-label', group.label));
+    button.appendChild(el('span', 't-count', String(group.items.length)));
+    const last = group.items[group.items.length - 1];
+    if (last.summary) {
+      const arg = el('span', 't-arg', last.summary);
+      arg.title = last.summary;
+      button.appendChild(arg);
+    }
+    const caret = el('span', 't-caret');
+    caret.innerHTML = '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M6 8l4 4 4-4"/></svg>';
+    button.appendChild(caret);
+
+    // Внутри группы одинаковые вызовы тоже не дублируем — показываем «×N».
+    const unique = [];
+    const seen = new Map();
+    for (const tool of group.items) {
+      const key = `${tool.summary || ''}|${tool.status}`;
+      const found = seen.get(key);
+      if (found) found.count += 1;
+      else {
+        const entry = { tool, count: 1 };
+        seen.set(key, entry);
+        unique.push(entry);
+      }
+    }
+
+    const list = el('div', `tool-group-list${open ? '' : ' hidden'}`);
+    for (const entry of unique) {
+      const chip = renderChip(entry.tool);
+      if (entry.count > 1) chip.appendChild(el('span', 't-count', `×${entry.count}`));
+      list.appendChild(chip);
+    }
+
+    button.addEventListener('click', () => {
+      const opened = !button.classList.contains('open');
+      button.classList.toggle('open', opened);
+      list.classList.toggle('hidden', !opened);
+      if (opened) state.openTools.add(group.label);
+      else state.openTools.delete(group.label);
+    });
+
+    wrap.appendChild(button);
+    wrap.appendChild(list);
+  }
+  return wrap;
+}
+
 function messageActions(text) {
   const actions = el('div', 'msg-actions');
   const copy = el('button');
@@ -704,13 +821,14 @@ function renderMessage(message) {
   }
 
   const head = el('div', 'msg-head');
-  head.innerHTML = '<span class="dot"></span><span>AI-ассистент</span>';
+  head.innerHTML = '<span class="dot"></span><span>AI-ассистент</span><span class="work-label">работаю…</span>';
   wrap.appendChild(head);
 
+  if (message.streaming) wrap.classList.add('streaming');
+  else wrap.classList.remove('streaming');
+
   if (message.tools?.length) {
-    const tools = el('div', 'tools');
-    for (const tool of message.tools) tools.appendChild(renderChip(tool));
-    wrap.appendChild(tools);
+    wrap.appendChild(renderTools(message.tools));
   }
 
   if (message.error) {
@@ -725,10 +843,10 @@ function renderMessage(message) {
     note.innerHTML = '<span>⚠</span>';
     const label =
       message.budget.status === 'approved'
-        ? `Задача стоила ${fmtUsd(message.budget.spentUsd)} — администратор подтвердил продолжение.`
+        ? 'Администратор подтвердил продолжение задачи.'
         : message.budget.status === 'rejected'
-          ? `Задача стоила ${fmtUsd(message.budget.spentUsd)} — администратор отклонил продолжение.`
-          : `Задача стоила ${fmtUsd(message.budget.spentUsd)} при пороге ${fmtUsd(message.budget.limitUsd)} за задачу. Ждёт подтверждения администратора.`;
+          ? 'Администратор отклонил продолжение задачи.'
+          : 'Задача тяжелее обычного порога для одной задачи. Жду подтверждения администратора.';
     note.appendChild(el('span', '', label));
     wrap.appendChild(note);
   }
@@ -754,6 +872,29 @@ function renderThread() {
     thread.appendChild(renderMessage(message));
   }
   scrollToBottom(true);
+  requestAnimationFrame(markWideBlocks);
+}
+
+/* На телефоне полосы прокрутки не видно, и широкая таблица выглядит как
+   обрезанная. Тень у правого края подсказывает, что её можно листать вбок. */
+let wideObserver = null;
+function markWideBlocks() {
+  for (const wrap of document.querySelectorAll('#thread .md .table-wrap')) {
+    wrap.classList.toggle('scroll-x', wrap.scrollWidth - wrap.clientWidth > 2);
+  }
+}
+function watchWideBlocks() {
+  if (wideObserver) return;
+  let queued = false;
+  wideObserver = new MutationObserver(() => {
+    if (queued) return;
+    queued = true;
+    requestAnimationFrame(() => {
+      queued = false;
+      markWideBlocks();
+    });
+  });
+  wideObserver.observe($('#thread'), { childList: true, subtree: true, characterData: true });
 }
 
 /* ------------------------------ streaming ------------------------------ */
@@ -787,6 +928,7 @@ function scheduleStreamRender() {
       renderThread();
       return;
     }
+    target.classList.toggle('streaming', Boolean(message.streaming));
     const md = target.querySelector('.md');
     if (md) md.innerHTML = renderMarkdown(message.content || '') + '<span class="cursor"></span>';
     else {
@@ -794,9 +936,8 @@ function scheduleStreamRender() {
       block.innerHTML = renderMarkdown(message.content || '') + '<span class="cursor"></span>';
       target.appendChild(block);
     }
-    const toolsWrap = el('div', 'tools');
     if (message.tools?.length) {
-      for (const tool of message.tools) toolsWrap.appendChild(renderChip(tool));
+      const toolsWrap = renderTools(message.tools);
       const existing = target.querySelector('.tools');
       if (existing) existing.replaceWith(toolsWrap);
       else target.insertBefore(toolsWrap, target.querySelector('.md'));
@@ -893,12 +1034,13 @@ async function streamMessage(text, attachmentIds) {
           status: event.approval.status || 'pending',
         };
       }
-      toast(`Запрос отправлен администратору: задача стоит ${fmtUsd(event.approval.spentUsd)}.`, 'warn');
+      toast('Запрос отправлен администратору: задача тяжелее обычного порога.', 'warn');
       return;
     }
     if (event.type === 'done') {
       const message = getStreamingMessage();
       if (message) message.streaming = false;
+      updateBalance(event.balanceUsd);
     }
   };
 
@@ -1142,6 +1284,7 @@ function toggleFiles(force) {
   if (open) app.classList.remove('sidebar-open');
   state.filesOpen = open;
   rememberFilesPref(open);
+  applyLayout();
   if (open) {
     state.filesPath = '.';
     loadFiles('.');
@@ -1289,21 +1432,22 @@ function mimeOf(fileName) {
   return map[ext] || 'application/octet-stream';
 }
 
-function previewImage(item) {
-  openModal({
-    title: item.name,
-    className: 'viewer',
-    body: `<img class="preview-img" alt="${escapeHtml(item.name)}" src="${fileUrl(item.path, false)}"/>`,
-    actions: [
-      { id: 'download', label: 'Скачать', kind: 'quiet', onClick: () => { window.open(fileUrl(item.path, true), '_blank'); return false; } },
-      { label: 'Закрыть', kind: 'quiet' },
-    ],
-  });
-}
+/* Программы, которые открывают свой файл сами, по ссылке.
+   Word, Excel и PowerPoint умеют это через протоколы ms-word / ms-excel / ms-powerpoint. */
+const OFFICE_PROTOCOLS = {
+  docx: ['ms-word', 'Word'],
+  doc: ['ms-word', 'Word'],
+  rtf: ['ms-word', 'Word'],
+  xlsx: ['ms-excel', 'Excel'],
+  xlsm: ['ms-excel', 'Excel'],
+  xls: ['ms-excel', 'Excel'],
+  pptx: ['ms-powerpoint', 'PowerPoint'],
+  ppt: ['ms-powerpoint', 'PowerPoint'],
+};
 
-/* Клик по файлу в панели открывает его для просмотра, а не скачивает.
-   Изображения и PDF смотрим как есть, HTML — в изолированной вкладке,
-   документы (Word, Excel, презентации, тексты) — в модальном окне. */
+/* Клик по файлу сразу открывает его в подходящей программе — без предпросмотра
+   в окне приложения: документы в Word/Excel/PowerPoint, PDF и картинки в новой
+   вкладке браузера, HTML в изолированной вкладке. */
 function openFileViewer(item) {
   const ext = String(item.name).split('.').pop().toLowerCase();
   /* Архивы, видео и прочие двоичные файлы смотреть нечем — сразу сохраняем. */
@@ -1315,103 +1459,31 @@ function openFileViewer(item) {
     window.open(`/api/projects/${state.activeProjectId}/preview?path=${encodeURIComponent(item.path)}`, '_blank');
     return;
   }
-  if (ext === 'pdf') {
-    if (!/Mobi|Android/i.test(navigator.userAgent)) {
-      window.open(fileUrl(item.path, false), '_blank');
-      return;
-    }
-  } else if (/^(png|jpe?g|webp|gif|bmp|avif|svg)$/.test(ext)) {
-    previewImage(item);
+  const office = OFFICE_PROTOCOLS[ext];
+  if (office) {
+    openInOffice(item, office[0], office[1]);
     return;
   }
-  showFilePreview(item);
+  /* PDF, изображения, тексты и таблицы открывает браузер — в новой вкладке. */
+  window.open(fileUrl(item.path, false), '_blank');
 }
 
-async function showFilePreview(item) {
-  const modal = openModal({
-    title: item.name,
-    className: 'viewer',
-    body: '<div class="files-empty"><div class="spin-lg"></div></div>',
-    actions: [
-      { id: 'download', label: 'Скачать', kind: 'quiet', onClick: () => { window.open(fileUrl(item.path, true), '_blank'); return false; } },
-      { label: 'Закрыть', kind: 'quiet' },
-    ],
-  });
-  const body = modal.querySelector('.modal-body');
-  let data;
+/* Word/Excel/PowerPoint скачивают файл сами, без cookie браузера, поэтому
+   сервер выдаёт короткую подписанную ссылку именно на этот файл. */
+async function openInOffice(item, protocol, appName) {
+  let link;
   try {
-    data = await api(`/api/projects/${state.activeProjectId}/file-preview?path=${encodeURIComponent(item.path)}`);
+    link = await api(`/api/projects/${state.activeProjectId}/file-link?path=${encodeURIComponent(item.path)}`);
   } catch (error) {
-    body.innerHTML = '';
-    body.appendChild(el('p', 'viewer-note', `Не удалось открыть файл: ${error.message}`));
+    toast(`Не удалось открыть файл в ${appName}: ${error.message}`);
     return;
   }
-  body.innerHTML = '';
-  body.appendChild(el('div', 'viewer-meta', `${data.kindLabel || 'файл'} · ${fmtSize(data.size)}`));
-  const text = String(data.text || '');
-  const isMarkdown = /^(md|markdown)$/i.test(String(item.name).split('.').pop());
-  if (!text) {
-    const reason = (data.warnings && data.warnings[0]) || 'Содержимое этого формата нельзя показать — скачайте файл.';
-    body.appendChild(el('p', 'viewer-note', reason));
-    return;
+  try {
+    window.location.href = `${protocol}:ofe|u|${link.url}`;
+    toast(`Открываю в ${appName}…`, 'ok');
+  } catch {
+    toast(`Не удалось запустить ${appName}. Скачайте файл кнопкой «Скачать».`);
   }
-  if (data.kind === 'xlsx') {
-    body.appendChild(renderSheetPreview(text));
-  } else if (isMarkdown) {
-    const md = el('div', 'md viewer-md');
-    md.innerHTML = renderMarkdown(text);
-    body.appendChild(md);
-  } else {
-    const pre = el('pre', 'viewer-text');
-    pre.textContent = text;
-    body.appendChild(pre);
-  }
-  for (const warning of data.warnings || []) body.appendChild(el('p', 'viewer-note', warning));
-}
-
-/* Таблицу из Excel показываем настоящей таблицей: блоки «## Лист «Имя»»
-   из серверного разбора превращаем в отдельные листы с прокруткой. */
-function renderSheetPreview(text) {
-  const wrap = el('div', 'viewer-sheets');
-  for (const block of String(text).split(/\n{2,}(?=## Лист «)/)) {
-    const match = block.match(/^## Лист «([^»]+)»\n?([\s\S]*)$/);
-    const sheetName = match ? match[1] : '';
-    const rowsText = (match ? match[2] : block).replace(/\n+$/, '');
-    if (sheetName) wrap.appendChild(el('div', 'viewer-sheet-name', sheetName));
-    const rows = rowsText ? rowsText.split('\n').map((line) => line.split('\t')) : [];
-    if (!rows.length) {
-      wrap.appendChild(el('p', 'viewer-note', 'Пусто'));
-      continue;
-    }
-    const table = el('table', 'viewer-table');
-    const tbody = el('tbody');
-    /* Первую строку считаем шапкой, если в ней нет чисел, — так отчёты читаются
-       как в Excel, а обычные таблицы без шапки не искажаются. */
-    const hasHeader =
-      rows.length > 1 && rows[0].every((cell) => !/\d/.test(cell)) && rows.slice(1).some((r) => r.some((c) => /\d/.test(c)));
-    rows.forEach((cells, index) => {
-      const tr = el('tr');
-      const isHead = hasHeader && index === 0;
-      for (const cell of cells) {
-        const td = el(isHead ? 'th' : 'td', '', formatCell(cell));
-        tr.appendChild(td);
-      }
-      tbody.appendChild(tr);
-    });
-    table.appendChild(tbody);
-    const scroller = el('div', 'viewer-table-wrap');
-    scroller.appendChild(table);
-    wrap.appendChild(scroller);
-  }
-  return wrap;
-}
-
-/* Числа в таблице показываем с разрядами — «1 344 000» читается лучше, чем «1344000». */
-function formatCell(value) {
-  const text = String(value ?? '');
-  if (!/^-?\d+(\.\d+)?$/.test(text) || text.length < 5) return text;
-  const num = Number(text);
-  return num.toLocaleString('ru-RU', { maximumFractionDigits: 2 });
 }
 
 /* Загрузка файлов в проект. dir — папка внутри проекта ('.' — корень):
@@ -1806,6 +1878,14 @@ function openUserMenu(event) {
       { label: 'Пользователи', icon: ICONS.users, action: () => adminModal() },
     );
   }
+  items.push(
+    { sep: true },
+    {
+      label: currentTheme() === 'light' ? 'Тёмная тема' : 'Светлая тема',
+      icon: ICONS.theme,
+      action: () => applyTheme(currentTheme() === 'light' ? 'dark' : 'light'),
+    },
+  );
   items.push({ sep: true }, { label: 'Выйти', icon: ICONS.logout, danger: true, action: () => logout() });
   openContextMenu(event.currentTarget, items);
 }
@@ -2297,6 +2377,15 @@ function renderAdmin(body, users, overview, approvals = [], refresh = null) {
   passInput.autocomplete = 'off';
   passField.appendChild(passInput);
   form.appendChild(passField);
+  const creditField = el('label', 'field field-credit');
+  creditField.appendChild(el('span', 'field-label', 'Баланс, $'));
+  const creditInput = el('input');
+  creditInput.type = 'text';
+  creditInput.inputMode = 'decimal';
+  creditInput.placeholder = '20';
+  creditInput.autocomplete = 'off';
+  creditField.appendChild(creditInput);
+  form.appendChild(creditField);
   const createBtn = el('button', 'btn btn-primary', 'Создать');
   createBtn.type = 'submit';
   form.appendChild(createBtn);
@@ -2307,10 +2396,15 @@ function renderAdmin(body, users, overview, approvals = [], refresh = null) {
     note.textContent = '';
     createBtn.disabled = true;
     try {
-      const data = await api('/api/admin/users', { method: 'POST', body: { username: userInput.value.trim(), password: passInput.value } });
+      const credit = creditInput.value.trim() ? Number(creditInput.value.replace(',', '.').replace(/[^\d.-]/g, '')) : undefined;
+      const data = await api('/api/admin/users', {
+        method: 'POST',
+        body: { username: userInput.value.trim(), password: passInput.value, creditUsd: credit },
+      });
       users.push({ ...data.user, usage: [] });
       userInput.value = '';
       passInput.value = '';
+      creditInput.value = '';
       renderAdmin(body, users, overview, approvals, refresh);
     } catch (error) {
       note.textContent = error.message;
@@ -2340,10 +2434,39 @@ function renderAdmin(body, users, overview, approvals = [], refresh = null) {
     }
     main.appendChild(nameLine);
     const last = user.lastLoginAt ? new Date(user.lastLoginAt).toLocaleDateString('ru-RU') : 'ещё не входил';
-    main.appendChild(el('div', 'au-sub', `${user.username} · ${last}`));
+    const balanceNote = user.role === 'admin' ? '' : ` · баланс ${fmtUsd(user.balanceUsd)}`;
+    main.appendChild(el('div', 'au-sub', `${user.username} · ${last}${balanceNote}`));
     row.appendChild(main);
 
     const actions = el('div', 'au-actions');
+    if (user.id !== state.user.id) {
+      const credit = el('button', 'btn', 'Начислить');
+      credit.type = 'button';
+      credit.addEventListener('click', async () => {
+        const raw = await promptDialog({
+          title: 'Начислить баланс',
+          label: `Сумма в долларах для «${user.username}» (минус — списать)`,
+          confirm: 'Начислить',
+        });
+        if (!raw) return;
+        const usd = Number(String(raw).replace(',', '.').replace(/[^\d.-]/g, ''));
+        if (!Number.isFinite(usd) || !usd) {
+          toast('Укажите сумму в долларах, например 10');
+          return;
+        }
+        try {
+          const data = await api(`/api/admin/users/${user.id}/credit`, { method: 'POST', body: { usd } });
+          user.balanceUsd = data.user.balanceUsd;
+          user.spentUsd = data.user.spentUsd;
+          toast(`Баланс «${user.username}»: ${fmtUsd(user.balanceUsd)}`, 'ok');
+          // Диалог суммы закрывает окно «Пользователи» — открываем его снова с новыми балансами.
+          setTimeout(() => adminModal(), 0);
+        } catch (error) {
+          toast(error.message);
+        }
+      });
+      actions.appendChild(credit);
+    }
     const reset = el('button', 'btn', 'Пароль');
     reset.type = 'button';
     reset.addEventListener('click', async () => {
@@ -2401,6 +2524,13 @@ function renderAdmin(body, users, overview, approvals = [], refresh = null) {
 function autoResize() {
   const input = $('#input');
   if (!input) return;
+  // Пустое поле — всегда одна строка: иначе подсказка в тесной строке ввода
+  // переносится и раздувает её до двух-трёх строк ещё до начала набора.
+  if (!input.value.trim()) {
+    input.style.height = '';
+    input.style.overflowY = 'hidden';
+    return;
+  }
   const max = Math.max(180, Math.min(420, Math.round(window.innerHeight * 0.42)));
   input.style.height = 'auto';
   const next = Math.min(input.scrollHeight + 3, max);
@@ -2412,8 +2542,9 @@ function autoResize() {
 function syncInputPlaceholder() {
   const input = $('#input');
   if (!input) return;
+  const veryNarrow = window.matchMedia('(max-width: 420px)').matches;
   const narrow = window.matchMedia('(max-width: 560px)').matches;
-  input.placeholder = narrow ? 'Задайте вопрос…' : 'Спросите или поставьте задачу…';
+  input.placeholder = veryNarrow ? 'Вопрос…' : narrow ? 'Задайте вопрос…' : 'Спросите или поставьте задачу…';
 }
 
 /* ------------------------------ theme ------------------------------ */
@@ -2787,15 +2918,182 @@ $('#chatMenuBtn').addEventListener('click', (event) => {
   ]);
 });
 
+/* ------------------------------ panel resize ------------------------------ */
+/* Полная версия: ширину панели проектов и панели файлов можно тянуть мышью
+   за разделитель, ширины запоминаются. На телефоне панели — выезжающие ящики,
+   там ширина задана экраном, поэтому ручки скрыты. */
+
+const LAYOUT_KEY = 'dshow-layout';
+const PANEL_MIN = 200;
+const PANEL_MAX = 460;
+const PANEL_DEFAULT = 288;
+
+function readLayout() {
+  let saved = {};
+  try {
+    saved = JSON.parse(localStorage.getItem(LAYOUT_KEY) || '{}') || {};
+  } catch {
+    saved = {};
+  }
+  const fit = (value) => (Number.isFinite(value) ? Math.round(value) : PANEL_DEFAULT);
+  return { sidebar: fit(saved.sidebar), files: fit(saved.files) };
+}
+
+function saveLayout(next) {
+  try {
+    localStorage.setItem(LAYOUT_KEY, JSON.stringify(next));
+  } catch {
+    /* приватный режим — просто не запоминаем */
+  }
+}
+
+function clampPanel(width, other) {
+  const limit = Math.min(PANEL_MAX, window.innerWidth - other - 480);
+  return Math.max(PANEL_MIN, Math.min(limit, Math.round(width)));
+}
+
+function panelOtherWidth(kind) {
+  const app = $('#app');
+  if (!app) return 0;
+  const prefs = readLayout();
+  if (kind === 'sidebar') return app.classList.contains('with-files') ? prefs.files : 0;
+  return prefs.sidebar;
+}
+
+function applyLayout() {
+  const app = $('#app');
+  if (!app) return;
+  if (!window.matchMedia('(min-width: 1101px)').matches) {
+    app.style.removeProperty('--sidebar');
+    app.style.removeProperty('--files');
+    return;
+  }
+  const prefs = readLayout();
+  app.style.setProperty('--sidebar', `${clampPanel(prefs.sidebar, panelOtherWidth('sidebar'))}px`);
+  app.style.setProperty('--files', `${clampPanel(prefs.files, panelOtherWidth('files'))}px`);
+}
+
+function initPanelResize(handle, kind) {
+  if (!handle) return;
+  const app = $('#app');
+  const prop = kind === 'sidebar' ? '--sidebar' : '--files';
+  const canResize = () => window.matchMedia('(min-width: 1101px)').matches;
+  const applied = () => {
+    const value = Number.parseFloat(app.style.getPropertyValue(prop));
+    return Number.isFinite(value) ? value : PANEL_DEFAULT;
+  };
+
+  const setWidth = (width, persist) => {
+    const next = clampPanel(width, panelOtherWidth(kind));
+    app.style.setProperty(prop, `${next}px`);
+    if (persist) saveLayout({ ...readLayout(), [kind]: next });
+    return next;
+  };
+
+  let drag = null;
+  handle.addEventListener('pointerdown', (event) => {
+    if (!canResize() || event.button !== 0) return;
+    event.preventDefault();
+    drag = { x: event.clientX, width: applied(), moved: false };
+    try {
+      handle.setPointerCapture(event.pointerId);
+    } catch {
+      /* старые движки — тянем и без захвата */
+    }
+    handle.classList.add('dragging');
+    document.body.classList.add('resizing');
+  });
+  handle.addEventListener('pointermove', (event) => {
+    if (!drag) return;
+    const delta = event.clientX - drag.x;
+    if (Math.abs(delta) > 1) drag.moved = true;
+    setWidth(kind === 'sidebar' ? drag.width + delta : drag.width - delta, false);
+  });
+  const finish = (event) => {
+    if (!drag) return;
+    if (drag.moved) saveLayout({ ...readLayout(), [kind]: applied() });
+    drag = null;
+    handle.classList.remove('dragging');
+    document.body.classList.remove('resizing');
+    try {
+      if (event && handle.hasPointerCapture(event.pointerId)) handle.releasePointerCapture(event.pointerId);
+    } catch {
+      /* ignore */
+    }
+  };
+  handle.addEventListener('pointerup', finish);
+  handle.addEventListener('pointercancel', finish);
+
+  // Двойной щелчок — вернуть обычную ширину.
+  handle.addEventListener('dblclick', () => {
+    if (canResize()) setWidth(PANEL_DEFAULT, true);
+  });
+  handle.addEventListener('keydown', (event) => {
+    if (!canResize()) return;
+    const step = event.shiftKey ? 48 : 16;
+    const grow = kind === 'sidebar' ? 1 : -1;
+    if (event.key === 'ArrowLeft') {
+      event.preventDefault();
+      setWidth(applied() - step * grow, true);
+    } else if (event.key === 'ArrowRight') {
+      event.preventDefault();
+      setWidth(applied() + step * grow, true);
+    } else if (event.key === 'Home') {
+      event.preventDefault();
+      setWidth(PANEL_DEFAULT, true);
+    }
+  });
+  handle.title = kind === 'sidebar' ? 'Потяните, чтобы изменить ширину панели проектов' : 'Потяните, чтобы изменить ширину панели файлов';
+  handle.setAttribute('aria-label', handle.title);
+}
+
+initPanelResize($('#sidebarResizer'), 'sidebar');
+initPanelResize($('#filesResizer'), 'files');
+applyLayout();
+
 $('#input').addEventListener('input', autoResize);
 window.addEventListener('resize', () => {
   syncInputPlaceholder();
   autoResize();
+  markWideBlocks();
+  applyLayout();
   // При переходе на узкий экран ящик файлов не должен перекрывать диалог.
   if (window.matchMedia('(max-width: 1100px)').matches && state.filesOpen) toggleFiles(false);
 });
 window.addEventListener('orientationchange', () => setTimeout(autoResize, 120));
 if (document.fonts && document.fonts.ready) document.fonts.ready.then(autoResize).catch(() => {});
+
+/* Клавиатура телефона: окно держим по видимой области, иначе поле ввода
+   уезжает под клавиатуру или страница прыгает при фокусе. */
+(function watchKeyboard() {
+  const vv = window.visualViewport;
+  if (!vv) return;
+  const root = document.documentElement;
+  const apply = () => {
+    const hidden = Math.round(window.innerHeight - vv.height);
+    if (hidden > 120) {
+      root.classList.add('kb-open');
+      root.style.setProperty('--app-h', `${Math.round(vv.height)}px`);
+    } else {
+      root.classList.remove('kb-open');
+      root.style.removeProperty('--app-h');
+    }
+  };
+  apply();
+  vv.addEventListener('resize', apply);
+  vv.addEventListener('scroll', apply);
+  window.addEventListener('orientationchange', () => setTimeout(apply, 250));
+})();
+
+// На телефоне фокус в поле ввода поднимает клавиатуру: лента должна
+// остаться у последнего сообщения, а не показывать середину переписки.
+$('#input').addEventListener('focus', () => {
+  if (!window.matchMedia('(max-width: 860px)').matches) return;
+  setTimeout(() => {
+    const scroll = $('#scroll');
+    if (scroll) scroll.scrollTop = scroll.scrollHeight;
+  }, 300);
+});
 $('#input').addEventListener('keydown', (event) => {
   if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
     event.preventDefault();
