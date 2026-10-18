@@ -233,7 +233,7 @@ svg {
   min-width: 0;
 }
 
-/* Р›РѕРіРѕС‚РёРї DeepSeek РїРѕ С†РµРЅС‚СЂСѓ РІРµСЂС…Р° РєР°СЂС‚РѕС‡РєРё РІС…РѕРґР°. */
+/* Логотип DeepSeek по центру верха карточки входа. */
 .auth-mark {
   width: 34px;
   height: 34px;
@@ -633,6 +633,44 @@ body.resizing {
   margin-bottom: 2px;
 }
 
+/* Строка «Новая папка» внизу списка проектов: пунктирная рамка отличает её от
+   проектов и папок, но размер и скругление те же — это тот же список. */
+.list-add {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  height: 36px;
+  margin-top: 8px;
+  padding: 0 8px;
+  border: 1px dashed var(--line);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-3);
+  font-size: var(--fs-13);
+  font-weight: 500;
+  line-height: var(--lh-18);
+  cursor: pointer;
+  text-align: left;
+}
+
+.list-add:hover {
+  background: var(--layer-hover);
+  border-color: var(--line-strong);
+  color: var(--text-2);
+}
+
+.list-add-icon {
+  display: inline-flex;
+  flex: none;
+  color: var(--text-4);
+}
+
+.list-add-icon svg {
+  width: 17px;
+  height: 17px;
+}
+
 /* Строка проекта: выше, с крупными деталями и тем же скруглением, что у
    кнопок, — имя, счётчик диалогов, плюс и «три точки» читаются без прицела. */
 .project-row {
@@ -808,12 +846,14 @@ body.resizing {
   opacity: 1;
 }
 
+/* Кнопки строки — 28×28 во всех ширинах: на телефоне палец попадает в ту же
+   цель, что и мышью на ноутбуке (раньше было 26 px, а ниже 860 px — 28). */
 .row-menu {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 26px;
-  height: 26px;
+  width: 28px;
+  height: 28px;
   border: none;
   background: transparent;
   border-radius: var(--radius-xs);
@@ -832,7 +872,7 @@ body.resizing {
   height: 15px;
 }
 
-/* --------------------- workflow: РїР°РїРєРё РїСЂРѕРµРєС‚РѕРІ --------------------- */
+/* --------------------- workflow: папки проектов --------------------- */
 
 .sidebar-actions-first {
   display: flex;
@@ -845,7 +885,7 @@ body.resizing {
   min-width: 0;
 }
 
-/* Р—Р°РіСЂСѓР·РєР° С„Р°Р№Р»РѕРІ РІ РїСЂРѕРµРєС‚: Р·Р°РјРµС‚РЅР°СЏ РєРЅРѕРїРєР° СЃ РїРѕРґРїРёСЃСЊСЋ РІРјРµСЃС‚Рѕ РёРєРѕРЅРєРё-СЃС‚СЂРµР»РєРё. */
+/* Загрузка файлов в проект: заметная кнопка с подписью вместо иконки-стрелки. */
 .files-actions {
   display: flex;
   flex-direction: column;
@@ -1002,8 +1042,8 @@ body.resizing {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 26px;
-  height: 26px;
+  width: 28px;
+  height: 28px;
   border: none;
   background: transparent;
   border-radius: var(--radius-sm);
@@ -2024,8 +2064,8 @@ body.resizing {
   }
 }
 
-/* Р“РѕР»РѕСЃРѕРІРѕР№ РІРІРѕРґ РїРѕРєР°Р·С‹РІР°РµС‚СЃСЏ РѕРґРЅРѕР№ СЃС‚СЂРѕРєРѕР№ РїСЂСЏРјРѕ РІ РїРѕР»Рµ РІРІРѕРґР°:
-   СЃС‚СЂРѕРєР° РґРёРєС‚РѕРІРєРё Р·Р°РјРµРЅСЏРµС‚ textarea, РїРѕСЌС‚РѕРјСѓ РІС‹СЃРѕС‚Р° РєРѕРјРїРѕР·РµСЂР° РЅРµ РјРµРЅСЏРµС‚СЃСЏ. */
+/* Голосовой ввод показывается одной строкой прямо в поле ввода:
+   строка диктовки заменяет textarea, поэтому высота композера не меняется. */
 .dictation-bar {
   display: none;
   align-items: center;
@@ -2213,7 +2253,7 @@ body.resizing {
   scrollbar-color: var(--layer-3) transparent;
 }
 
-/* РџРѕРґСЃРєР°Р·РєР° РІРѕ РІСЃСЋ РїР°РЅРµР»СЊ, РїРѕРєР° РЅР°Рґ РЅРµР№ РґРµСЂР¶Р°С‚ С„Р°Р№Р»С‹ СЃ РєРѕРјРїСЊСЋС‚РµСЂР°. */
+/* Подсказка во всю панель, пока над ней держат файлы с компьютера. */
 .files-drop-hint {
   position: absolute;
   inset: 6px;
@@ -2236,7 +2276,7 @@ body.resizing {
   display: flex;
 }
 
-/* Р¤Р°Р№Р» РёР· РїР°РЅРµР»Рё РјРѕР¶РЅРѕ СѓС‚Р°С‰РёС‚СЊ РјС‹С€СЊСЋ РЅР° СЂР°Р±РѕС‡РёР№ СЃС‚РѕР». */
+/* Файл из панели можно утащить мышью на рабочий стол. */
 .file-row[draggable='true'] {
   cursor: grab;
 }
@@ -2312,6 +2352,19 @@ body.resizing {
   color: var(--text-4);
   font-size: var(--fs-13);
   line-height: var(--lh-20);
+}
+
+/* Небольшой индикатор ожидания: раньше он жил только внутри чипа инструмента,
+   а вложениям приходилось задавать те же размеры инлайново. */
+.spinner {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(86, 134, 254, 0.25);
+  border-top-color: var(--accent);
+  animation: spin 0.8s linear infinite;
+  flex: none;
+  display: inline-block;
 }
 
 .spin-lg {
@@ -2699,7 +2752,7 @@ body.resizing {
   color: var(--danger-ink);
 }
 
-/* Р—Р°РїСЂРѕСЃС‹ РЅР° С‚СЏР¶С‘Р»С‹Рµ Р·Р°РґР°С‡Рё РІ РїР°РЅРµР»Рё Р°РґРјРёРЅРёСЃС‚СЂР°С‚РѕСЂР° */
+/* Запросы на тяжёлые задачи в панели администратора */
 .admin-section-title {
   margin: 18px 0 8px;
   font-size: var(--fs-12);
@@ -2979,7 +3032,7 @@ body.resizing {
   color: var(--warn-ink, #a8721a);
 }
 
-/* РџР»Р°С€РєР° Рѕ СЃС‚РѕРёРјРѕСЃС‚Рё Р·Р°РґР°С‡Рё РІ РїРµСЂРµРїРёСЃРєРµ */
+/* Плашка о стоимости задачи в переписке */
 .msg-budget {
   display: flex;
   align-items: flex-start;
@@ -3201,6 +3254,12 @@ body.resizing {
   .topbar-right {
     gap: 0;
   }
+  /* «Три точки» в шапке на телефоне не нужны: те же действия есть в строке
+     диалога в ящике проектов (переименовать, удалить), а «скачать проект» —
+     кнопка в панели файлов. Место в шапке дороже. */
+  #chatMenuBtn {
+    display: none;
+  }
   .crumbs {
     gap: 6px;
   }
@@ -3375,11 +3434,6 @@ body.resizing {
   .project-row .row-plus,
   .chat-row .row-menu {
     opacity: 1;
-  }
-  .row-menu,
-  .row-plus {
-    width: 28px;
-    height: 28px;
   }
   .row-menu svg,
   .row-plus svg {
