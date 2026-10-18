@@ -51,6 +51,7 @@ const state = {
   streaming: false,
   abort: null,
   filesOpen: true,
+  filesDrawerOpen: false,
   filesPath: '.',
   filesLoading: false,
   dragOut: false,
@@ -59,28 +60,6 @@ const state = {
   openTools: new Set(),
   lastTitle: '',
 };
-
-/* Панель «Файлы проекта» по умолчанию открыта; выбор пользователя запоминаем. */
-const FILES_PREF_KEY = 'dshow.filesOpen';
-
-function filesPrefOpen() {
-  // На узких экранах панель файлов — выдвижной ящик: всегда стартуем закрытыми.
-  if (window.matchMedia('(max-width: 1100px)').matches) return false;
-  try {
-    return localStorage.getItem(FILES_PREF_KEY) !== '0';
-  } catch {
-    return true;
-  }
-}
-
-function rememberFilesPref(open) {
-  if (window.matchMedia('(max-width: 1100px)').matches) return;
-  try {
-    localStorage.setItem(FILES_PREF_KEY, open ? '1' : '0');
-  } catch {
-    /* приватный режим — просто не запоминаем */
-  }
-}
 
 function el(tag, cls, text) {
   const node = document.createElement(tag);
@@ -244,12 +223,14 @@ function renderMarkdown(raw) {
       continue;
     }
 
-    if (/^\s*>\s?/.test(line)) {
+    /* Текст уже прошёл escapeHtml, поэтому цитата начинается с &gt; —
+       раньше ветка не срабатывала и в ответе печатался сам знак «>». */
+    if (/^\s*(?:&gt;|>)\s?/.test(line)) {
       flushParagraph();
       closeLists();
       const quote = [];
-      while (i < lines.length && /^\s*>\s?/.test(lines[i])) {
-        quote.push(lines[i].replace(/^\s*>\s?/, ''));
+      while (i < lines.length && /^\s*(?:&gt;|>)\s?/.test(lines[i])) {
+        quote.push(lines[i].replace(/^\s*(?:&gt;|>)\s?/, ''));
         i++;
       }
       out.push(`<blockquote>${inlineMd(quote.join(' '))}</blockquote>`);
@@ -315,17 +296,22 @@ async function api(path, options = {}) {
     init.body = body;
   }
   const response = await fetch(path, init);
-  if (response.status === 401) {
-    showAuth();
-    const error = new Error('unauthorized');
-    error.unauthorized = true;
-    throw error;
-  }
   let data = {};
   try {
     data = await response.json();
   } catch {
     data = {};
+  }
+  if (response.status === 401) {
+    showAuth();
+    /* Сеанс мог быть закрыт новым входом с другого устройства — объясняем это
+       прямо на экране входа, чтобы выход не выглядел случайным сбоем. */
+    const notice = data.reason === 'displaced' ? data.error || 'Вход выполнен на другом устройстве' : '';
+    const box = $('#loginError');
+    if (box) box.textContent = notice;
+    const error = new Error(notice || 'unauthorized');
+    error.unauthorized = true;
+    throw error;
   }
   if (!response.ok) {
     const error = new Error(data.error || `Ошибка ${response.status}`);
@@ -432,13 +418,14 @@ function switchAuthForm(mode) {
 /* ------------------------------ app init ------------------------------ */
 
 async function startApp(payload) {
+  /* Чистим всё, что могло остаться от предыдущего аккаунта в этой же вкладке. */
+  resetClientState();
   state.user = payload.user;
   state.projects = payload.projects || [];
   state.workflows = payload.workflows || [];
   hideAuth();
   $('#boot').classList.add('hidden');
   $('#userName').textContent = state.user.displayName || state.user.username;
-  $('#userAvatar').textContent = (state.user.displayName || state.user.username || '?').trim().charAt(0);
   renderBalance();
   if (!state.projects.length) {
     try {
@@ -460,7 +447,7 @@ async function startApp(payload) {
   else renderThread();
   updateCrumbs();
   watchWideBlocks();
-  if (state.activeProjectId && filesPrefOpen()) toggleFiles(true);
+  if (state.activeProjectId) syncFilesPanel({ reload: true });
   $('#input').focus();
 }
 
@@ -474,9 +461,22 @@ function workflowOf(project) {
 }
 
 function projectNode(project) {
-  const wrap = el('div', `project${project.id === state.activeProjectId ? ' active' : ''}${project.workflowId ? ' in-workflow' : ''}`);
+  const chats = project.chats || [];
+  const open = state.expanded.has(project.id);
+  const collapsed = Boolean(chats.length) && !open;
+  const wrap = el(
+    'div',
+    `project${project.id === state.activeProjectId ? ' active' : ''}${project.workflowId ? ' in-workflow' : ''}${collapsed ? ' collapsed' : ''}`,
+  );
   const row = el('div', 'project-row');
-  row.innerHTML = `<span class="f-icon">${ICONS.folder}</span><span class="p-name">${escapeHtml(project.name)}</span>`;
+  row.setAttribute('role', 'button');
+  row.tabIndex = 0;
+  row.title = chats.length ? (open ? 'Свернуть диалоги' : 'Раскрыть диалоги') : project.name;
+  if (chats.length) row.setAttribute('aria-expanded', String(open));
+  /* Треугольник слева — та же деталь, что у папок: по нему видно, раскрыт ли
+     список диалогов. У проекта без диалогов место остаётся пустым, чтобы
+     имена не прыгали. */
+  row.innerHTML = `<span class="p-caret${chats.length ? '' : ' empty'}"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M6 8l4 4 4-4"/></svg></span><span class="f-icon">${ICONS.folder}</span><span class="p-name">${escapeHtml(project.name)}</span>`;
   const count = el('span', 'p-count', project.chats?.length ? String(project.chats.length) : '');
   row.appendChild(count);
 
@@ -500,20 +500,41 @@ function projectNode(project) {
     openProjectMenu(event, project);
   });
   row.appendChild(menuBtn);
-  row.addEventListener('click', () => {
+  /* Нажатие по имени проекта: первый раз открывает проект и показывает его
+     диалоги, повторное — сворачивает и раскрывает список. На телефоне ящик
+     остаётся открытым, пока есть из чего выбирать. */
+  const activate = () => {
+    const wasActive = project.id === state.activeProjectId;
     state.activeProjectId = project.id;
-    state.expanded.add(project.id);
+    if (!wasActive) {
+      if (chats.length) state.expanded.add(project.id);
+    } else if (chats.length) {
+      if (state.expanded.has(project.id)) state.expanded.delete(project.id);
+      else state.expanded.add(project.id);
+    }
     renderSidebar();
-    renderThread();
-    updateCrumbs();
-    closeSidebar();
+    if (!wasActive) {
+      renderThread();
+      updateCrumbs();
+    }
+    if (!wasActive && !chats.length) closeSidebar();
+  };
+  row.addEventListener('click', activate);
+  row.addEventListener('keydown', (event) => {
+    if (event.target !== row) return;
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    event.preventDefault();
+    activate();
   });
   wrap.appendChild(row);
 
-  if (state.expanded.has(project.id) && project.chats?.length) {
+  if (open && chats.length) {
     const list = el('div', 'chat-list');
-    for (const chat of project.chats) {
-      const chatRow = el('div', `chat-row${chat.id === state.activeChatId ? ' active' : ''}`);
+    for (const chat of chats) {
+      /* Подсветка выбранного диалога — только у активного проекта: иначе после
+         переключения проекта подсветка остаётся в чужом списке. */
+      const chatActive = chat.id === state.activeChatId && project.id === state.activeProjectId;
+      const chatRow = el('div', `chat-row${chatActive ? ' active' : ''}`);
       const title = el('span', 'c-title', chat.title || 'Новый диалог');
       title.title = chat.title || '';
       chatRow.appendChild(title);
@@ -585,9 +606,6 @@ function updateCrumbs() {
   $('#crumbProject').textContent = project ? project.name : '';
   $('#crumbChat').textContent = state.chat?.title || 'Новый диалог';
   document.title = state.chat?.title ? `${state.chat.title} — DSH Open` : 'DSH Open';
-  if (!$('#filesBtn').disabled) {
-    /* nothing */
-  }
 }
 
 async function openChat(chatId) {
@@ -1270,25 +1288,46 @@ async function pollAttachment(local) {
 /* ------------------------------ files panel ------------------------------ */
 
 function closeSidebar() {
+  closeMenus();
+  closePopover();
   $('#app').classList.remove('sidebar-open');
 }
 
-function toggleFiles(force) {
-  const panel = $('#filesPanel');
-  const open = force !== undefined ? force : panel.classList.contains('hidden');
-  if (open && !state.activeProjectId) return;
-  panel.classList.toggle('hidden', !open);
+/* Панель «Файлы проекта» — постоянный правый блок: на широком экране её
+   нельзя закрыть (ничего в разметке этого и не обещает). До 1100 px ширина
+   экрана мала, поэтому панель превращается в выезжающий ящик, который
+   открывается и закрывается кнопкой-папкой в шапке. */
+const filesNarrow = () => window.matchMedia('(max-width: 1100px)').matches;
+
+function syncFilesPanel({ reload = false } = {}) {
   const app = $('#app');
-  app.classList.toggle('with-files', open);
-  app.classList.toggle('files-open', open);
-  if (open) app.classList.remove('sidebar-open');
+  const panel = $('#filesPanel');
+  if (!app || !panel) return;
+  const drawer = filesNarrow();
+  const open = drawer ? Boolean(state.filesDrawerOpen) : true;
+  panel.classList.toggle('hidden', !open);
+  panel.setAttribute('aria-hidden', open ? 'false' : 'true');
+  app.classList.toggle('with-files', !drawer);
+  app.classList.toggle('files-open', drawer && open);
+  if (drawer && open) app.classList.remove('sidebar-open');
   state.filesOpen = open;
-  rememberFilesPref(open);
   applyLayout();
-  if (open) {
+  if (open && reload && state.activeProjectId) {
     state.filesPath = '.';
     loadFiles('.');
   }
+}
+
+function toggleFilesDrawer() {
+  if (!filesNarrow()) return;
+  state.filesDrawerOpen = !state.filesDrawerOpen;
+  syncFilesPanel({ reload: state.filesDrawerOpen });
+}
+
+function closeFilesDrawer() {
+  if (!state.filesDrawerOpen) return;
+  state.filesDrawerOpen = false;
+  syncFilesPanel();
 }
 
 async function loadFiles(relPath) {
@@ -1541,6 +1580,49 @@ function closeMenus() {
   $$('.menu').forEach((menu) => menu.remove());
 }
 
+/* На телефоне панель проектов — выезжающий ящик. Всплывающие карточки и меню,
+   вызванные из него, монтируем внутрь ящика: иначе они шире панели и вылезают
+   за её скруглённый край. На широком экране всё остаётся как было. */
+const drawerQuery = window.matchMedia('(max-width: 860px)');
+
+function drawerHostFor(anchor) {
+  if (!anchor || !drawerQuery.matches || !anchor.closest) return null;
+  return anchor.closest('.sidebar');
+}
+
+/* Позиция карточки внутри ящика: ширину задают стили (.popover.in-drawer),
+   здесь считаем вертикаль — под якорем, а если снизу нет места, то над ним. */
+function placePopoverInDrawer(node, anchor, host) {
+  const hostRect = host.getBoundingClientRect();
+  const rect = anchor.getBoundingClientRect();
+  const pad = 10;
+  const height = node.offsetHeight;
+  let top = rect.bottom - hostRect.top + 8;
+  if (top + height > hostRect.height - pad) {
+    const above = rect.top - hostRect.top - height - 8;
+    top = above > pad ? above : hostRect.height - height - pad;
+  }
+  node.style.top = `${Math.max(pad, top)}px`;
+}
+
+/* Меню внутри ящика: прижимаем к правому краю якоря и не выпускаем за границы
+   панели ни по горизонтали, ни по вертикали. */
+function placeMenuInDrawer(menu, anchor, host) {
+  const hostRect = host.getBoundingClientRect();
+  const rect = anchor.getBoundingClientRect();
+  const menuRect = menu.getBoundingClientRect();
+  const pad = 8;
+  let left = rect.right - hostRect.left - menuRect.width;
+  left = Math.max(pad, Math.min(left, hostRect.width - menuRect.width - pad));
+  let top = rect.bottom - hostRect.top + 6;
+  if (top + menuRect.height > hostRect.height - pad) {
+    const above = rect.top - hostRect.top - menuRect.height - 6;
+    top = above > pad ? above : hostRect.height - menuRect.height - pad;
+  }
+  menu.style.left = `${left}px`;
+  menu.style.top = `${Math.max(pad, top)}px`;
+}
+
 function openContextMenu(anchor, items) {
   closeMenus();
   menuAnchor = anchor;
@@ -1560,14 +1642,21 @@ function openContextMenu(anchor, items) {
     });
     menu.appendChild(button);
   }
-  document.body.appendChild(menu);
-  const menuRect = menu.getBoundingClientRect();
-  let left = rect.right - menuRect.width;
-  let top = rect.bottom + 6;
-  if (top + menuRect.height > window.innerHeight - 8) top = rect.top - menuRect.height - 6;
-  left = Math.max(8, Math.min(left, window.innerWidth - menuRect.width - 8));
-  menu.style.left = `${left}px`;
-  menu.style.top = `${Math.max(8, top)}px`;
+  const host = drawerHostFor(anchor);
+  if (host) {
+    menu.classList.add('in-drawer');
+    host.appendChild(menu);
+    placeMenuInDrawer(menu, anchor, host);
+  } else {
+    document.body.appendChild(menu);
+    const menuRect = menu.getBoundingClientRect();
+    let left = rect.right - menuRect.width;
+    let top = rect.bottom + 6;
+    if (top + menuRect.height > window.innerHeight - 8) top = rect.top - menuRect.height - 6;
+    left = Math.max(8, Math.min(left, window.innerWidth - menuRect.width - 8));
+    menu.style.left = `${left}px`;
+    menu.style.top = `${Math.max(8, top)}px`;
+  }
   setTimeout(() => {
     const closer = (event) => {
       if (!menu.contains(event.target)) {
@@ -1647,6 +1736,7 @@ function closeModal() {
 
 let popoverNode = null;
 let popoverAnchor = null;
+let popoverHost = null;
 let popoverCleanup = null;
 let popoverOnClose = null;
 
@@ -1660,6 +1750,7 @@ function closePopover() {
   if (popoverNode) popoverNode.remove();
   popoverNode = null;
   popoverAnchor = null;
+  popoverHost = null;
   if (onClose) onClose();
 }
 
@@ -1720,11 +1811,19 @@ function openPopover({ anchor, title = '', body, actions = [], onMount, onClose 
     node.appendChild(row);
   }
 
-  document.body.appendChild(node);
+  const host = drawerHostFor(anchor);
+  if (host) {
+    node.classList.add('in-drawer');
+    host.appendChild(node);
+  } else {
+    document.body.appendChild(node);
+  }
   popoverNode = node;
   popoverAnchor = anchor;
+  popoverHost = host;
   popoverOnClose = onClose;
-  placePopover(node, anchor, { align });
+  if (host) placePopoverInDrawer(node, anchor, host);
+  else placePopover(node, anchor, { align });
 
   const onDocDown = (event) => {
     if (node.contains(event.target)) return;
@@ -1737,7 +1836,13 @@ function openPopover({ anchor, title = '', body, actions = [], onMount, onClose 
     if (event.target instanceof HTMLElement) event.target.blur();
     closePopover();
   };
-  const onViewportChange = () => closePopover();
+  const onViewportChange = () => {
+    if (popoverNode && popoverHost) {
+      placePopoverInDrawer(popoverNode, anchor, popoverHost);
+      return;
+    }
+    closePopover();
+  };
   document.addEventListener('mousedown', onDocDown, true);
   document.addEventListener('keydown', onKey, true);
   document.addEventListener('scroll', onViewportChange, true);
@@ -1879,14 +1984,6 @@ function openUserMenu(event) {
       { label: 'Пользователи', icon: ICONS.users, action: () => adminModal() },
     );
   }
-  items.push(
-    { sep: true },
-    {
-      label: currentTheme() === 'light' ? 'Тёмная тема' : 'Светлая тема',
-      icon: ICONS.theme,
-      action: () => applyTheme(currentTheme() === 'light' ? 'dark' : 'light'),
-    },
-  );
   items.push({ sep: true }, { label: 'Выйти', icon: ICONS.logout, danger: true, action: () => logout() });
   openContextMenu(event.currentTarget, items);
 }
@@ -2251,16 +2348,33 @@ async function changePasswordModal() {
   setTimeout(() => current.focus(), 40);
 }
 
+/* Полный сброс клиентского состояния при смене аккаунта: у каждого
+   пользователя свои проекты, история и файлы, поэтому после выхода в памяти
+   страницы не должно остаться ничего от предыдущего человека. */
+function resetClientState() {
+  state.user = null;
+  state.projects = [];
+  state.workflows = [];
+  state.activeProjectId = null;
+  state.activeChatId = null;
+  state.chat = null;
+  state.attachments = [];
+  state.filesPath = '.';
+  state.filesLoading = false;
+  state.expanded = new Set();
+  state.collapsedWorkflows = new Set();
+  state.openTools = new Set();
+  state.lastTitle = '';
+  state.dragOut = false;
+}
+
 async function logout() {
   try {
     await api('/api/logout', { method: 'POST', body: {} });
   } catch {
     /* ignore */
   }
-  state.projects = [];
-  state.chat = null;
-  state.activeChatId = null;
-  state.activeProjectId = null;
+  resetClientState();
   showAuth();
 }
 
@@ -2884,8 +2998,7 @@ $('#fileInput').addEventListener('change', (event) => {
   uploadFiles(event.target.files);
   event.target.value = '';
 });
-$('#filesBtn').addEventListener('click', () => toggleFiles());
-$('#filesCloseBtn').addEventListener('click', () => toggleFiles(false));
+$('#filesBtn').addEventListener('click', () => toggleFilesDrawer());
 $('#filesUploadBtn').addEventListener('click', () => $('#filesPanelInput').click());
 $('#filesPanelInput').addEventListener('change', (event) => {
   uploadToProject(event.target.files);
@@ -2898,21 +3011,16 @@ $('#sidebarToggle').addEventListener('click', () => {
   const app = $('#app');
   const willOpen = !app.classList.contains('sidebar-open');
   app.classList.toggle('sidebar-open', willOpen);
-  if (willOpen) {
-    app.classList.remove('files-open');
-    if (state.filesOpen) toggleFiles(false);
-  }
+  if (willOpen) closeFilesDrawer();
 });
 $('#backdrop').addEventListener('click', () => {
   $('#app').classList.remove('sidebar-open');
-  $('#app').classList.remove('files-open');
-  if (state.filesOpen) toggleFiles(false);
+  closeFilesDrawer();
 });
 $('#chatMenuBtn').addEventListener('click', (event) => {
   if (!state.chat) return;
   openContextMenu(event.currentTarget, [
     { label: 'Переименовать диалог', icon: ICONS.pen, action: () => renameChat(state.chat) },
-    { label: 'Файлы проекта', icon: ICONS.folder, action: () => toggleFiles(true) },
     { label: 'Скачать проект', icon: ICONS.archive, action: () => window.open(`/api/projects/${state.activeProjectId}/download`, '_blank') },
     { sep: true },
     { label: 'Удалить диалог', icon: ICONS.trash, danger: true, action: () => deleteChat(state.chat) },
@@ -2924,13 +3032,14 @@ $('#chatMenuBtn').addEventListener('click', (event) => {
    за разделитель, ширины запоминаются. На телефоне панели — выезжающие ящики,
    там ширина задана экраном, поэтому ручки скрыты. */
 
-const LAYOUT_KEY = 'dshow-layout';
-/* Базовая ширина панелей — 200 px: узкие полосы по краям, диалогу остаётся
-   максимум места. Минимум чуть меньше, чтобы ручку можно было тянуть в обе
-   стороны даже от базовой ширины. */
-const PANEL_MIN = 180;
-const PANEL_MAX = 460;
-const PANEL_DEFAULT = 200;
+const LAYOUT_KEY = 'dshow-layout-v2';
+/* Размеры колонок повторяют эталонный макет: слева постоянная колонка
+   проектов 280 px (264…420), справа «Файлы проекта» — 45% окна
+   (не меньше 300 px и не больше 70%), диалогу всегда остаётся минимум 400 px. */
+const PANEL_RULES = {
+  sidebar: { min: 264, max: () => 420, def: () => 280 },
+  files: { min: 300, max: () => Math.round(window.innerWidth * 0.7), def: () => Math.round(window.innerWidth * 0.45) },
+};
 
 function readLayout() {
   let saved = {};
@@ -2939,8 +3048,8 @@ function readLayout() {
   } catch {
     saved = {};
   }
-  const fit = (value) => (Number.isFinite(value) ? Math.round(value) : PANEL_DEFAULT);
-  return { sidebar: fit(saved.sidebar), files: fit(saved.files) };
+  const fit = (kind, value) => (Number.isFinite(value) ? Math.round(value) : PANEL_RULES[kind].def());
+  return { sidebar: fit('sidebar', saved.sidebar), files: fit('files', saved.files) };
 }
 
 function saveLayout(next) {
@@ -2951,9 +3060,10 @@ function saveLayout(next) {
   }
 }
 
-function clampPanel(width, other) {
-  const limit = Math.min(PANEL_MAX, window.innerWidth - other - 480);
-  return Math.max(PANEL_MIN, Math.min(limit, Math.round(width)));
+function clampPanel(kind, width, other) {
+  const rule = PANEL_RULES[kind];
+  const limit = Math.min(rule.max(), window.innerWidth - other - 400);
+  return Math.max(rule.min, Math.min(limit, Math.round(width)));
 }
 
 function panelOtherWidth(kind) {
@@ -2973,8 +3083,8 @@ function applyLayout() {
     return;
   }
   const prefs = readLayout();
-  app.style.setProperty('--sidebar', `${clampPanel(prefs.sidebar, panelOtherWidth('sidebar'))}px`);
-  app.style.setProperty('--files', `${clampPanel(prefs.files, panelOtherWidth('files'))}px`);
+  app.style.setProperty('--sidebar', `${clampPanel('sidebar', prefs.sidebar, panelOtherWidth('sidebar'))}px`);
+  app.style.setProperty('--files', `${clampPanel('files', prefs.files, panelOtherWidth('files'))}px`);
 }
 
 function initPanelResize(handle, kind) {
@@ -2984,11 +3094,11 @@ function initPanelResize(handle, kind) {
   const canResize = () => window.matchMedia('(min-width: 1101px)').matches;
   const applied = () => {
     const value = Number.parseFloat(app.style.getPropertyValue(prop));
-    return Number.isFinite(value) ? value : PANEL_DEFAULT;
+    return Number.isFinite(value) ? value : PANEL_RULES[kind].def();
   };
 
   const setWidth = (width, persist) => {
-    const next = clampPanel(width, panelOtherWidth(kind));
+    const next = clampPanel(kind, width, panelOtherWidth(kind));
     app.style.setProperty(prop, `${next}px`);
     if (persist) saveLayout({ ...readLayout(), [kind]: next });
     return next;
@@ -3030,7 +3140,7 @@ function initPanelResize(handle, kind) {
 
   // Двойной щелчок — вернуть обычную ширину.
   handle.addEventListener('dblclick', () => {
-    if (canResize()) setWidth(PANEL_DEFAULT, true);
+    if (canResize()) setWidth(PANEL_RULES[kind].def(), true);
   });
   handle.addEventListener('keydown', (event) => {
     if (!canResize()) return;
@@ -3044,7 +3154,7 @@ function initPanelResize(handle, kind) {
       setWidth(applied() + step * grow, true);
     } else if (event.key === 'Home') {
       event.preventDefault();
-      setWidth(PANEL_DEFAULT, true);
+      setWidth(PANEL_RULES[kind].def(), true);
     }
   });
   handle.title = kind === 'sidebar' ? 'Потяните, чтобы изменить ширину панели проектов' : 'Потяните, чтобы изменить ширину панели файлов';
@@ -3054,15 +3164,17 @@ function initPanelResize(handle, kind) {
 initPanelResize($('#sidebarResizer'), 'sidebar');
 initPanelResize($('#filesResizer'), 'files');
 applyLayout();
+syncFilesPanel();
 
 $('#input').addEventListener('input', autoResize);
 window.addEventListener('resize', () => {
   syncInputPlaceholder();
   autoResize();
   markWideBlocks();
-  applyLayout();
-  // При переходе на узкий экран ящик файлов не должен перекрывать диалог.
-  if (window.matchMedia('(max-width: 1100px)').matches && state.filesOpen) toggleFiles(false);
+  // При переходе на узкий экран выезжающий ящик не должен перекрывать диалог,
+  // а на широком панель файлов обязана быть открытой колонкой.
+  if (filesNarrow() && state.filesDrawerOpen) state.filesDrawerOpen = false;
+  syncFilesPanel();
 });
 window.addEventListener('orientationchange', () => setTimeout(autoResize, 120));
 if (document.fonts && document.fonts.ready) document.fonts.ready.then(autoResize).catch(() => {});

@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { SECURITY, SESSION } from './config.mjs';
+import { DEVICE, DEVICE_KINDS, SECURITY, SESSION } from './config.mjs';
 import { nowIso, sha256 } from './util.mjs';
 
 const { N, r, p, keylen } = SECURITY.scrypt;
@@ -73,6 +73,50 @@ export function clearSessionCookie(secure = false) {
   return attrs.join('; ');
 }
 
+/* Метка устройства: долгоживущая cookie. По ней видно, что вход пришёл
+   с той же самой машины, а не с новой (cookie переживает закрытие браузера). */
+export function deviceCookie(value, maxAgeMs = DEVICE.cookieMs, secure = false) {
+  const attrs = [
+    `${DEVICE.cookie}=${encodeURIComponent(value)}`,
+    'Path=/',
+    'HttpOnly',
+    'SameSite=Strict',
+    `Max-Age=${Math.floor(maxAgeMs / 1000)}`,
+  ];
+  if (secure) attrs.push('Secure');
+  return attrs.join('; ');
+}
+
+export function newDeviceId() {
+  return crypto.randomBytes(12).toString('base64url');
+}
+
+/* Класс устройства: компьютер и телефон занимают разные «полки» сеансов,
+   поэтому под одним аккаунтом можно работать и на ноутбуке, и на телефоне.
+   Планшеты считаем телефоном: второго «наладонника» обычно не бывает.
+   iPadOS 13+ присылает настольный User-Agent, поэтому смотрим ещё и на
+   Client Hints (Chromium присылает Sec-CH-UA-Mobile сам, без запроса). */
+const MOBILE_UA =
+  /Android|iPhone|iPod|iPad|Tablet|Mobile|Windows Phone|IEMobile|Opera Mini|Opera Mobi|BlackBerry|BB10|PlayBook|Silk|Kindle|webOS/i;
+
+export function deviceKind(ua, hints = {}) {
+  const hint = String(hints.mobileHint || '').trim();
+  if (hint === '?1') return 'mobile';
+  if (MOBILE_UA.test(String(ua || ''))) return 'mobile';
+  return 'desktop';
+}
+
+/* Класс уже сохранённого сеанса: старые сеансы (до разделения на классы)
+   считаем компьютером — так телефон никогда не выбьет ноутбук. */
+export function sessionKind(session) {
+  const kind = String(session?.kind || '');
+  return DEVICE_KINDS.includes(kind) ? kind : 'desktop';
+}
+
+export function deviceKindLabel(kind) {
+  return kind === 'mobile' ? 'телефон' : 'компьютер';
+}
+
 export function passwordProblem(password) {
   const pwd = String(password ?? '');
   if (pwd.length < SECURITY.passwordMinLength) {
@@ -139,18 +183,26 @@ export function timingSafeEqualString(a, b) {
   return crypto.timingSafeEqual(bufA, bufB);
 }
 
+/* Выдаёт новый сеанс. Сеансы того же класса устройства закрываются лишние
+   (по умолчанию — один компьютер и один телефон), поэтому работа с ноутбука и
+   телефона идёт параллельно. Возвращает метку нового сеанса, его класс и список
+   выбитых — по нему видно, не пользуются ли аккаунтом вдвоём. */
 export function issueSession(store, userId, meta) {
   const token = newSessionToken();
   const key = sessionKey(token);
   const now = nowIso();
+  const kind = DEVICE_KINDS.includes(meta?.kind) ? meta.kind : 'desktop';
+  const displaced = store.dropOtherSessions(userId, key, { ip: meta?.ip, ua: meta?.ua, kind });
   store.state.sessions[key] = {
     userId,
     createdAt: now,
     exp: Date.now() + SESSION.ttlMs,
     ip: meta?.ip || '',
     ua: (meta?.ua || '').slice(0, 200),
+    device: (meta?.device || '').slice(0, 80),
+    kind,
   };
   store.pruneSessions();
   store.save();
-  return token;
+  return { token, key, kind, displaced };
 }

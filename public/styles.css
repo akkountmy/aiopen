@@ -23,13 +23,49 @@
   --overlay: rgba(21, 21, 23, 0.82);
   --scroll-thumb: #2f2f31;
   --scroll-thumb-hover: #3a3a3d;
+  /* Единая шкала скруглений: выезжающие панели → карточки и окна → меню →
+     кнопки и поля → строки списков. Всё скруглённое в интерфейсе берётся
+     отсюда, отдельные «магические» пиксели не нужны. На телефоне шкала на шаг
+     меньше (см. медиазапрос 860 px): на узкой панели крупные радиусы выглядят
+     чужими. */
+  --radius-lg: 14px;
   --radius: 12px;
+  --radius-md: 10px;
   --radius-sm: 8px;
-  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", "Inter", "Helvetica Neue", Arial, "Noto Sans", sans-serif;
-  --mono: "SF Mono", "JetBrains Mono", "Fira Code", Consolas, "Liberation Mono", monospace;
+  --radius-xs: 6px;
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --mono: "SF Mono", "JetBrains Mono", "Fira Code", Consolas, "Liberation Mono", Menlo, Courier, "PingFang SC", "Microsoft YaHei", monospace;
+  /* Типографика — та же шкала, что в интерфейсе харнеса. Размеры одинаковы
+     на всех ширинах: на телефоне и планшете кегль не меняется, меняется только
+     раскладка. Высоты строк названы по своему значению в пикселях. */
+  --fs-11: 11px;
+  --fs-12: 12px;
+  --fs-13: 13px;
+  --fs-14: 14px;
+  --fs-16: 16px;
+  --fs-18: 18px;
+  --fs-19: 19px;
+  --fs-20: 20px;
+  --fs-21: 21px;
+  --fs-26: 26px;
+  --lh-14: 14px;
+  --lh-16: 16px;
+  --lh-17: 17px;
+  --lh-18: 18px;
+  --lh-19: 19px;
+  --lh-20: 20px;
+  --lh-22: 22px;
+  --lh-24: 24px;
+  --lh-26: 26px;
+  --lh-28: 28px;
+  --lh-30: 30px;
+  --lh-32: 32px;
   --shadow: 0 18px 44px rgba(0, 0, 0, 0.45);
-  --sidebar: 200px;
-  --files: 200px;
+  /* Ширины боковых панелей повторяют эталонный макет: слева постоянная
+     колонка проектов 280 px, справа «Файлы проекта» — 45% окна
+     (не меньше 300 px и не больше 70%, диалогу остаётся минимум 400 px). */
+  --sidebar: 280px;
+  --files: clamp(300px, 45vw, 70vw);
   --head-h: 52px;
   color-scheme: dark;
 }
@@ -76,8 +112,8 @@ body {
   background: var(--bg);
   color: var(--text);
   font-family: var(--font);
-  font-size: 14px;
-  line-height: 1.55;
+  font-size: var(--fs-14);
+  line-height: var(--lh-22);
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
   overflow: hidden;
@@ -181,7 +217,7 @@ svg {
   width: min(330px, 100%);
   background: var(--layer-1);
   border: 1px solid var(--line);
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   padding: 22px 20px 18px;
   box-shadow: var(--shadow);
 }
@@ -221,16 +257,18 @@ svg {
 }
 
 .brand-name {
-  font-size: 14px;
+  font-size: var(--fs-18);
   font-weight: 600;
   letter-spacing: 0.2px;
+  line-height: var(--lh-24);
 }
 
 .auth-alt {
   margin: 12px 0 0;
   text-align: center;
-  font-size: 12.5px;
+  font-size: var(--fs-12);
   color: var(--text-3);
+  line-height: var(--lh-18);
 }
 
 .auth-link {
@@ -241,7 +279,7 @@ svg {
   font-weight: 600;
   color: var(--accent);
   cursor: pointer;
-  border-radius: 5px;
+  border-radius: var(--radius-xs);
 }
 
 .auth-link:hover {
@@ -256,7 +294,8 @@ svg {
 .auth-sub {
   margin: 0 0 22px;
   color: var(--text-3);
-  font-size: 13px;
+  font-size: var(--fs-13);
+  line-height: var(--lh-20);
 }
 
 .field {
@@ -266,9 +305,10 @@ svg {
 
 .field-label {
   display: block;
-  font-size: 12px;
+  font-size: var(--fs-12);
   color: var(--text-2);
   margin-bottom: 6px;
+  line-height: var(--lh-16);
 }
 
 .field input {
@@ -300,11 +340,12 @@ svg {
   border-radius: var(--radius-sm);
   color: var(--text);
   font: inherit;
-  font-size: 13px;
+  font-size: var(--fs-14);
   outline: none;
   appearance: none;
   cursor: pointer;
   transition: border-color 0.15s ease, background-color 0.15s ease;
+  line-height: var(--lh-22);
 }
 
 .field select:focus {
@@ -319,8 +360,8 @@ svg {
 
 .form-hint {
   margin: -2px 0 6px;
-  font-size: 12px;
-  line-height: 1.45;
+  font-size: var(--fs-12);
+  line-height: var(--lh-18);
   color: var(--text-4);
 }
 
@@ -328,14 +369,16 @@ svg {
   min-height: 18px;
   margin: 2px 0 10px;
   color: var(--danger);
-  font-size: 12.5px;
+  font-size: var(--fs-12);
+  line-height: var(--lh-18);
 }
 
 .auth-foot {
   margin: 18px 0 0;
   text-align: center;
-  font-size: 12px;
+  font-size: var(--fs-12);
   color: var(--text-4);
+  line-height: var(--lh-18);
 }
 
 /* ------------------------------- buttons ------------------------------- */
@@ -362,8 +405,9 @@ svg {
   height: 40px;
   background: var(--accent);
   color: #fff;
-  font-weight: 550;
-  font-size: 13.5px;
+  font-weight: 500;
+  font-size: var(--fs-14);
+  line-height: var(--lh-22);
 }
 
 .btn-primary:hover:not(:disabled) {
@@ -388,7 +432,7 @@ svg {
   width: 34px;
   height: 34px;
   padding: 0;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   flex: none;
 }
 
@@ -406,8 +450,9 @@ svg {
   border: 1px solid var(--line);
   background: var(--layer-2);
   color: var(--text);
-  font-size: 13px;
+  font-size: var(--fs-14);
   font-weight: 500;
+  line-height: var(--lh-22);
 }
 
 .btn-new:hover {
@@ -423,7 +468,7 @@ svg {
 .btn-send {
   width: 34px;
   height: 34px;
-  border-radius: 9px;
+  border-radius: var(--radius-sm);
   background: var(--accent);
   color: #fff;
   padding: 0;
@@ -444,7 +489,7 @@ svg {
 .btn-stop {
   width: 34px;
   height: 34px;
-  border-radius: 9px;
+  border-radius: var(--radius-sm);
   background: var(--layer-3);
   border: 1px solid var(--line-strong);
   padding: 0;
@@ -473,8 +518,9 @@ svg {
   grid-template-columns: var(--sidebar) minmax(0, 1fr) var(--files);
 }
 
-/* Панель «Файлы проекта» закрыта — колонка диалога не растягивается на всю
-   ширину: длинные строки читаются хуже, а кнопки уезжают далеко от текста. */
+/* На узких экранах панель «Файлы проекта» — выезжающий ящик, и колонка диалога
+   не должна растягиваться на всю ширину: длинные строки читаются хуже, а
+   кнопки уезжают далеко от текста. */
 .app:not(.with-files) .thread,
 .app:not(.with-files) .composer {
   width: min(780px, 100%);
@@ -569,10 +615,11 @@ body.resizing {
   gap: 6px;
   height: 32px;
   padding: 0 8px;
-  border-radius: 7px;
+  border-radius: var(--radius-xs);
   cursor: pointer;
   color: var(--text-2);
-  font-size: 13px;
+  font-size: var(--fs-14);
+  line-height: var(--lh-20);
 }
 
 .project-row:hover {
@@ -589,8 +636,10 @@ body.resizing {
 }
 
 .project-row .p-count {
-  font-size: 11px;
+  font-size: var(--fs-11);
   color: var(--text-4);
+  line-height: var(--lh-14);
+  font-weight: 500;
 }
 
 .project-row .row-menu {
@@ -603,6 +652,37 @@ body.resizing {
 
 .project.active > .project-row {
   color: var(--text);
+}
+
+/* Раскрытие списка диалогов: треугольник у имени проекта — та же деталь, что
+   у папок, поворотом вниз/вбок. Пустое место у проектов без диалогов, чтобы
+   имена не «прыгали» влево. */
+.p-caret {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 13px;
+  height: 13px;
+  flex: none;
+  color: var(--text-4);
+  transition: transform 0.16s ease;
+}
+
+.p-caret svg {
+  width: 12px;
+  height: 12px;
+}
+
+.p-caret.empty {
+  visibility: hidden;
+}
+
+.project.collapsed > .project-row .p-caret {
+  transform: rotate(-90deg);
+}
+
+.project.collapsed > .chat-list {
+  display: none;
 }
 
 .chat-list {
@@ -618,11 +698,12 @@ body.resizing {
   gap: 8px;
   height: 30px;
   padding: 0 8px;
-  border-radius: 7px;
+  border-radius: var(--radius-xs);
   color: var(--text-3);
-  font-size: 12.5px;
+  font-size: var(--fs-14);
   cursor: pointer;
   min-width: 0;
+  line-height: var(--lh-20);
 }
 
 .chat-row:hover {
@@ -662,7 +743,7 @@ body.resizing {
   height: 24px;
   border: none;
   background: transparent;
-  border-radius: 6px;
+  border-radius: var(--radius-xs);
   color: var(--text-3);
   cursor: pointer;
   flex: none;
@@ -709,12 +790,13 @@ body.resizing {
   height: 34px;
   padding: 0 10px;
   border: 1px dashed var(--line);
-  border-radius: 9px;
+  border-radius: var(--radius-sm);
   background: var(--layer-2);
   color: var(--text-2);
-  font-size: 12.5px;
-  font-weight: 550;
+  font-size: var(--fs-13);
+  font-weight: 500;
   cursor: pointer;
+  line-height: var(--lh-20);
 }
 
 .files-upload:hover:not(:disabled) {
@@ -736,8 +818,9 @@ body.resizing {
 
 .files-drop-note {
   text-align: center;
-  font-size: 10.5px;
+  font-size: var(--fs-12);
   color: var(--text-4);
+  line-height: var(--lh-16);
 }
 
 .workflow {
@@ -754,11 +837,12 @@ body.resizing {
   gap: 5px;
   height: 30px;
   padding: 0 4px 0 2px;
-  border-radius: 7px;
+  border-radius: var(--radius-xs);
   cursor: pointer;
   color: var(--text-2);
-  font-size: 12px;
-  font-weight: 600;
+  font-size: var(--fs-12);
+  font-weight: 500;
+  line-height: var(--lh-16);
 }
 
 .workflow-row:hover {
@@ -806,9 +890,10 @@ body.resizing {
 }
 
 .workflow-row .w-count {
-  font-size: 10.5px;
+  font-size: var(--fs-11);
   font-weight: 500;
   color: var(--text-4);
+  line-height: var(--lh-14);
 }
 
 .workflow-row .row-menu {
@@ -831,8 +916,9 @@ body.resizing {
 
 .workflow-empty {
   padding: 2px 8px 6px 14px;
-  font-size: 11.5px;
+  font-size: var(--fs-12);
   color: var(--text-4);
+  line-height: var(--lh-18);
 }
 
 .project.in-workflow > .project-row {
@@ -847,7 +933,7 @@ body.resizing {
   height: 22px;
   border: none;
   background: transparent;
-  border-radius: 6px;
+  border-radius: var(--radius-xs);
   color: var(--text-3);
   cursor: pointer;
   flex: none;
@@ -881,7 +967,7 @@ body.resizing {
   padding: 8px;
   border: none;
   background: transparent;
-  border-radius: 9px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
   text-align: left;
 }
@@ -890,27 +976,21 @@ body.resizing {
   background: var(--layer-hover);
 }
 
-/* РљРѕРјРїР°РєС‚РЅС‹Р№ Р±Р»РѕРє РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ РІ РїСЂР°РІРѕРј РІРµСЂС…РЅРµРј СѓРіР»Сѓ, СЂСЏРґРѕРј СЃ РєРЅРѕРїРєРѕР№ С‚РµРјС‹. */
+/* Компактный блок пользователя в правом верхнем углу, рядом с кнопками темы
+   и «Ещё». Размер, скругление и подсветка при наведении — как у остальных
+   кнопок шапки: без собственной рамки и «таблетки». */
 .user-chip-top {
   width: auto;
   max-width: 210px;
-  height: 34px;
-  padding: 0 5px 0 4px;
-  gap: 7px;
+  height: 32px;
+  padding: 0 8px;
+  gap: 6px;
   border: 1px solid transparent;
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
 }
 
 .user-chip-top:hover {
   background: var(--layer-hover);
-  border-color: var(--line);
-}
-
-.user-chip-top .avatar {
-  width: 24px;
-  height: 24px;
-  border-radius: 7px;
-  font-size: 11px;
 }
 
 .user-chip-top .user-meta {
@@ -919,8 +999,8 @@ body.resizing {
 }
 
 .user-chip-top .user-name {
-  font-size: 12.5px;
-  line-height: 1.25;
+  font-size: var(--fs-13);
+  line-height: var(--lh-20);
   max-width: 140px;
 }
 
@@ -929,43 +1009,53 @@ body.resizing {
   height: 12px;
 }
 
-/* Остаток на балансе в шапке: спокойная плашка, без подсказок о цене. */
+/* Значок человечка — только для телефона, где в шапке от кнопки учётной
+   записи остаётся один значок. На широком экране видно имя, значка нет. */
+.user-chip-top .account-glyph {
+  display: none;
+  width: 18px;
+  height: 18px;
+  flex: none;
+  color: var(--text-2);
+}
+
+/* Остаток на балансе в шапке: плашка в стиле соседних кнопок — та же высота,
+   скругление и цвет текста, без «пилюли» и лишней рамки. */
 .balance-chip {
   display: inline-flex;
   align-items: center;
-  height: 26px;
-  padding: 0 9px;
-  margin-right: 2px;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  background: var(--layer-1);
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
   color: var(--text-2);
-  font-size: 12px;
-  line-height: 1;
+  font-size: var(--fs-13);
+  line-height: var(--lh-20);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
   user-select: none;
 }
 
 .balance-chip.balance-empty {
-  border-color: rgba(242, 90, 90, 0.45);
   color: var(--danger-ink);
 }
 
 .avatar {
   width: 28px;
   height: 28px;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: var(--layer-3);
   border: 1px solid var(--line);
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 12px;
-  font-weight: 600;
+  font-size: var(--fs-12);
+  font-weight: 500;
   color: var(--text-2);
   flex: none;
   text-transform: uppercase;
+  line-height: var(--lh-18);
 }
 
 .user-meta {
@@ -973,14 +1063,17 @@ body.resizing {
   flex-direction: column;
   min-width: 0;
   flex: 1;
+  font-size: var(--fs-13);
+  line-height: var(--lh-20);
 }
 
 .user-name {
-  font-size: 12.5px;
+  font-size: var(--fs-13);
   color: var(--text);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  line-height: var(--lh-20);
 }
 
 .chev {
@@ -1024,17 +1117,36 @@ body.resizing {
   height: 32px;
 }
 
+/* Значок папки нужен только там, где панель файлов — выезжающий ящик
+   (до 1100 px). На широком экране панель открыта всегда, кнопки нет. */
+.files-toggle {
+  display: none;
+}
+
 .crumbs {
   display: flex;
   align-items: center;
   gap: 8px;
   min-width: 0;
-  font-size: 13px;
+  /* Длинная цепочка «проект / диалог» обрезается по краю шапки, а не уезжает
+     под кнопки справа (тема, меню): иначе текст просвечивает сквозь подсветку
+     кнопок при наведении. */
+  flex: 1 1 auto;
+  overflow: hidden;
+  font-size: var(--fs-14);
+  line-height: var(--lh-20);
 }
 
 .crumb-project {
   color: var(--text-3);
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  /* Имя проекта полезно прочитать, поэтому оно не сжимается до «От…»:
+     держим минимум, а остальное место отдаём названию диалога. */
+  flex: 0 1 auto;
+  min-width: 72px;
+  max-width: 40%;
 }
 
 .crumb-sep {
@@ -1047,6 +1159,10 @@ body.resizing {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: var(--fs-14);
+  line-height: var(--lh-20);
 }
 
 .topbar-right {
@@ -1094,16 +1210,17 @@ body.resizing {
 }
 
 .empty-title {
-  font-size: 21px;
-  font-weight: 600;
-  letter-spacing: -0.3px;
+  font-size: var(--fs-26);
+  font-weight: 500;
   margin: 0;
+  line-height: var(--lh-32);
 }
 
 .empty-sub {
   color: var(--text-3);
-  font-size: 13.5px;
+  font-size: var(--fs-14);
   margin: 0 0 16px;
+  line-height: var(--lh-22);
 }
 
 .suggestions {
@@ -1118,11 +1235,12 @@ body.resizing {
   padding: 11px 13px;
   background: var(--layer-1);
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   color: var(--text-2);
-  font-size: 12.5px;
+  font-size: var(--fs-13);
   cursor: pointer;
   transition: background 0.14s ease, border-color 0.14s ease, color 0.14s ease;
+  line-height: var(--lh-20);
 }
 
 .suggestion:hover {
@@ -1148,11 +1266,13 @@ body.resizing {
   max-width: min(760px, 88%);
   background: var(--layer-2);
   border: 1px solid var(--line);
-  border-radius: 14px 14px 4px 14px;
+  border-radius: var(--radius-lg) var(--radius-lg) 4px var(--radius-lg);
   padding: 10px 14px;
   white-space: pre-wrap;
   word-break: break-word;
   overflow-wrap: anywhere;
+  font-size: var(--fs-14);
+  line-height: var(--lh-22);
 }
 
 .msg-user .bubble:empty {
@@ -1176,8 +1296,9 @@ body.resizing {
   align-items: center;
   gap: 8px;
   color: var(--text-3);
-  font-size: 11.5px;
+  font-size: var(--fs-12);
   letter-spacing: 0.01em;
+  line-height: var(--lh-16);
 }
 
 .msg-head .dot {
@@ -1211,8 +1332,8 @@ body.resizing {
 }
 
 .md {
-  font-size: 15px;
-  line-height: 1.66;
+  font-size: var(--fs-14);
+  line-height: var(--lh-24);
   color: var(--text);
   overflow-wrap: anywhere;
 }
@@ -1234,24 +1355,41 @@ body.resizing {
 .md h3,
 .md h4 {
   margin: 20px 0 10px;
-  line-height: 1.3;
   letter-spacing: -0.2px;
 }
 
 .md h1 {
-  font-size: 20px;
+  font-size: var(--fs-21);
+  line-height: var(--lh-30);
+  font-weight: 700;
 }
 
 .md h2 {
-  font-size: 17px;
+  font-size: var(--fs-19);
+  line-height: var(--lh-28);
+  font-weight: 700;
 }
 
 .md h3 {
-  font-size: 15.5px;
+  font-size: var(--fs-18);
+  line-height: var(--lh-26);
+  font-weight: 700;
 }
 
 .md h4 {
-  font-size: 14.5px;
+  font-size: var(--fs-14);
+  line-height: var(--lh-24);
+  font-weight: 600;
+}
+
+/* В харнесе у h5 и h6 отдельных размеров нет: они выглядят как h4. */
+.md h5,
+.md h6 {
+  margin: 20px 0 10px;
+  font-size: var(--fs-14);
+  line-height: var(--lh-24);
+  font-weight: 600;
+  letter-spacing: -0.2px;
 }
 
 .md strong {
@@ -1289,10 +1427,11 @@ body.resizing {
 
 .md code {
   font-family: var(--mono);
-  font-size: 12.5px;
+  font-size: 0.875em;
+  line-height: var(--lh-19);
   background: var(--code-bg);
   border: 1px solid var(--line);
-  border-radius: 5px;
+  border-radius: var(--radius-xs);
   padding: 1px 5px;
 }
 
@@ -1300,7 +1439,7 @@ body.resizing {
   margin: 0 0 14px;
   border: 1px solid var(--line);
   background: var(--layer-1);
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   overflow: hidden;
 }
 
@@ -1311,18 +1450,20 @@ body.resizing {
   padding: 6px 10px;
   border-bottom: 1px solid var(--line);
   color: var(--text-4);
-  font-size: 11px;
+  font-size: var(--fs-11);
   font-family: var(--mono);
+  line-height: var(--lh-18);
 }
 
 .md pre .code-head button {
   border: none;
   background: transparent;
   color: var(--text-3);
-  font-size: 11px;
+  font-size: var(--fs-11);
   cursor: pointer;
   padding: 2px 6px;
-  border-radius: 5px;
+  border-radius: var(--radius-xs);
+  line-height: var(--lh-18);
 }
 
 .md pre .code-head button:hover {
@@ -1337,8 +1478,8 @@ body.resizing {
   background: transparent;
   border: none;
   border-radius: 0;
-  font-size: 12.5px;
-  line-height: 1.55;
+  font-size: var(--fs-11);
+  line-height: var(--lh-19);
   white-space: pre;
 }
 
@@ -1359,14 +1500,15 @@ body.resizing {
   margin: 0 0 14px;
   overflow-x: auto;
   border: 1px solid var(--line);
-  border-radius: 9px;
+  border-radius: var(--radius-sm);
 }
 
 .md table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 13px;
+  font-size: var(--fs-13);
   white-space: nowrap;
+  line-height: var(--lh-22);
 }
 
 .md th,
@@ -1379,7 +1521,7 @@ body.resizing {
 
 .md th {
   background: var(--layer-1);
-  font-weight: 600;
+  font-weight: 500;
   color: var(--text-2);
 }
 
@@ -1406,9 +1548,10 @@ body.resizing {
   background: var(--layer-1);
   border-radius: 999px;
   color: var(--text-2);
-  font-size: 11.5px;
+  font-size: var(--fs-13);
   white-space: nowrap;
   overflow: hidden;
+  line-height: var(--lh-18);
 }
 
 .tool-chip .t-label {
@@ -1435,7 +1578,8 @@ body.resizing {
 
 .tool-chip.ok .tick {
   color: var(--success);
-  font-size: 11px;
+  font-size: var(--fs-11);
+  line-height: var(--lh-14);
 }
 
 .tool-chip.err {
@@ -1467,10 +1611,11 @@ body.resizing {
   border-radius: 999px;
   color: var(--text-2);
   font: inherit;
-  font-size: 11.5px;
+  font-size: var(--fs-12);
   white-space: nowrap;
   cursor: pointer;
   transition: background 0.14s ease, border-color 0.14s ease;
+  line-height: var(--lh-18);
 }
 
 .tool-group:hover {
@@ -1491,7 +1636,8 @@ body.resizing {
 
 .tool-group .tick {
   color: var(--success);
-  font-size: 11px;
+  font-size: var(--fs-11);
+  line-height: var(--lh-14);
 }
 
 .tool-group.run {
@@ -1545,9 +1691,9 @@ body.resizing {
   border-radius: 999px;
   background: var(--layer-3);
   color: var(--text-3);
-  font-size: 10.5px;
-  font-weight: 550;
-  line-height: 17px;
+  font-size: var(--fs-11);
+  font-weight: 500;
+  line-height: var(--lh-14);
   text-align: center;
 }
 
@@ -1567,9 +1713,10 @@ body.resizing {
   padding: 6px 9px;
   background: var(--layer-1);
   border: 1px solid var(--line);
-  border-radius: 9px;
-  font-size: 12px;
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-12);
   color: var(--text-2);
+  line-height: var(--lh-18);
 }
 
 .file-chip .fc-name {
@@ -1580,17 +1727,19 @@ body.resizing {
 
 .file-chip .fc-size {
   color: var(--text-4);
-  font-size: 11px;
+  font-size: var(--fs-11);
   flex: none;
+  line-height: var(--lh-14);
 }
 
 .file-chip .fc-status {
   color: var(--amber);
-  font-size: 11px;
+  font-size: var(--fs-11);
   flex: none;
   display: inline-flex;
   align-items: center;
   gap: 5px;
+  line-height: var(--lh-14);
 }
 
 .file-chip .fc-status.ready {
@@ -1642,9 +1791,10 @@ body.resizing {
   border: 1px solid transparent;
   background: transparent;
   color: var(--text-4);
-  border-radius: 6px;
-  font-size: 11.5px;
+  border-radius: var(--radius-xs);
+  font-size: var(--fs-12);
   cursor: pointer;
+  line-height: var(--lh-18);
 }
 
 .msg-actions button:hover {
@@ -1664,9 +1814,10 @@ body.resizing {
   padding: 10px 12px;
   border: 1px solid rgba(242, 90, 90, 0.3);
   background: rgba(242, 90, 90, 0.07);
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   color: var(--danger-ink);
-  font-size: 13px;
+  font-size: var(--fs-13);
+  line-height: var(--lh-20);
 }
 
 .cursor {
@@ -1698,7 +1849,7 @@ body.resizing {
   margin: 0 auto;
   background: var(--layer-1);
   border: 1px solid var(--line-strong);
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   padding: 7px 8px 7px 6px;
   position: relative;
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
@@ -1725,7 +1876,7 @@ body.resizing {
   height: 34px;
   padding: 0;
   margin-bottom: 1px;
-  border-radius: 9px;
+  border-radius: var(--radius-sm);
   color: var(--text-3);
   flex: none;
 }
@@ -1748,8 +1899,8 @@ body.resizing {
   outline: none;
   background: transparent;
   padding: 7px 4px;
-  font-size: 14.5px;
-  line-height: 1.5;
+  font-size: var(--fs-14);
+  line-height: var(--lh-24);
   overflow-y: hidden;
 }
 
@@ -1767,8 +1918,9 @@ body.resizing {
 .composer-hint {
   text-align: center;
   color: var(--text-4);
-  font-size: 11px;
+  font-size: var(--fs-12);
   margin: 7px 0 0;
+  line-height: var(--lh-16);
 }
 
 .tool-btn {
@@ -1825,8 +1977,9 @@ body.resizing {
   min-width: 0;
   height: 34px;
   padding: 0 2px;
-  font-size: 13px;
+  font-size: var(--fs-13);
   color: var(--text-2);
+  line-height: var(--lh-20);
 }
 
 .dictation-bar:not(.hidden) {
@@ -1860,9 +2013,10 @@ body.resizing {
   border: 0;
   padding: 2px 4px;
   color: var(--text-3);
-  font-size: 12px;
+  font-size: var(--fs-12);
   white-space: nowrap;
   cursor: pointer;
+  line-height: var(--lh-18);
 }
 
 .dictation-cancel:hover {
@@ -1889,11 +2043,12 @@ body.resizing {
   display: none;
   align-items: center;
   justify-content: center;
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   background: var(--overlay);
   color: var(--text-2);
-  font-size: 13px;
+  font-size: var(--fs-13);
   pointer-events: none;
+  line-height: var(--lh-20);
 }
 
 .composer.dragover .drop-hint {
@@ -1922,11 +2077,12 @@ body.resizing {
 }
 
 .files-title {
-  font-size: 12.5px;
-  font-weight: 550;
+  font-size: var(--fs-14);
+  font-weight: 500;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  line-height: var(--lh-22);
 }
 
 .files-head-actions {
@@ -1947,12 +2103,13 @@ body.resizing {
 
 .files-crumb {
   padding: 8px 16px 4px;
-  font-size: 11px;
+  font-size: var(--fs-12);
   color: var(--text-4);
   font-family: var(--mono);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  line-height: var(--lh-16);
 }
 
 .files-list {
@@ -1973,11 +2130,11 @@ body.resizing {
   padding: 16px;
   text-align: center;
   border: 2px dashed var(--accent);
-  border-radius: 12px;
+  border-radius: var(--radius);
   background: var(--overlay);
   color: var(--text);
-  font-size: 12.5px;
-  line-height: 1.5;
+  font-size: var(--fs-13);
+  line-height: var(--lh-20);
   pointer-events: none;
   z-index: 4;
 }
@@ -2001,11 +2158,12 @@ body.resizing {
   gap: 8px;
   height: 30px;
   padding: 0 7px;
-  border-radius: 7px;
+  border-radius: var(--radius-xs);
   cursor: pointer;
   color: var(--text-2);
-  font-size: 12px;
+  font-size: var(--fs-13);
   min-width: 0;
+  line-height: var(--lh-20);
 }
 
 .file-row:hover {
@@ -2030,8 +2188,9 @@ body.resizing {
 
 .file-row .f-size {
   color: var(--text-4);
-  font-size: 10.5px;
+  font-size: var(--fs-11);
   flex: none;
+  line-height: var(--lh-14);
 }
 
 .file-row .f-actions {
@@ -2058,8 +2217,8 @@ body.resizing {
   padding: 28px 14px;
   text-align: center;
   color: var(--text-4);
-  font-size: 12px;
-  line-height: 1.6;
+  font-size: var(--fs-13);
+  line-height: var(--lh-20);
 }
 
 .spin-lg {
@@ -2093,7 +2252,7 @@ body.resizing {
   flex-direction: column;
   background: var(--layer-1);
   border: 1px solid var(--line-strong);
-  border-radius: 12px;
+  border-radius: var(--radius);
   box-shadow: var(--shadow);
   overflow: hidden;
 }
@@ -2112,15 +2271,16 @@ body.resizing {
 }
 
 .modal-title {
-  font-size: 13.5px;
+  font-size: var(--fs-16);
   font-weight: 600;
+  line-height: var(--lh-24);
 }
 
 .modal-body {
   padding: 12px 14px;
   overflow-y: auto;
-  font-size: 12.5px;
-  line-height: 1.5;
+  font-size: var(--fs-14);
+  line-height: var(--lh-22);
   color: var(--text-2);
 }
 
@@ -2141,7 +2301,8 @@ body.resizing {
 .modal-foot .btn {
   height: 30px;
   padding: 0 12px;
-  font-size: 12.5px;
+  font-size: var(--fs-14);
+  line-height: var(--lh-22);
 }
 
 .modal-foot .btn-primary {
@@ -2158,9 +2319,21 @@ body.resizing {
   padding: 14px;
   background: var(--layer-1);
   border: 1px solid var(--line-strong);
-  border-radius: 12px;
+  border-radius: var(--radius);
   box-shadow: var(--shadow);
   animation: popover-in 0.14s ease-out;
+}
+
+/* Телефон: карточка, вызванная из выезжающей панели проектов («Новый
+   проект», подтверждение удаления), живёт внутри самой панели и не вылезает
+   за её скруглённые края. Позицию по вертикали считает placePopover. */
+.popover.in-drawer {
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  width: auto;
+  max-width: none;
+  z-index: 6;
 }
 
 @keyframes popover-in {
@@ -2176,16 +2349,17 @@ body.resizing {
 
 .popover-title {
   margin-bottom: 10px;
-  font-size: 12.5px;
+  font-size: var(--fs-14);
   font-weight: 600;
   color: var(--text);
+  line-height: var(--lh-22);
 }
 
 /* Пояснение в карточке-подтверждении: тот же ритм, что у «Нового проекта». */
 .popover-text {
   margin: 0;
-  font-size: 12.5px;
-  line-height: 1.5;
+  font-size: var(--fs-13);
+  line-height: var(--lh-20);
   color: var(--text-2);
 }
 
@@ -2199,9 +2373,10 @@ body.resizing {
   border-radius: var(--radius-sm);
   color: var(--text);
   font: inherit;
-  font-size: 13px;
+  font-size: var(--fs-14);
   outline: none;
   transition: border-color 0.15s ease, background-color 0.15s ease;
+  line-height: var(--lh-22);
 }
 
 .popover-input:focus {
@@ -2223,7 +2398,8 @@ body.resizing {
 .popover-actions .btn {
   height: 32px;
   padding: 0 12px;
-  font-size: 12.5px;
+  font-size: var(--fs-13);
+  line-height: var(--lh-20);
 }
 
 .btn-danger {
@@ -2251,10 +2427,15 @@ body.resizing {
   min-width: 190px;
   background: var(--layer-2);
   border: 1px solid var(--line-strong);
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   box-shadow: var(--shadow);
   padding: 5px;
   z-index: 70;
+}
+
+.menu.in-drawer {
+  position: absolute;
+  z-index: 6;
 }
 
 .menu button {
@@ -2266,11 +2447,12 @@ body.resizing {
   padding: 0 9px;
   border: none;
   background: transparent;
-  border-radius: 6px;
+  border-radius: var(--radius-xs);
   color: var(--text-2);
-  font-size: 12.5px;
+  font-size: var(--fs-13);
   text-align: left;
   cursor: pointer;
+  line-height: var(--lh-20);
 }
 
 .menu button:hover {
@@ -2319,15 +2501,17 @@ body.resizing {
 
 .admin-user .au-name {
   color: var(--text);
-  font-size: 13px;
+  font-size: var(--fs-14);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  line-height: var(--lh-22);
 }
 
 .admin-user .au-sub {
   color: var(--text-4);
-  font-size: 11.5px;
+  font-size: var(--fs-12);
+  line-height: var(--lh-18);
 }
 
 .admin-user .au-actions {
@@ -2338,9 +2522,10 @@ body.resizing {
 .admin-user .au-actions .btn {
   height: 27px;
   padding: 0 9px;
-  font-size: 11.5px;
+  font-size: var(--fs-12);
   border: 1px solid var(--line);
   color: var(--text-2);
+  line-height: var(--lh-18);
 }
 
 .badge {
@@ -2351,8 +2536,10 @@ body.resizing {
   border-radius: 999px;
   background: var(--accent-soft);
   color: var(--accent-strong);
-  font-size: 10.5px;
+  font-size: var(--fs-11);
   margin-left: 6px;
+  line-height: var(--lh-17);
+  font-weight: 500;
 }
 
 .badge.muted {
@@ -2368,10 +2555,12 @@ body.resizing {
 /* Р—Р°РїСЂРѕСЃС‹ РЅР° С‚СЏР¶С‘Р»С‹Рµ Р·Р°РґР°С‡Рё РІ РїР°РЅРµР»Рё Р°РґРјРёРЅРёСЃС‚СЂР°С‚РѕСЂР° */
 .admin-section-title {
   margin: 18px 0 8px;
-  font-size: 11px;
+  font-size: var(--fs-12);
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: var(--text-4);
+  line-height: var(--lh-16);
+  font-weight: 500;
 }
 
 .approval {
@@ -2381,7 +2570,7 @@ body.resizing {
   padding: 10px 11px;
   border: 1px solid rgba(242, 90, 90, 0.32);
   background: rgba(242, 90, 90, 0.06);
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   margin-bottom: 8px;
 }
 
@@ -2397,17 +2586,19 @@ body.resizing {
 }
 
 .approval .ap-title {
-  font-size: 13px;
+  font-size: var(--fs-14);
   color: var(--text);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  line-height: var(--lh-22);
 }
 
 .approval .ap-sub {
-  font-size: 11.5px;
+  font-size: var(--fs-12);
   color: var(--text-3);
   margin-top: 2px;
+  line-height: var(--lh-18);
 }
 
 .approval .ap-actions {
@@ -2419,9 +2610,10 @@ body.resizing {
 .approval .ap-actions .btn {
   height: 28px;
   padding: 0 10px;
-  font-size: 11.5px;
+  font-size: var(--fs-12);
   border: 1px solid var(--line);
   color: var(--text-2);
+  line-height: var(--lh-18);
 }
 
 .stats {
@@ -2434,20 +2626,22 @@ body.resizing {
 .stat {
   background: var(--layer-2);
   border: 1px solid var(--line);
-  border-radius: 9px;
+  border-radius: var(--radius-sm);
   padding: 10px 11px;
 }
 
 .stat-value {
-  font-size: 17px;
-  font-weight: 600;
+  font-size: var(--fs-20);
+  font-weight: 500;
   color: var(--text);
+  line-height: var(--lh-28);
 }
 
 .stat-label {
-  font-size: 11px;
+  font-size: var(--fs-12);
   color: var(--text-4);
   margin-top: 2px;
+  line-height: var(--lh-16);
 }
 
 .form-grid {
@@ -2489,13 +2683,14 @@ body.resizing {
 .inline-form .btn {
   height: 36px;
   padding: 0 13px;
-  font-size: 12.5px;
+  font-size: var(--fs-13);
+  line-height: var(--lh-20);
 }
 
 .preview-img {
   max-width: 100%;
   max-height: 70vh;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   display: block;
   margin: 0 auto;
 }
@@ -2509,7 +2704,8 @@ body.resizing {
 
 .modal.viewer .modal-body {
   padding: 12px 16px 16px;
-  font-size: 13px;
+  font-size: var(--fs-14);
+  line-height: var(--lh-22);
 }
 
 .modal.viewer .preview-img {
@@ -2518,15 +2714,16 @@ body.resizing {
 
 .viewer-meta {
   margin: 0 0 10px;
-  font-size: 11.5px;
+  font-size: var(--fs-12);
   color: var(--text-3);
+  line-height: var(--lh-18);
 }
 
 .viewer-text {
   margin: 0;
   font-family: var(--mono);
-  font-size: 12.5px;
-  line-height: 1.6;
+  font-size: var(--fs-12);
+  line-height: var(--lh-19);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   color: var(--text);
@@ -2534,8 +2731,9 @@ body.resizing {
 
 .viewer-note {
   margin: 10px 0 0;
-  font-size: 12px;
+  font-size: var(--fs-12);
   color: var(--text-3);
+  line-height: var(--lh-18);
 }
 
 .viewer-md {
@@ -2544,9 +2742,10 @@ body.resizing {
 
 .viewer-sheet-name {
   margin: 14px 0 6px;
-  font-size: 12px;
-  font-weight: 600;
+  font-size: var(--fs-12);
+  font-weight: 500;
   color: var(--text-2);
+  line-height: var(--lh-18);
 }
 
 .viewer-sheets > .viewer-sheet-name:first-child {
@@ -2557,13 +2756,14 @@ body.resizing {
   max-height: 60vh;
   overflow: auto;
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
 }
 
 .viewer-table {
   border-collapse: collapse;
-  font-size: 12px;
+  font-size: var(--fs-12);
   white-space: nowrap;
+  line-height: var(--lh-18);
 }
 
 .viewer-table td,
@@ -2577,7 +2777,7 @@ body.resizing {
 }
 
 .viewer-table th {
-  font-weight: 600;
+  font-weight: 500;
   color: var(--text);
   background: var(--layer-2);
   position: sticky;
@@ -2614,11 +2814,12 @@ body.resizing {
   padding: 10px 14px;
   background: var(--layer-2);
   border: 1px solid var(--line-strong);
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   box-shadow: var(--shadow);
-  font-size: 12.5px;
+  font-size: var(--fs-14);
   color: var(--text);
   animation: toast-in 0.18s ease;
+  line-height: var(--lh-22);
 }
 
 .toast.error {
@@ -2641,9 +2842,9 @@ body.resizing {
   max-width: 640px;
   border: 1px solid rgba(226, 168, 62, 0.35);
   background: rgba(226, 168, 62, 0.09);
-  border-radius: 9px;
-  font-size: 12.5px;
-  line-height: 1.45;
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-12);
+  line-height: var(--lh-18);
   color: var(--text-2);
 }
 
@@ -2671,7 +2872,7 @@ body.resizing {
 
 ::-webkit-scrollbar-thumb {
   background: var(--scroll-thumb);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   border: 3px solid var(--bg);
 }
 
@@ -2706,12 +2907,15 @@ body.resizing {
    поэтому открытие — анимация, а не мгновенная подмена разметки. */
 @media (max-width: 1100px) {
   :root {
-    --sidebar: 244px;
+    --sidebar: 264px;
   }
   /* 861–1100: панель файлов — выезжающий ящик, а ширина проектов задана
      макетом планшета, поэтому ручки изменения ширины здесь не нужны. */
   .resizer {
     display: none;
+  }
+  .files-toggle {
+    display: inline-flex;
   }
   .app.with-files {
     grid-template-columns: var(--sidebar) minmax(0, 1fr);
@@ -2723,7 +2927,7 @@ body.resizing {
     bottom: 0;
     width: min(320px, 92vw);
     z-index: 60;
-    border-radius: 16px 0 0 16px;
+    border-radius: var(--radius-lg) 0 0 var(--radius-lg);
     box-shadow: var(--shadow);
     padding-bottom: env(safe-area-inset-bottom, 0px);
     transform: translateX(104%);
@@ -2749,10 +2953,13 @@ body.resizing {
 @media (max-width: 860px) {
   :root {
     --head-h: 56px;
-  }
-  /* Крупнее база: на телефоне 14 px читаются мелко. */
-  body {
-    font-size: 15.5px;
+    /* Телефон: та же шкала, но на шаг меньше — углы не «съедают» узкие
+       плашки и строки списка. */
+    --radius-lg: 12px;
+    --radius: 10px;
+    --radius-md: 9px;
+    --radius-sm: 8px;
+    --radius-xs: 6px;
   }
   .app,
   .app.with-files {
@@ -2768,7 +2975,7 @@ body.resizing {
     left: 0;
     width: min(320px, 88vw);
     z-index: 45;
-    border-radius: 0 16px 16px 0;
+    border-radius: 0 var(--radius-lg) var(--radius-lg) 0;
     /* Вырез телефона: содержимое ящика не должно начинаться под ним. */
     padding-top: env(safe-area-inset-top, 0px);
     padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px));
@@ -2806,16 +3013,14 @@ body.resizing {
   .topbar .btn-icon {
     width: 40px;
     height: 40px;
-    border-radius: 11px;
+    border-radius: var(--radius-md);
   }
   .topbar .btn-icon svg {
     width: 20px;
     height: 20px;
   }
-  /* Тема переехала в меню учётной записи — иначе шапке не хватает места. */
-  #themeToggle {
-    display: none;
-  }
+  /* Тема переключается кнопкой в шапке и на телефоне: в меню учётной записи
+     этого пункта больше нет. */
   .topbar-right {
     gap: 0;
   }
@@ -2826,31 +3031,28 @@ body.resizing {
   .crumb-sep {
     display: none;
   }
-  .crumb-chat {
-    font-size: 15px;
-    font-weight: 550;
-  }
   .user-chip-top {
     height: 40px;
+    width: 40px;
     max-width: none;
     padding: 0;
     gap: 0;
+    justify-content: center;
+    border-radius: var(--radius-md);
   }
-  .user-chip-top .avatar {
-    width: 32px;
-    height: 32px;
-    border-radius: 10px;
-    font-size: 12.5px;
+  .user-chip-top .account-glyph {
+    display: block;
+    width: 20px;
+    height: 20px;
   }
   .user-chip-top .user-meta,
   .user-chip-top .chev {
     display: none;
   }
   .balance-chip {
-    height: 30px;
+    height: 34px;
     padding: 0 10px;
-    margin-right: 4px;
-    font-size: 13px;
+    margin-right: 2px;
   }
 
   /* ------------------------------- диалог ------------------------------- */
@@ -2864,34 +3066,19 @@ body.resizing {
     justify-content: center;
     padding: 20px 10px 40px;
   }
-  .empty-title {
-    font-size: 23px;
-  }
-  .empty-sub {
-    font-size: 14.5px;
-  }
   .msg-user .bubble {
-    font-size: 15.5px;
     padding: 11px 14px;
   }
-  .md {
-    font-size: 15.5px;
-    line-height: 1.62;
-  }
-  /* Строки шагов агента на телефоне тоже крупнее — попадать пальцем. */
+  /* Строки шагов агента на телефоне выше — попадать пальцем. */
   .tool-chip,
   .tool-group {
     height: 30px;
     padding: 0 11px;
-    font-size: 12.5px;
     gap: 8px;
   }
   .tool-group .t-arg,
   .tool-chip .t-arg {
     max-width: 150px;
-  }
-  .msg-head .work-label {
-    font-size: 12px;
   }
   /* На телефоне таблица шире экрана выглядит обрезанной: разрешаем перенос
      в ячейках, чтобы обычная таблица влезала целиком. Совсем широкие
@@ -2899,7 +3086,6 @@ body.resizing {
      край, иначе непонятно, что справа есть продолжение. */
   .md table {
     white-space: normal;
-    font-size: 13.5px;
   }
   /* .md переносит слова где угодно — в таблице от этого рвутся заголовки
      («Значени/е»). В ячейках переносим только по словам. */
@@ -2921,8 +3107,6 @@ body.resizing {
   }
   .suggestion {
     padding: 12px 13px;
-    font-size: 13.5px;
-    line-height: 1.4;
   }
   .stats {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -2935,7 +3119,7 @@ body.resizing {
   }
   .composer {
     padding: 6px 6px 6px 2px;
-    border-radius: 16px;
+    border-radius: var(--radius-lg);
   }
   .composer-hint {
     display: none;
@@ -2954,8 +3138,6 @@ body.resizing {
   }
   /* 16 px — иначе iOS сам увеличивает страницу при фокусе, и края уезжают. */
   #input {
-    font-size: 16px;
-    line-height: 1.45;
     min-height: 38px;
     padding: 8px 4px;
   }
@@ -2968,7 +3150,7 @@ body.resizing {
   .btn-stop {
     width: 38px;
     height: 38px;
-    border-radius: 11px;
+    border-radius: var(--radius-md);
   }
   .btn-send svg {
     width: 19px;
@@ -2981,12 +3163,10 @@ body.resizing {
   }
   .btn-new {
     height: 40px;
-    font-size: 14px;
   }
   .project-row {
     height: 40px;
     padding: 0 10px;
-    font-size: 14px;
   }
   .chat-list {
     padding-left: 10px;
@@ -2994,7 +3174,6 @@ body.resizing {
   .chat-row {
     height: 38px;
     padding: 0 10px;
-    font-size: 13.5px;
   }
   /* На телефоне наведения нет — меню строк всегда на виду. */
   .project-row .row-menu,
@@ -3012,9 +3191,6 @@ body.resizing {
   .user-chip {
     padding: 10px 8px;
   }
-  .user-meta {
-    font-size: 14px;
-  }
 
   /* ---------------------------- панель файлов ---------------------------- */
   /* На телефоне панель — полноэкранный лист: половинчатый ящик поверх шапки
@@ -3027,9 +3203,6 @@ body.resizing {
   .files-head {
     padding: 0 4px 0 14px;
   }
-  .files-title {
-    font-size: 14.5px;
-  }
   .files-head-actions .btn-icon {
     width: 38px;
     height: 38px;
@@ -3040,15 +3213,12 @@ body.resizing {
   }
   .files-crumb {
     padding: 10px 14px 4px;
-    font-size: 12px;
   }
   .files-upload {
     height: 40px;
-    font-size: 13.5px;
   }
   .file-row {
     height: 38px;
-    font-size: 13.5px;
   }
 
   /* ------------------------ окна, меню, подсказки ------------------------ */
@@ -3059,14 +3229,8 @@ body.resizing {
     width: 100%;
     max-height: min(88dvh, 760px);
   }
-  .modal-title {
-    font-size: 15px;
-  }
   .modal-head {
     padding: 12px 14px 10px;
-  }
-  .modal-body {
-    font-size: 14px;
   }
   .modal-foot {
     padding: 10px 14px calc(10px + env(safe-area-inset-bottom, 0px));
@@ -3075,26 +3239,17 @@ body.resizing {
   .modal-foot .btn-primary {
     height: 40px;
     padding: 0 16px;
-    font-size: 14px;
   }
   .popover {
     width: min(360px, calc(100vw - 16px));
     padding: 14px;
   }
-  .popover-title {
-    font-size: 14px;
-  }
-  .popover-text {
-    font-size: 13.5px;
-  }
   .popover-input {
     height: 44px;
-    font-size: 16px;
   }
   .popover-actions .btn {
     height: 40px;
     padding: 0 14px;
-    font-size: 14px;
   }
   .menu {
     min-width: 216px;
@@ -3102,7 +3257,6 @@ body.resizing {
   .menu button {
     height: 42px;
     padding: 0 12px;
-    font-size: 14px;
   }
   .menu svg {
     width: 16px;
@@ -3117,24 +3271,16 @@ body.resizing {
   .toast {
     max-width: none;
     padding: 11px 14px;
-    font-size: 13.5px;
   }
   .field input,
   .field select {
     height: 44px;
-    font-size: 16px;
   }
   /* Окна ввода (начисление, пароль, переименование): по правилу формы поле
      было 36 px — на телефоне в него трудно попасть пальцем. */
   .form-grid .field input,
   .form-grid .field select {
     height: 46px;
-  }
-  .form-grid .field .field-label {
-    font-size: 13px;
-  }
-  .field-label {
-    font-size: 13px;
   }
   .inline-form .field {
     min-width: 100%;
@@ -3144,17 +3290,10 @@ body.resizing {
   }
   .inline-form .btn {
     height: 40px;
-    font-size: 13.5px;
   }
   .admin-user {
     flex-wrap: wrap;
     gap: 8px;
-  }
-  .admin-user .au-name {
-    font-size: 14px;
-  }
-  .admin-user .au-sub {
-    font-size: 12.5px;
   }
   .admin-user .au-actions {
     width: 100%;
@@ -3167,10 +3306,6 @@ body.resizing {
     flex: 0 1 auto;
     height: 34px;
     padding: 0 9px;
-    font-size: 12px;
-  }
-  .msg-budget {
-    font-size: 13.5px;
   }
 }
 
@@ -3190,19 +3325,18 @@ body.resizing {
     width: 19px;
     height: 19px;
   }
-  .user-chip-top .avatar {
-    width: 28px;
-    height: 28px;
-    font-size: 11.5px;
+  .user-chip-top {
+    width: 38px;
+    height: 38px;
+  }
+  .user-chip-top .account-glyph {
+    width: 18px;
+    height: 18px;
   }
   .balance-chip {
-    height: 28px;
-    padding: 0 7px;
-    margin-right: 2px;
-    font-size: 12.5px;
-  }
-  .crumb-chat {
-    font-size: 14.5px;
+    height: 32px;
+    padding: 0 8px;
+    margin-right: 0;
   }
   .composer-row {
     gap: 3px;
@@ -3224,8 +3358,69 @@ body.resizing {
     width: 36px;
     height: 36px;
   }
-  .empty-title {
-    font-size: 21px;
+}
+
+/* Клавиатурный фокус: кольцо в цвет акцента вместо системной рамки. Только
+   :focus-visible — после мыши и тапа ничего не «залипает» на кнопке. */
+.btn:focus-visible,
+.row-menu:focus-visible,
+.row-plus:focus-visible,
+.project-row:focus-visible,
+.chat-row:focus-visible,
+.workflow-row:focus-visible,
+.file-row:focus-visible,
+.menu button:focus-visible,
+.popover-input:focus-visible,
+.suggestion:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* Телефоны и планшеты: наведения нет, но браузер оставляет подсветку на
+   последней нажатой кнопке — например, кнопка смены темы выглядит «залипшей»
+   нажатой. Убираем hover-заливку и оставляем отклик на само нажатие. */
+@media (hover: none) {
+  .btn-ghost:hover:not(:disabled),
+  .btn-new:hover,
+  .btn-quiet:hover:not(:disabled),
+  .user-chip:hover,
+  .user-chip-top:hover,
+  .row-menu:hover,
+  .row-plus:hover,
+  .project-row:hover,
+  .chat-row:hover,
+  .workflow-row:hover,
+  .file-row:hover {
+    background: transparent;
+  }
+  .btn-ghost:hover:not(:disabled) {
+    color: var(--text-2);
+  }
+  .row-menu:hover,
+  .row-plus:hover {
+    color: var(--text-3);
+  }
+  .project-row:hover,
+  .workflow-row:hover {
+    color: var(--text-2);
+  }
+  .chat-row:hover {
+    color: var(--text-3);
+  }
+  .project.active > .project-row,
+  .chat-row.active {
+    color: var(--text);
+  }
+  .chat-row.active {
+    background: var(--layer-2);
+  }
+  .btn-ghost:active:not(:disabled),
+  .user-chip-top:active,
+  .row-menu:active,
+  .row-plus:active,
+  .project-row:active,
+  .chat-row:active {
+    background: var(--layer-hover);
   }
 }
 
@@ -3234,7 +3429,6 @@ body.resizing {
 @media (hover: none), (max-width: 860px) {
   .file-row {
     height: 38px;
-    font-size: 13.5px;
     padding: 0 4px 0 8px;
   }
   .file-row .f-actions {
@@ -3248,9 +3442,6 @@ body.resizing {
   .file-row .f-actions svg {
     width: 15px;
     height: 15px;
-  }
-  .file-row .f-size {
-    font-size: 11px;
   }
 }
 

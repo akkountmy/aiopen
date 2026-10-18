@@ -7,6 +7,7 @@ import {
   BILLING,
   BUDGET,
   DATA_DIR,
+  DEVICE,
   HOST,
   LIMITS,
   PORT,
@@ -16,19 +17,23 @@ import {
   SIGNUP,
   TRUST_PROXY,
   chargeUsd,
+  deviceLimit,
   ensureDirs,
   taskLimitUsd,
 } from './src/config.mjs';
 import { describeFailure, generateTitle, runTurn } from './src/agent.mjs';
 import { transcribeAudio } from './src/asr.mjs';
 import { detectKind, extractDocumentText, kindLabel } from './src/docparse.mjs';
-import { approvalMessage, notifyAdmin } from './src/notify.mjs';
+import { approvalMessage, notifyAdmin, suspicionMessage } from './src/notify.mjs';
 import { issueOpenLink, resolveOpenLink, asciiFileName, OPEN_PREFIX } from './src/openlink.mjs';
 import { proofreadText } from './src/proofread.mjs';
 import { keyStatus } from './src/keys.mjs';
 import {
   clearSessionCookie,
+  deviceCookie,
+  deviceKind,
   issueSession,
+  newDeviceId,
   parseCookies,
   passwordProblem,
   RateLimiter,
@@ -51,7 +56,12 @@ const loginUserHits = new RateLimiter({ windowMs: SECURITY.loginWindowMs, max: S
 const transcribeHits = new RateLimiter({ windowMs: 60 * 60 * 1000, max: 120 });
 const proofreadHits = new RateLimiter({ windowMs: 60 * 60 * 1000, max: 240 });
 const signupHits = new RateLimiter({ windowMs: 60 * 60 * 1000, max: SIGNUP.maxPerIpPerHour });
-const busyUsers = new Map();
+/* Идущие ответы: ключ — «пользователь:диалог». Один и тот же диалог не может
+   генерироваться дважды (иначе сообщения перепутаются), но разные диалоги
+   считаются независимо — так ноутбук и телефон работают параллельно. Общий
+   потолок на аккаунт остаётся: LIMITS.agentConcurrencyPerUser. */
+const runningChats = new Set();
+const runningByUser = new Map();
 const attachmentQueue = new Set();
 
 const MIME = {
@@ -224,11 +234,27 @@ function currentUser(req) {
 
 function requireUser(req, res) {
   const user = currentUser(req);
-  if (!user) {
-    sendError(res, 401, 'Требуется вход');
-    return null;
+  if (user) return user;
+  const token = parseCookies(req.headers.cookie)[SESSION.cookie];
+  if (token) {
+    const kicked = store.kickedInfo(sessionKey(token));
+    if (kicked) {
+      return sendJson(
+        res,
+        401,
+        {
+          error:
+            'Вход выполнен на другом устройстве того же типа — этот сеанс закрыт. ' +
+            'Одновременно можно работать на одном компьютере и одном телефоне.',
+          reason: 'displaced',
+          at: kicked.at,
+        },
+        { 'Set-Cookie': clearSessionCookie(TRUST_PROXY) },
+      );
+    }
   }
-  return user;
+  sendError(res, 401, 'Требуется вход');
+  return null;
 }
 
 function requireAdmin(req, res) {
@@ -328,6 +354,12 @@ function raiseBudgetApproval({ user, project, chat, spentUsd }) {
 }
 
 function bootstrapPayload(user) {
+  /* Записи прежних версий создавались без владельца: отдаём их тому, кто вошёл
+     первым, иначе раздельные истории сделали бы их невидимыми для всех. */
+  store.claimOrphans(user.id);
+  /* У нового аккаунта сразу есть своё рабочее место: собственный проект и
+     пустой диалог. Чужих проектов и истории этот вызов не касается. */
+  store.ensurePersonalProject(user.id);
   const projects = store.projectsFor(user.id).map((project) => ({
     ...project,
     chats: store.chatsFor(project.id).map(chatMeta),
@@ -342,6 +374,52 @@ function bootstrapPayload(user) {
       maxFileMb: Math.round(LIMITS.maxAttachmentBytes / 1024 / 1024),
     },
   };
+}
+
+/* Метка машины из долгоживущей cookie. Если её ещё нет (первый вход в этом
+   браузере), выдаём новую — так видно, что входы идут с разных устройств. */
+function deviceIdOf(req) {
+  const known = parseCookies(req.headers.cookie)[DEVICE.cookie];
+  if (known && known.length >= 8 && known.length <= 80) return { id: known, fresh: false };
+  return { id: newDeviceId(), fresh: true };
+}
+
+/* Класс устройства этого входа. Берём User-Agent и, если браузер прислал,
+   Client Hint Sec-CH-UA-Mobile — так планшет с «настольным» User-Agent тоже
+   попадает в телефонную полку и не выбивает ноутбук. */
+function deviceKindOf(req) {
+  return deviceKind(req.headers['user-agent'], { mobileHint: req.headers['sec-ch-ua-mobile'] });
+}
+
+/* Фиксирует вход: история устройств нужна, чтобы заметить передачу пароля.
+   Считаем не число закрытых сеансов (их может накопиться много), а сам факт:
+   этот вход выбил чью-то работающую сессию. */
+function registerLogin(user, req, { ip, deviceId, displaced }) {
+  const ua = String(req.headers['user-agent'] || '');
+  const result = store.recordLogin(user.id, {
+    ip,
+    ua,
+    device: deviceId,
+    kind: deviceKindOf(req),
+    displaced: displaced.length ? 1 : 0,
+  });
+  if (!result.alert) return result;
+  console.warn(
+    `[guard] подозрение по аккаунту ${user.username}: ${result.reasons.join('; ')} — сообщаю администратору`,
+  );
+  notifyAdmin(
+    suspicionMessage({
+      username: user.username,
+      displayName: user.displayName || user.username,
+      reasons: result.reasons,
+      events: result.recent,
+      ips: result.ips,
+      devices: result.devices,
+      displaced: result.displaced,
+      windowHours: result.windowHours,
+    }),
+  ).catch((error) => console.warn('[notify] подозрение не отправлено:', error?.message || error));
+  return result;
 }
 
 async function handleLogin(req, res) {
@@ -366,9 +444,18 @@ async function handleLogin(req, res) {
   }
   loginUserHits.reset(username.toLowerCase());
   loginIpHits.reset(ip);
-  const token = issueSession(store, user.id, { ip, ua: req.headers['user-agent'] });
+  const device = deviceIdOf(req);
+  const { token, displaced } = issueSession(store, user.id, {
+    ip,
+    ua: req.headers['user-agent'],
+    device: device.id,
+    kind: deviceKindOf(req),
+  });
   store.touchLogin(user.id);
-  sendJson(res, 200, bootstrapPayload(user), { 'Set-Cookie': sessionCookie(token, SESSION.ttlMs, TRUST_PROXY) });
+  registerLogin(user, req, { ip, deviceId: device.id, displaced });
+  const cookies = [sessionCookie(token, SESSION.ttlMs, TRUST_PROXY)];
+  if (device.fresh) cookies.push(deviceCookie(device.id, DEVICE.cookieMs, TRUST_PROXY));
+  sendJson(res, 200, bootstrapPayload(user), { 'Set-Cookie': cookies });
 }
 
 async function handleSignup(req, res) {
@@ -391,9 +478,18 @@ async function handleSignup(req, res) {
   } catch {
     return sendError(res, 409, 'Такой логин уже занят');
   }
-  const token = issueSession(store, user.id, { ip, ua: req.headers['user-agent'] });
+  const device = deviceIdOf(req);
+  const { token, displaced } = issueSession(store, user.id, {
+    ip,
+    ua: req.headers['user-agent'],
+    device: device.id,
+    kind: deviceKindOf(req),
+  });
   store.touchLogin(user.id);
-  sendJson(res, 200, bootstrapPayload(user), { 'Set-Cookie': sessionCookie(token, SESSION.ttlMs, TRUST_PROXY) });
+  registerLogin(user, req, { ip, deviceId: device.id, displaced });
+  const cookies = [sessionCookie(token, SESSION.ttlMs, TRUST_PROXY)];
+  if (device.fresh) cookies.push(deviceCookie(device.id, DEVICE.cookieMs, TRUST_PROXY));
+  sendJson(res, 200, bootstrapPayload(user), { 'Set-Cookie': cookies });
 }
 
 async function handleUpload(req, res, user) {
@@ -589,10 +685,6 @@ async function handleMessageStream(req, res, user, chatId) {
   const project = store.getProject(chat.projectId, user.id);
   if (!project) return sendError(res, 404, 'Проект не найден');
 
-  if (busyUsers.get(user.id)) {
-    return sendError(res, 429, 'Дождитесь завершения текущего ответа.');
-  }
-
   /* Обычная задача запускается сразу и без уведомлений. Ограничение — только
      по стоимости самой задачи (порог в agent.mjs) и по уже висящему запросу:
      пока администратор не ответил, новую работу не начинаем. */
@@ -619,7 +711,25 @@ async function handleMessageStream(req, res, user, chatId) {
   const attachmentIds = Array.isArray(body.attachmentIds) ? body.attachmentIds.slice(0, LIMITS.maxAttachmentsPerMessage) : [];
   if (!text && !attachmentIds.length) return sendError(res, 400, 'Пустое сообщение');
 
-  busyUsers.set(user.id, true);
+  /* Занятость проверяем после чтения тела: иначе две одновременные отправки
+     успевают проскочить проверку до того, как первая займёт диалог.
+     Один диалог — один ответ (иначе сообщения перепутаются), но разные диалоги
+     считаются независимо: ноутбук и телефон могут работать одновременно. */
+  const runKey = `${user.id}:${chat.id}`;
+  if (runningChats.has(runKey)) {
+    return sendError(res, 429, 'Ответ в этом диалоге уже идёт — дождитесь его завершения.');
+  }
+  const running = runningByUser.get(user.id) || 0;
+  if (running >= LIMITS.agentConcurrencyPerUser) {
+    return sendError(
+      res,
+      429,
+      `Сейчас идёт ${running} ${running === 1 ? 'ответ' : 'ответа'} — дождитесь завершения хотя бы одного.`,
+    );
+  }
+
+  runningChats.add(runKey);
+  runningByUser.set(user.id, running + 1);
   const stream = openStream(res);
   const controller = new AbortController();
   res.on('close', () => {
@@ -737,7 +847,10 @@ async function handleMessageStream(req, res, user, chatId) {
     store.saveChat(chat.id, { messages: chat.messages, history: chat.history, memory: chat.memory });
     stream.emit({ type: 'error', message, aborted });
   } finally {
-    busyUsers.delete(user.id);
+    runningChats.delete(runKey);
+    const left = (runningByUser.get(user.id) || 1) - 1;
+    if (left > 0) runningByUser.set(user.id, left);
+    else runningByUser.delete(user.id);
     stream.cleanup();
     stream.close();
   }
@@ -900,7 +1013,13 @@ async function route(req, res) {
       return sendJson(res, 200, { ok: true }, { 'Set-Cookie': clearSessionCookie(TRUST_PROXY) });
     }
     if (pathname === '/api/health' && method === 'GET') {
-      return sendJson(res, 200, { ok: true, time: nowIso() });
+      /* сколько сеансов каждого класса устройства разрешено — видно, что
+         под одним аккаунтом компьютер и телефон работают одновременно */
+      return sendJson(res, 200, {
+        ok: true,
+        time: nowIso(),
+        sessions: { desktop: deviceLimit('desktop'), mobile: deviceLimit('mobile') },
+      });
     }
 
     // --- требуется вход ---

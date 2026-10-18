@@ -48,7 +48,10 @@ export const LIMITS = {
   maxFileTextChars: 200000,
   maxAttachmentsPerMessage: 24,
   attachmentsContextChars: 60000,
-  agentConcurrencyPerUser: 1,
+  /** Сколько ответов может идти одновременно у одного аккаунта: по одному на
+   *  устройство (ноутбук + телефон), чтобы работа с двух мест не блокировала
+   *  друг друга. Внутри одного диалога всегда ровно один ответ. */
+  agentConcurrencyPerUser: 2,
   pythonTimeoutMs: 60000,
   fetchTimeoutMs: 30000,
   transcribeBody: 24 * MB,
@@ -60,6 +63,57 @@ export const SESSION = {
   ttlMs: 7 * 24 * 60 * 60 * 1000,
   sliding: true,
 };
+
+/* Один аккаунт — одна машина каждого класса: компьютер и телефон работают
+   одновременно, а второй вход с такого же класса закрывает прежний сеанс.
+   Если входы слишком часто приходят с разных устройств/адресов или кто-то
+   постоянно выбивает активный сеанс, администратор получает сообщение в
+   Telegram. Порог, окно и «остывание» настраиваются переменными окружения. */
+const hours = (value, fallback) => {
+  const n = Number(value);
+  return (Number.isFinite(n) && n > 0 ? n : fallback) * 60 * 60 * 1000;
+};
+
+const count = (value, fallback) => {
+  const n = Number(value);
+  return Number.isInteger(n) && n >= 0 ? n : fallback;
+};
+
+export const DEVICE = {
+  cookie: 'dshow_device',
+  cookieMs: 400 * 24 * 60 * 60 * 1000,
+  /* Окно, за которое считаем устройства и адреса. */
+  windowMs: hours(process.env.DSHOW_DEVICE_WINDOW_HOURS, 24),
+  /* Сколько храним историю входов (для разбора и показа в панели). */
+  keepMs: 14 * 24 * 60 * 60 * 1000,
+  maxEvents: 200,
+  /* Порог подозрения: столько разных устройств / адресов за окно. */
+  alertDevices: Number(process.env.DSHOW_ALERT_DEVICES || 3),
+  alertIps: Number(process.env.DSHOW_ALERT_IPS || 4),
+  /* Сколько раз за окно у пользователя выбивали активный сеанс новым входом. */
+  alertDisplaced: Number(process.env.DSHOW_ALERT_DISPLACED || 3),
+  /* Не чаще одного сообщения в столько часов на аккаунт. */
+  cooldownMs: hours(process.env.DSHOW_ALERT_COOLDOWN_HOURS, 12),
+  /* Сколько живёт пометка «сеанс закрыт новым входом» — чтобы старый браузер
+     показал понятное объяснение вместо пустого экрана входа. */
+  kickedTtlMs: 30 * 60 * 1000,
+  /* Сколько сеансов одного класса устройства живут одновременно. По умолчанию
+     по одному: ноутбук и телефон — разные классы, поэтому работают параллельно,
+     а второй вход с того же класса выбивает прежний сеанс. */
+  limits: {
+    desktop: count(process.env.DSHOW_SESSIONS_DESKTOP, 1),
+    mobile: count(process.env.DSHOW_SESSIONS_MOBILE, 1),
+  },
+};
+
+/** Классы устройств, у каждого свой набор одновременных сеансов. */
+export const DEVICE_KINDS = ['desktop', 'mobile'];
+
+/** Сколько сеансов данного класса разрешено держать активными. */
+export function deviceLimit(kind) {
+  const value = DEVICE.limits[kind];
+  return Number.isInteger(value) && value >= 0 ? value : 1;
+}
 
 export const SECURITY = {
   loginWindowMs: 10 * 60 * 1000,

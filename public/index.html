@@ -94,7 +94,7 @@
           <div class="topbar-right">
             <span id="balanceChip" class="balance-chip hidden" aria-label="Баланс"></span>
             <button id="userChip" class="user-chip user-chip-top" type="button" title="Учётная запись">
-              <span id="userAvatar" class="avatar">?</span>
+              <svg class="account-glyph" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="7" r="3.2" /><path d="M4.5 16.2c.9-2.7 3-4.2 5.5-4.2s4.6 1.5 5.5 4.2" /></svg>
               <span class="user-meta">
                 <span id="userName" class="user-name"></span>
               </span>
@@ -104,7 +104,10 @@
               <svg class="icon-moon" viewBox="0 0 20 20" aria-hidden="true"><path d="M16 11.5A6.5 6.5 0 018.5 4a6.5 6.5 0 107.5 7.5z" /></svg>
               <svg class="icon-sun hidden" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="3.6" /><path d="M10 2v1.8M10 16.2V18M2 10h1.8M16.2 10H18M4.3 4.3l1.3 1.3M14.4 14.4l1.3 1.3M15.7 4.3l-1.3 1.3M5.6 14.4l-1.3 1.3" /></svg>
             </button>
-            <button id="filesBtn" class="btn btn-ghost btn-icon" type="button" title="Файлы проекта" aria-label="Файлы проекта">
+            <!-- Панель «Файлы проекта» открыта всегда, поэтому значка папки на
+                 большом экране нет: кнопка нужна только до 1100 px, где панель
+                 становится выезжающим ящиком. -->
+            <button id="filesBtn" class="btn btn-ghost btn-icon files-toggle" type="button" title="Файлы проекта" aria-label="Файлы проекта">
               <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 6.5A1.5 1.5 0 014.5 5h3l1.5 2h6.5A1.5 1.5 0 0117 8.5v6A1.5 1.5 0 0115.5 16h-11A1.5 1.5 0 013 14.5v-8z" /></svg>
             </button>
             <button id="chatMenuBtn" class="btn btn-ghost btn-icon" type="button" title="Ещё" aria-label="Ещё">
@@ -150,16 +153,13 @@
         </div>
       </main>
 
-      <aside id="filesPanel" class="files-panel hidden" aria-label="Файлы проекта">
+      <aside id="filesPanel" class="files-panel" aria-label="Файлы проекта">
         <div id="filesResizer" class="resizer resizer-files" role="separator" aria-orientation="vertical" tabindex="0"></div>
         <div class="files-head">
           <div class="files-title">Файлы проекта</div>
           <div class="files-head-actions">
             <button id="exportProjectBtn" class="btn btn-ghost btn-icon" type="button" title="Скачать проект архивом" aria-label="Скачать проект архивом">
               <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4v11M5.5 10.5L10 15l4.5-4.5M4 17h12" /></svg>
-            </button>
-            <button id="filesCloseBtn" class="btn btn-ghost btn-icon" type="button" title="Закрыть" aria-label="Закрыть">
-              <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 5l10 10M15 5L5 15" /></svg>
             </button>
           </div>
         </div>

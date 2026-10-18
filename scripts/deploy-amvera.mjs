@@ -107,9 +107,19 @@ if (mode === 'status') {
   const r = await callTool('rebuildProject', { slug: SLUG });
   console.log(r.isError ? 'ОШИБКА: ' + r.text.slice(0, 800) : r.text.slice(0, 800));
 } else if (mode === 'logs') {
+  const now = new Date();
+  const since = new Date(now.getTime() - 2 * 60 * 60 * 1000);
   for (const [title, tool, args] of [
     ['Сборка', 'getBuildLogs', { slug: SLUG }],
-    ['Запуск', 'getRunLogs', { slug: SLUG }],
+    /* У журнала запуска обязательны все поля схемы, иначе платформа отвечает
+       ошибкой проверки — передаём окно времени и лимит явно. */
+    ['Запуск', 'getRunLogs', {
+      serviceName: SLUG,
+      query: '*',
+      start: since.toISOString(),
+      end: now.toISOString(),
+      limit: 200,
+    }],
   ]) {
     console.log(`\n==== ${title} ====`);
     const r = await callTool(tool, args);

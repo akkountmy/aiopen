@@ -140,8 +140,13 @@ async function call(pathname, { method = 'GET', body } = {}) {
     headers,
     body: body === undefined ? undefined : JSON.stringify(body),
   });
+  /* Вход теперь выдаёт две cookie (сеанс и метка устройства), поэтому их
+     нужно накапливать, а не перезаписывать одной последней. */
   for (const entry of response.headers.getSetCookie?.() || []) {
-    cookie = entry.split(';')[0];
+    const pair = entry.split(';')[0];
+    const name = pair.split('=')[0];
+    const kept = cookie.split('; ').filter((item) => item && !item.startsWith(`${name}=`));
+    cookie = [...kept, pair].join('; ');
   }
   const text = await response.text();
   let data = null;

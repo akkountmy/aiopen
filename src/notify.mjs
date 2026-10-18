@@ -39,6 +39,57 @@ function escapeTelegram(text) {
   return String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+function shortUa(ua) {
+  const text = String(ua || '');
+  if (!text) return 'неизвестный клиент';
+  const os = /Windows NT 10/.test(text) ? 'Windows' : /Windows/.test(text) ? 'Windows' : /Android/.test(text)
+    ? 'Android' : /iPhone|iPad|iOS/.test(text) ? 'iOS' : /Mac OS X/.test(text) ? 'macOS' : /Linux/.test(text)
+      ? 'Linux' : 'другая ОС';
+  const browser = /YaBrowser/.test(text) ? 'Yandex' : /Edg\//.test(text) ? 'Edge' : /OPR\//.test(text)
+    ? 'Opera' : /Chrome\//.test(text) ? 'Chrome' : /Firefox\//.test(text) ? 'Firefox' : /Safari\//.test(text)
+      ? 'Safari' : 'браузер';
+  return `${browser}/${os}`;
+}
+
+function whenText(iso) {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return '—';
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${pad(date.getDate())}.${pad(date.getMonth() + 1)} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+/**
+ * Предупреждение о подозрении на передачу логина и пароля.
+ * Один аккаунт — одна машина, поэтому частая смена устройств и «выбивания»
+ * активного сеанса — повод проверить, не работает ли кто-то чужой.
+ */
+export function suspicionMessage({ username, displayName, reasons, events, ips, devices, displaced, windowHours }) {
+  const list = (events || [])
+    .slice(-6)
+    .map((event) => {
+      const parts = [whenText(event.at), event.ip || 'без IP', shortUa(event.ua)];
+      if (event.displaced) parts.push('выбил прежний сеанс');
+      return `• ${parts.join(' — ')}`;
+    })
+    .join('\n');
+  return [
+    '🚨 <b>Подозрение на передачу доступа в DSH OPEN WEB</b>',
+    '',
+    `Аккаунт: <b>${escapeTelegram(displayName || username)}</b> (логин <code>${escapeTelegram(username)}</code>)`,
+    `Причина: ${escapeTelegram((reasons || []).join('; '))}`,
+    '',
+    `За ${windowHours} ч: устройств — ${(devices || []).length}, адресов — ${(ips || []).length}, выбито сеансов — ${displaced || 0}`,
+    ips && ips.length ? `IP: ${escapeTelegram(ips.slice(0, 6).join(', '))}` : null,
+    '',
+    'Последние входы:',
+    list || '• нет данных',
+    '',
+    'Что делать: сменить пароль этого аккаунта в панели администратора и уточнить у владельца, кому он давал доступ.',
+  ]
+    .filter((line) => line !== null)
+    .join('\n');
+}
+
 export function approvalMessage({ username, projectName, chatTitle, spentUsd, limitUsd, when }) {
   const url = TELEGRAM.publicUrl;
   return [

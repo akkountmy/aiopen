@@ -4,10 +4,12 @@ import {
   BILLING,
   CHATS_DIR,
   DATA_DIR,
+  DEVICE,
   INDEX_FILE,
   WORKSPACES_DIR,
+  deviceLimit,
 } from './config.mjs';
-import { hashPassword, verifyPassword } from './security.mjs';
+import { hashPassword, sessionKind, verifyPassword } from './security.mjs';
 import { atomicWrite, nowIso, readJson, uid } from './util.mjs';
 
 const SEED_FILE = path.join(DATA_DIR, 'admin-seed.json');
@@ -18,6 +20,13 @@ function emptyState() {
     createdAt: nowIso(),
     users: [],
     sessions: {},
+    /* Сеансы, закрытые новым входом: по метке старый браузер понимает,
+       что его «выбили», и показывает объяснение вместо пустого экрана. */
+    kicked: {},
+    /* История входов по аккаунтам: устройства, адреса, время. Нужна, чтобы
+       заметить передачу логина и пароля другому человеку. */
+    loginAudit: {},
+    loginAuditVersion: 2,
     projects: [],
     workflows: [],
     chats: [],
@@ -33,6 +42,17 @@ function emptyState() {
 
 function money(value) {
   return Number((Number(value) || 0).toFixed(6));
+}
+
+/* Русское склонение: 1 устройство, 2 устройства, 5 устройств. */
+function plural(count, one, few, many) {
+  const n = Math.abs(Number(count) || 0);
+  const tail = n % 100;
+  if (tail >= 11 && tail <= 14) return many;
+  const last = n % 10;
+  if (last === 1) return one;
+  if (last >= 2 && last <= 4) return few;
+  return many;
 }
 
 function publicUser(user) {
@@ -102,6 +122,52 @@ class Store {
       });
       this.save();
     }
+
+    /* Если аккаунт в системе один, владелец наследства известен сразу. */
+    if (this.state.users.length === 1) this.claimOrphans(this.state.users[0].id);
+  }
+
+  /**
+   * Прежние версии писали проекты, папки, диалоги и вложения без владельца.
+   * Теперь каждый список фильтруется по ownerId, и такие записи иначе стали бы
+   * невидны никому — то есть выглядели бы как потеря данных. Отдаём их тому,
+   * кто первым вошёл: в личной установке это и есть хозяин рабочего места.
+   * Повторный вызов ничего не меняет — у записей уже есть владелец.
+   */
+  claimOrphans(ownerId) {
+    const owner = this.state.users.find((user) => user.id === ownerId);
+    if (!owner) return 0;
+    let claimed = 0;
+    for (const project of this.state.projects) {
+      if (!project.ownerId) {
+        project.ownerId = owner.id;
+        claimed += 1;
+      }
+    }
+    for (const workflow of this.state.workflows) {
+      if (!workflow.ownerId) {
+        workflow.ownerId = owner.id;
+        claimed += 1;
+      }
+    }
+    for (const chat of this.state.chats) {
+      if (!chat.ownerId) {
+        const project = this.state.projects.find((item) => item.id === chat.projectId);
+        chat.ownerId = (project && project.ownerId) || owner.id;
+        claimed += 1;
+      }
+    }
+    for (const attachment of Object.values(this.state.attachments || {})) {
+      if (attachment && !attachment.ownerId) {
+        attachment.ownerId = owner.id;
+        claimed += 1;
+      }
+    }
+    if (claimed) {
+      this.save();
+      console.log(`[store] записей без владельца передано ${owner.username}: ${claimed}`);
+    }
+    return claimed;
   }
 
   /* Приведение старого файла данных к текущей схеме: у проектов появляется
@@ -114,6 +180,22 @@ class Store {
     }
     if (!Array.isArray(this.state.approvals)) {
       this.state.approvals = [];
+      changed = true;
+    }
+    if (!this.state.kicked || typeof this.state.kicked !== 'object') {
+      this.state.kicked = {};
+      changed = true;
+    }
+    if (!this.state.loginAudit || typeof this.state.loginAudit !== 'object') {
+      this.state.loginAudit = {};
+      changed = true;
+    }
+    /* Правило «одна машина» появилось вместе с меткой устройства. Старые записи
+       истории входов ничего не знают об устройствах и дали бы ложную тревогу,
+       поэтому один раз начинаем историю заново. */
+    if (this.state.loginAuditVersion !== 2) {
+      this.state.loginAudit = {};
+      this.state.loginAuditVersion = 2;
       changed = true;
     }
     for (const project of this.state.projects) {
@@ -164,6 +246,12 @@ class Store {
     for (const [key, session] of Object.entries(this.state.sessions)) {
       if (!session || session.exp <= now) {
         delete this.state.sessions[key];
+        changed = true;
+      }
+    }
+    for (const [key, mark] of Object.entries(this.state.kicked || {})) {
+      if (!mark || now - Number(mark.at || 0) > DEVICE.kickedTtlMs) {
+        delete this.state.kicked[key];
         changed = true;
       }
     }
@@ -221,6 +309,26 @@ class Store {
     this.state.users.push(user);
     this.save();
     return publicUser(user);
+  }
+
+  /* Личное пространство пользователя: при первом входе заводим его собственный
+     проект и пустой диалог. История и проекты у каждого аккаунта свои, поэтому
+     «Мой проект» создаётся только для этого владельца и один раз — если человек
+     потом сам удалит проекты, навязчиво возвращать их не будем. */
+  ensurePersonalProject(ownerId) {
+    const user = this.getUser(ownerId);
+    if (!user) return null;
+    if (user.personalProjectSeeded) return null;
+    if (this.state.projects.some((p) => p.ownerId === ownerId)) {
+      user.personalProjectSeeded = true;
+      this.save();
+      return null;
+    }
+    user.personalProjectSeeded = true;
+    const project = this.createProject({ ownerId, name: 'Мой проект' });
+    this.createChat({ projectId: project.id, ownerId, title: 'Новый диалог' });
+    this.save();
+    return project;
   }
 
   /** Списать с баланса пользователя сумму в долларах. */
@@ -329,6 +437,121 @@ class Store {
       delete this.state.sessions[key];
       this.save();
     }
+  }
+
+  /* Закрывает лишние сеансы пользователя того же класса устройства, что и новый
+     вход: по умолчанию остаётся один компьютер и один телефон, поэтому работа на
+     ноутбуке и телефоне идёт одновременно. Возвращает список выбитых сеансов: их
+     адреса и время входа показывают, что аккаунтом, похоже, пользуется кто-то ещё. */
+  dropOtherSessions(userId, keepKey, meta = {}) {
+    const kind = String(meta.kind || 'desktop');
+    const limit = Math.max(1, Number(deviceLimit(kind)) || 1);
+    const dropped = [];
+    const now = Date.now();
+    if (!this.state.kicked) this.state.kicked = {};
+    /* Свежие сеансы того же класса остаются, старые — закрываем. */
+    const sameKind = Object.entries(this.state.sessions)
+      .filter(([key, session]) => session && session.userId === userId && key !== keepKey && sessionKind(session) === kind)
+      .sort((a, b) => String(b[1].createdAt || '').localeCompare(String(a[1].createdAt || '')));
+    for (const [key, session] of sameKind.slice(Math.max(0, limit - 1))) {
+      dropped.push({
+        ip: session.ip || '',
+        ua: session.ua || '',
+        device: session.device || '',
+        kind: sessionKind(session),
+        createdAt: session.createdAt || null,
+      });
+      delete this.state.sessions[key];
+      this.state.kicked[key] = {
+        at: now,
+        byIp: String(meta.ip || '').slice(0, 60),
+        byUa: String(meta.ua || '').slice(0, 200),
+        kind,
+      };
+    }
+    if (dropped.length) this.save();
+    return dropped;
+  }
+
+  /* Пометка «этот сеанс закрыт новым входом», если она ещё свежая. */
+  kickedInfo(key) {
+    const mark = this.state.kicked?.[key];
+    if (!mark) return null;
+    if (Date.now() - Number(mark.at || 0) > DEVICE.kickedTtlMs) {
+      delete this.state.kicked[key];
+      this.save();
+      return null;
+    }
+    return { at: new Date(Number(mark.at)).toISOString(), byIp: mark.byIp || '', byUa: mark.byUa || '' };
+  }
+
+  /* Записывает вход и решает, пора ли предупредить администратора:
+     слишком много разных устройств, адресов или постоянные «выбивания»
+     активного сеанса выглядят как передача пароля другому человеку. */
+  recordLogin(userId, entry = {}) {
+    const now = Date.now();
+    if (!this.state.loginAudit) this.state.loginAudit = {};
+    const audit = this.state.loginAudit[userId] || { events: [], alertAt: null };
+    this.state.loginAudit[userId] = audit;
+    audit.events.push({
+      at: new Date(now).toISOString(),
+      ip: String(entry.ip || '').slice(0, 60),
+      ua: String(entry.ua || '').slice(0, 160),
+      device: String(entry.device || '').slice(0, 80),
+      kind: entry.kind === 'mobile' ? 'mobile' : 'desktop',
+      displaced: Number(entry.displaced || 0),
+    });
+    const keepFrom = now - DEVICE.keepMs;
+    audit.events = audit.events
+      .filter((item) => Number.isFinite(Date.parse(item.at)) && Date.parse(item.at) >= keepFrom)
+      .slice(-DEVICE.maxEvents);
+
+    const windowFrom = now - DEVICE.windowMs;
+    const recent = audit.events.filter((item) => Date.parse(item.at) >= windowFrom);
+    const ips = [...new Set(recent.map((item) => item.ip).filter(Boolean))];
+    const devices = [...new Set(recent.map((item) => item.device).filter(Boolean))];
+    const displaced = recent.reduce((sum, item) => sum + (item.displaced || 0), 0);
+    const windowHours = Math.max(1, Math.round(DEVICE.windowMs / 3600000));
+
+    const reasons = [];
+    if (devices.length >= DEVICE.alertDevices) {
+      reasons.push(`${devices.length} ${plural(devices.length, 'разное устройство', 'разных устройства', 'разных устройств')} за ${windowHours} ч`);
+    }
+    if (ips.length >= DEVICE.alertIps) {
+      reasons.push(`${ips.length} ${plural(ips.length, 'разный IP-адрес', 'разных IP-адреса', 'разных IP-адресов')} за ${windowHours} ч`);
+    }
+    if (displaced >= DEVICE.alertDisplaced) {
+      reasons.push(`${displaced} ${plural(displaced, 'вход', 'входа', 'входов')} с выбиванием активного сеанса за ${windowHours} ч`);
+    }
+
+    const suspicious = reasons.length > 0;
+    const lastAlertAt = audit.alertAt ? Date.parse(audit.alertAt) : 0;
+    const cooling = now - lastAlertAt < DEVICE.cooldownMs;
+    const alert = suspicious && !cooling;
+    if (alert) audit.alertAt = new Date(now).toISOString();
+    this.save();
+
+    return {
+      suspicious,
+      alert,
+      reasons,
+      ips,
+      devices,
+      displaced,
+      windowHours,
+      recent: recent.slice(-10),
+    };
+  }
+
+  /* История входов аккаунта для панели администратора. */
+  loginAuditFor(userId) {
+    const audit = this.state.loginAudit?.[userId];
+    if (!audit) return { events: [], alertAt: null };
+    const now = Date.now();
+    return {
+      events: (audit.events || []).filter((item) => Date.parse(item.at) >= now - DEVICE.windowMs).slice(-20),
+      alertAt: audit.alertAt || null,
+    };
   }
 
   /* ---------------- projects ---------------- */
