@@ -1122,10 +1122,10 @@ body.resizing {
   height: 12px;
 }
 
-/* Значок человечка — только для телефона, где в шапке от кнопки учётной
-   записи остаётся один значок. На широком экране видно имя, значка нет. */
+/* Значок человечка слева от имени — тот же, что на телефоне: кнопка учётной
+   записи в шапке узнаётся по нему с любого расстояния, а имя остаётся рядом. */
 .user-chip-top .account-glyph {
-  display: none;
+  display: block;
   width: 18px;
   height: 18px;
   flex: none;
@@ -3281,10 +3281,14 @@ body.resizing {
   .user-chip-top .chev {
     display: none;
   }
+  /* Счётчик долларов — та же высота и скругление, что у соседних кнопок шапки
+     (учётная запись, тема, папка файлов): 40 px, а не 34, иначе плашка «тонула»
+     среди иконок. */
   .balance-chip {
-    height: 34px;
-    padding: 0 10px;
+    height: 40px;
+    padding: 0 12px;
     margin-right: 2px;
+    border-radius: var(--radius-md);
   }
 
   /* ------------------------------- диалог ------------------------------- */
@@ -3594,8 +3598,8 @@ body.resizing {
     height: 18px;
   }
   .balance-chip {
-    height: 32px;
-    padding: 0 8px;
+    height: 38px;
+    padding: 0 10px;
     margin-right: 0;
   }
   .composer-row {
