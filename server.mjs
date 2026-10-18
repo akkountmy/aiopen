@@ -23,7 +23,7 @@ import { describeFailure, generateTitle, runTurn } from './src/agent.mjs';
 import { transcribeAudio } from './src/asr.mjs';
 import { detectKind, extractDocumentText, kindLabel } from './src/docparse.mjs';
 import { approvalMessage, notifyAdmin } from './src/notify.mjs';
-import { makeOpenToken, readOpenToken } from './src/openlink.mjs';
+import { issueOpenLink, resolveOpenLink, asciiFileName, OPEN_PREFIX } from './src/openlink.mjs';
 import { proofreadText } from './src/proofread.mjs';
 import { keyStatus } from './src/keys.mjs';
 import {
@@ -834,7 +834,7 @@ function serveStatic(req, res, urlPath, versioned = false) {
   fs.createReadStream(full).pipe(res);
 }
 
-function sendFile(res, full, { download = false, name } = {}) {
+function sendFile(res, full, { download = false, name, head = false } = {}) {
   const stat = fs.statSync(full);
   if (!stat.isFile()) return sendError(res, 404, 'Не найдено');
   const ext = path.extname(full).toLowerCase();
@@ -849,6 +849,7 @@ function sendFile(res, full, { download = false, name } = {}) {
     'Cache-Control': 'no-store',
     ...SECURITY_HEADERS,
   });
+  if (head) return res.end();
   fs.createReadStream(full).pipe(res);
 }
 
@@ -856,6 +857,28 @@ async function route(req, res) {
   const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
   const pathname = decodeURIComponent(url.pathname);
   const method = req.method || 'GET';
+
+  /* Ссылка для внешних приложений (Word, Excel, PowerPoint): у них нет cookie
+     браузера, поэтому доступ даёт короткий адрес со своим сроком жизни. */
+  if (pathname.startsWith(OPEN_PREFIX)) {
+    if (method !== 'GET' && method !== 'HEAD') return sendError(res, 405, 'Метод не разрешён');
+    const id = pathname.split('/').filter(Boolean)[1];
+    const link = resolveOpenLink(id);
+    if (!link) return sendError(res, 403, 'Ссылка на файл устарела — откройте его ещё раз');
+    const project = store.getProject(link.projectId);
+    if (!project) return sendError(res, 404, 'Файл не найден');
+    try {
+      const full = resolveSafe(store.workspaceDir(project.id), link.relPath);
+      if (!fs.existsSync(full) || !fs.statSync(full).isFile()) return sendError(res, 404, 'Файл не найден');
+      return sendFile(res, full, {
+        download: true,
+        name: asciiFileName(path.basename(full)),
+        head: method === 'HEAD',
+      });
+    } catch (error) {
+      return sendError(res, error.status || 400, error.message);
+    }
+  }
 
   if (!pathname.startsWith('/api/')) {
     if (method !== 'GET' && method !== 'HEAD') return sendError(res, 405, 'Метод не разрешён');
@@ -878,22 +901,6 @@ async function route(req, res) {
     }
     if (pathname === '/api/health' && method === 'GET') {
       return sendJson(res, 200, { ok: true, time: nowIso() });
-    }
-
-    /* Ссылка для внешних приложений (Word, Excel, PowerPoint): у них нет
-       cookie браузера, поэтому доступ даёт подписанный одноразовый адрес. */
-    if (parts[1] === 'open' && parts[2] && method === 'GET') {
-      const link = readOpenToken(parts[2]);
-      if (!link) return sendError(res, 403, 'Ссылка на файл устарела — откройте его ещё раз');
-      const project = store.getProject(link.projectId);
-      if (!project) return sendError(res, 404, 'Файл не найден');
-      try {
-        const full = resolveSafe(store.workspaceDir(project.id), link.relPath);
-        if (!fs.existsSync(full) || !fs.statSync(full).isFile()) return sendError(res, 404, 'Файл не найден');
-        return sendFile(res, full, { download: false, name: path.basename(full) });
-      } catch (error) {
-        return sendError(res, error.status || 400, error.message);
-      }
     }
 
     // --- требуется вход ---
@@ -1052,10 +1059,11 @@ async function route(req, res) {
         try {
           const full = resolveSafe(workspace, rel);
           if (!fs.existsSync(full) || !fs.statSync(full).isFile()) return sendError(res, 404, 'Файл не найден');
-          const token = makeOpenToken({ projectId: project.id, relPath: rel });
+          const id = issueOpenLink({ projectId: project.id, relPath: rel });
           const fileName = path.basename(full);
+          /* Адрес держим коротким: Excel не открывает файл, если путь длиннее 218 знаков. */
           return sendJson(res, 200, {
-            url: `${publicOrigin(req)}/api/open/${token}/${encodeURIComponent(fileName)}`,
+            url: `${publicOrigin(req)}/o/${id}/${asciiFileName(fileName)}`,
             name: fileName,
           });
         } catch (error) {

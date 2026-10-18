@@ -1469,7 +1469,8 @@ function openFileViewer(item) {
 }
 
 /* Word/Excel/PowerPoint скачивают файл сами, без cookie браузера, поэтому
-   сервер выдаёт короткую подписанную ссылку именно на этот файл. */
+   сервер выдаёт отдельную короткую ссылку именно на этот файл. Адрес намеренно
+   короткий: Excel отказывается открывать файл, если путь длиннее 218 знаков. */
 async function openInOffice(item, protocol, appName) {
   let link;
   try {
@@ -1480,7 +1481,7 @@ async function openInOffice(item, protocol, appName) {
   }
   try {
     window.location.href = `${protocol}:ofe|u|${link.url}`;
-    toast(`Открываю в ${appName}…`, 'ok');
+    toast(`Открываю в ${appName}… Если окно не появилось — скачайте файл кнопкой «Скачать».`, 'ok');
   } catch {
     toast(`Не удалось запустить ${appName}. Скачайте файл кнопкой «Скачать».`);
   }
