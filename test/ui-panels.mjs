@@ -392,6 +392,33 @@ try {
     ? ok('после сброса правая панель снова ходит за левой', `проекты ${follows.sidebar}, файлы ${follows.files}`)
     : fail('правая панель не повторяет левую', JSON.stringify(follows));
 
+  // 13. меню учётной записи — у правой границы шапки, а не под кнопкой
+  await evaluate(`document.getElementById('userChip').click()`);
+  const userMenuShown = await waitFor(`!!document.querySelector('.menu')`);
+  const userMenu = userMenuShown
+    ? await evaluate(`(() => {
+        const bar = document.querySelector('.topbar');
+        const menu = document.querySelector('.menu');
+        const barRect = bar.getBoundingClientRect();
+        const menuRect = menu.getBoundingClientRect();
+        return {
+          right: Math.round(menuRect.right),
+          blockRight: Math.round(barRect.right - (Number.parseFloat(getComputedStyle(bar).paddingRight) || 0)),
+          insideBar: !!bar.querySelector('.menu'),
+          items: [...menu.querySelectorAll('button')].map((b) => b.textContent.trim()),
+        };
+      })()`)
+    : { right: -1, blockRight: -2, items: [] };
+  Math.abs(userMenu.right - userMenu.blockRight) <= 1
+    ? ok('меню учётной записи прижато к правой границе шапки', `${userMenu.right} = ${userMenu.blockRight}`)
+    : fail('край меню учётной записи', JSON.stringify(userMenu));
+  userMenu.items.length >= 3 && /Выйти/.test(userMenu.items.join(' '))
+    ? ok('в меню учётной записи те же пункты', userMenu.items.join(' / '))
+    : fail('пункты меню учётной записи', JSON.stringify(userMenu.items));
+  await evaluate(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`);
+  await evaluate(`document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))`);
+  await waitFor(`!document.querySelector('.menu')`);
+
   if (process.env.DSHOW_UI_PANELS_SHOT) {
     const shot = await cdp.send('Page.captureScreenshot', { format: 'png' });
     fs.writeFileSync(process.env.DSHOW_UI_PANELS_SHOT, Buffer.from(shot.data, 'base64'));

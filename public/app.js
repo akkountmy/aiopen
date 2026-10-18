@@ -1621,6 +1621,18 @@ function placeInPanel(node, anchor, host) {
   node.style.top = `${Math.max(pad, top)}px`;
 }
 
+/* Правая граница блока, в котором стоит кнопка: у шапки это её внутренний
+   край с учётом поля. Меню учётной записи прижимается к нему, а не к самой
+   кнопке — иначе карточка висела бы в середине полосы. */
+function anchorBlockRight(anchor) {
+  const block = anchor.closest?.('.topbar, .sidebar, .files-panel');
+  if (!block) return null;
+  const rect = block.getBoundingClientRect();
+  const style = getComputedStyle(block);
+  const padding = Number.parseFloat(style.paddingRight) || 0;
+  return rect.right - padding;
+}
+
 function openContextMenu(anchor, items) {
   closeMenus();
   menuAnchor = anchor;
@@ -1648,7 +1660,8 @@ function openContextMenu(anchor, items) {
   } else {
     document.body.appendChild(menu);
     const menuRect = menu.getBoundingClientRect();
-    let left = rect.right - menuRect.width;
+    const rightEdge = anchorBlockRight(anchor) ?? rect.right;
+    let left = rightEdge - menuRect.width;
     let top = rect.bottom + 6;
     if (top + menuRect.height > window.innerHeight - 8) top = rect.top - menuRect.height - 6;
     left = Math.max(8, Math.min(left, window.innerWidth - menuRect.width - 8));
@@ -3088,6 +3101,8 @@ $('#backdrop').addEventListener('click', () => {
   $('#app').classList.remove('sidebar-open');
   closeFilesDrawer();
 });
+/* Крестик в заголовке ящика: тем же путём, что затемнение и кнопка-папка. */
+$('#filesClose').addEventListener('click', () => closeFilesDrawer());
 $('#chatMenuBtn').addEventListener('click', (event) => {
   if (!state.chat) return;
   const anchor = event.currentTarget;

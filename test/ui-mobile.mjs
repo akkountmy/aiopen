@@ -1,6 +1,7 @@
 // Проверка подсказок в мобильной версии в настоящем Chrome через DevTools-протокол (без зависимостей):
 //   - четыре карточки «Чем помочь?» стоят по две в ряд на телефоне (390 px и 320 px);
-//   - ничего не вылезает по горизонтали, текст карточек не обрезан.
+//   - ничего не вылезает по горизонтали, текст карточек не обрезан;
+//   - «Файлы проекта» выезжают таким же ящиком, как «Проекты», и закрываются крестиком.
 //
 // Запуск (нужен уже работающий сервер):
 //   $env:DSHOW_BASE='http://127.0.0.1:3131'; $env:DSHOW_USER='admin'; $env:DSHOW_PASS='...'
@@ -184,6 +185,72 @@ try {
   }
 
   for (const [width, height] of [[390, 844], [360, 780], [320, 640]]) await checkWidth(width, height);
+
+  // 3. выезжающие ящики: «Файлы проекта» выезжает так же, как «Проекты»,
+  //    того же размера, и закрывается крестиком в своём заголовке.
+  await cdp.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
+  await goto(BASE + '/');
+  await waitFor(`!!document.getElementById('app') && !document.getElementById('app').classList.contains('hidden')`);
+  const DRAWERS = `(() => {
+    const box = (selector) => {
+      const node = document.querySelector(selector);
+      if (!node) return null;
+      const rect = node.getBoundingClientRect();
+      const style = getComputedStyle(node);
+      return {
+        left: Math.round(rect.left), right: Math.round(rect.right), width: Math.round(rect.width),
+        corners: style.borderRadius.split(' ').filter(Boolean), visibility: style.visibility, display: style.display,
+      };
+    };
+    const app = document.getElementById('app').classList;
+    return {
+      viewport: window.innerWidth,
+      sidebar: box('#sidebar'),
+      files: box('#filesPanel'),
+      close: box('#filesClose'),
+      backdrop: getComputedStyle(document.getElementById('backdrop')).display,
+      sidebarOpen: app.contains('sidebar-open'),
+      filesOpen: app.contains('files-open'),
+    };
+  })()`;
+  await evaluate(`document.getElementById('sidebarToggle').click()`);
+  await waitFor(`document.getElementById('app').classList.contains('sidebar-open')`);
+  const sidebarDrawer = await evaluate(DRAWERS);
+  await evaluate(`document.getElementById('backdrop').click()`);
+  await waitFor(`!document.getElementById('app').classList.contains('sidebar-open')`);
+  await evaluate(`document.getElementById('filesBtn').click()`);
+  await waitFor(`document.getElementById('app').classList.contains('files-open')`);
+  const filesDrawer = await evaluate(DRAWERS);
+  const sameWidth = sidebarDrawer.sidebar.width === filesDrawer.files.width;
+  sameWidth
+    ? ok('ящик файлов той же ширины, что ящик проектов', `${filesDrawer.files.width} px`)
+    : fail('ширина ящиков', JSON.stringify({ sidebar: sidebarDrawer.sidebar.width, files: filesDrawer.files.width }));
+  filesDrawer.files.right === filesDrawer.viewport && sidebarDrawer.sidebar.left === 0
+    ? ok('файлы выезжают справа, проекты — слева')
+    : fail('края ящиков', JSON.stringify({ filesRight: filesDrawer.files.right, viewport: filesDrawer.viewport, sidebarLeft: sidebarDrawer.sidebar.left }));
+  const mirrored =
+    filesDrawer.files.corners[0] === sidebarDrawer.sidebar.corners[1] &&
+    filesDrawer.files.corners[3] === sidebarDrawer.sidebar.corners[2];
+  mirrored
+    ? ok('скругления у ящиков зеркальные', `${filesDrawer.files.corners.join(' ')} / ${sidebarDrawer.sidebar.corners.join(' ')}`)
+    : fail('скругления ящиков', JSON.stringify({ files: filesDrawer.files.corners, sidebar: sidebarDrawer.sidebar.corners }));
+  filesDrawer.filesOpen && !filesDrawer.sidebarOpen && filesDrawer.backdrop !== 'none'
+    ? ok('открыт один ящик, остальное затемнено')
+    : fail('состояние ящиков', JSON.stringify(filesDrawer));
+  filesDrawer.close && filesDrawer.close.display !== 'none' && filesDrawer.close.width >= 32
+    ? ok('в ящике файлов есть крестик', `${filesDrawer.close.width}×${filesDrawer.close.display}`)
+    : fail('крестик ящика файлов', JSON.stringify(filesDrawer.close));
+  await evaluate(`document.getElementById('filesClose').click()`);
+  // visibility переключается по завершении выезда (0,28 s), поэтому ждём её, а не класс.
+  const filesClosed = await waitFor(`(() => {
+    const panel = document.getElementById('filesPanel');
+    if (document.getElementById('app').classList.contains('files-open')) return false;
+    return getComputedStyle(panel).visibility === 'hidden';
+  })()`);
+  const closedState = await evaluate(DRAWERS);
+  filesClosed && closedState.files.visibility === 'hidden'
+    ? ok('крестик закрывает ящик файлов')
+    : fail('закрытие ящика крестиком', JSON.stringify(closedState.files));
 
   // 3. уборка: свой проект удаляем, чужие не трогаем
   await cdp.send('Emulation.clearDeviceMetricsOverride');
