@@ -471,11 +471,11 @@ svg {
   border-color: var(--line-strong);
 }
 
-/* Папка с плюсом вместо одиночного плюса: размер и цвет — как у папки в
-   строке проекта, поэтому кнопка читается как «создать проект». */
+/* Папка с плюсом вместо одиночного плюса: плюс внутри папки крупный, иначе на
+   17 px он сливается с контуром и иконка читается как просто папка. */
 .btn-new svg {
-  width: 17px;
-  height: 17px;
+  width: 18px;
+  height: 18px;
   flex: none;
   color: var(--text-2);
 }
@@ -638,9 +638,9 @@ body.resizing {
 .project-row {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 6px;
   height: 36px;
-  padding: 0 6px 0 8px;
+  padding: 0 5px 0 8px;
   border-radius: var(--radius-sm);
   cursor: pointer;
   color: var(--text-2);
@@ -675,16 +675,17 @@ body.resizing {
 }
 
 /* Счётчик — «таблетка», а не висящая цифра: у проекта (диалоги) и у папки
-   (проекты) он выглядит одинаково. */
+   (проекты) он выглядит одинаково. Ширина минимальная, чтобы у имён осталось
+   место: в панели 280 px каждая лишняя единица ширины отнимает буквы. */
 .project-row .p-count,
 .workflow-row .w-count {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   flex: none;
-  min-width: 21px;
-  height: 19px;
-  padding: 0 6px;
+  min-width: 19px;
+  height: 18px;
+  padding: 0 5px;
   border-radius: 999px;
   background: var(--layer-2);
   color: var(--text-3);
@@ -703,7 +704,7 @@ body.resizing {
    курсором: не приходится угадывать, есть ли у строки действия. */
 .project-row .row-menu,
 .project-row .row-plus {
-  opacity: 0.5;
+  opacity: 0.6;
 }
 
 .project-row:hover .row-menu,
@@ -738,7 +739,15 @@ body.resizing {
   height: 14px;
 }
 
-.p-caret.empty {
+/* Место под треугольник остаётся (иначе имена проектов с диалогами и без них
+   стояли бы на разной высоте), но сам треугольник скрыт. Класс is-empty, а не
+   empty: .empty — это пустое состояние чата со своими отступами. */
+.p-caret.is-empty {
+  display: inline-flex;
+  flex: none;
+  width: 15px;
+  height: 15px;
+  padding: 0;
   visibility: hidden;
 }
 
@@ -791,7 +800,7 @@ body.resizing {
 
 /* Действия диалога — того же размера, что у проекта (см. .row-menu). */
 .chat-row .row-menu {
-  opacity: 0.5;
+  opacity: 0.6;
 }
 
 .chat-row:hover .row-menu,
@@ -960,7 +969,7 @@ body.resizing {
 /* Счётчик проектов в папке — та же «таблетка», что у проекта с диалогами
    (общее правило выше, у .project-row .p-count). */
 .workflow-row .row-menu {
-  opacity: 0.5;
+  opacity: 0.6;
 }
 
 .workflow-row:hover .row-menu,
@@ -1001,7 +1010,7 @@ body.resizing {
   color: var(--text-3);
   cursor: pointer;
   flex: none;
-  opacity: 0.5;
+  opacity: 0.6;
 }
 
 .project-row:hover .row-plus {

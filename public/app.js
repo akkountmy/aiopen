@@ -476,7 +476,10 @@ function projectNode(project) {
   /* Треугольник слева — та же деталь, что у папок: по нему видно, раскрыт ли
      список диалогов. У проекта без диалогов место остаётся пустым, чтобы
      имена не прыгали. */
-  row.innerHTML = `<span class="p-caret${chats.length ? '' : ' empty'}"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M6 8l4 4 4-4"/></svg></span><span class="f-icon">${ICONS.folder}</span><span class="p-name">${escapeHtml(project.name)}</span>`;
+  /* Модификатор назван is-empty, а не empty: класс .empty — это пустое
+     состояние чата (большой блок с отступами), и на треугольнике он ломал
+     размеры строки проекта без диалогов. */
+  row.innerHTML = `<span class="p-caret${chats.length ? '' : ' is-empty'}"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M6 8l4 4 4-4"/></svg></span><span class="f-icon">${ICONS.folder}</span><span class="p-name">${escapeHtml(project.name)}</span>`;
   const count = el('span', 'p-count', project.chats?.length ? String(project.chats.length) : '');
   row.appendChild(count);
 
