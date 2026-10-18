@@ -1,4 +1,4 @@
-﻿// Р’СЂРµРјРµРЅРЅС‹Р№ РїРѕРјРѕС‰РЅРёРє РґР»СЏ СЂР°Р·РІС‘СЂС‚С‹РІР°РЅРёСЏ dsh-open-web РІ Amvera (MCP РїР»Р°С‚С„РѕСЂРјС‹).
+// Временный помощник для развёртывания dsh-open-web в Amvera (MCP платформы).
 // Токен берётся из %TEMP%\amvera-token.json (создаётся amvera-login.mjs).
 import fs from 'node:fs';
 import os from 'node:os';

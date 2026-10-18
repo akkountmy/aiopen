@@ -29,12 +29,14 @@ const ICONS = {
   logout:
     '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M12 4H5.5A1.5 1.5 0 004 5.5v9A1.5 1.5 0 005.5 16H12"/><path d="M11 10h6M14.5 7L17.5 10l-3 3"/></svg>',
   pen: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M13.5 4.5l2 2L7 15H5v-2z"/></svg>',
+  plus: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 5v10M5 10h10"/></svg>',
   archive:
     '<svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="4" width="14" height="12" rx="1.5"/><path d="M3 8h14M9 4v4"/></svg>',
   upload:
     '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 15V4M5.5 8.5L10 4l4.5 4.5"/></svg>',
   theme:
     '<svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="3.6"/><path d="M10 2.4v1.8M10 15.8v1.8M2.4 10h1.8M15.8 10h1.8M4.6 4.6l1.3 1.3M14.1 14.1l1.3 1.3M15.4 4.6l-1.3 1.3M5.9 14.1l-1.3 1.3"/></svg>',
+  eye: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M2.5 10s2.9-4.5 7.5-4.5S17.5 10 17.5 10s-2.9 4.5-7.5 4.5S2.5 10 2.5 10z"/><circle cx="10" cy="10" r="1.9"/></svg>',
 };
 
 const WHALE_SVG =
@@ -287,7 +289,7 @@ function renderMarkdown(raw) {
 /* ------------------------------ api ------------------------------ */
 
 async function api(path, options = {}) {
-  const { method = 'GET', body, raw, headers = {}, signal } = options;
+  const { method = 'GET', body, raw, headers = {}, signal, anonymous = false } = options;
   const init = { method, credentials: 'same-origin', headers: { ...headers }, signal };
   if (body !== undefined && !raw) {
     init.headers['Content-Type'] = 'application/json';
@@ -302,7 +304,11 @@ async function api(path, options = {}) {
   } catch {
     data = {};
   }
-  if (response.status === 401) {
+  /* 401 от /api/login и /api/signup — это «неверные данные», а не потеря
+     сеанса: экран входа уже открыт, а пользователю нужно показать причину.
+     Поэтому такие запросы помечены anonymous и проходят ниже, к обычному
+     разбору ошибки. */
+  if (response.status === 401 && !anonymous) {
     showAuth();
     /* Сеанс мог быть закрыт новым входом с другого устройства — объясняем это
        прямо на экране входа, чтобы выход не выглядел случайным сбоем. */
@@ -347,17 +353,29 @@ async function onLogin(event) {
   const button = $('#loginSubmit');
   const errorBox = $('#loginError');
   errorBox.textContent = '';
+  const username = $('#loginUser').value.trim();
+  const password = $('#loginPass').value;
+  /* Пустые поля — не повод идти на сервер: подсказка появляется сразу, а
+     счётчик неудачных попыток входа не тратится. */
+  if (!username || !password) {
+    errorBox.textContent = 'Введите логин и пароль';
+    (username ? $('#loginPass') : $('#loginUser')).focus();
+    return;
+  }
   button.disabled = true;
   button.textContent = 'Вход…';
   try {
     const payload = await api('/api/login', {
       method: 'POST',
-      body: { username: $('#loginUser').value.trim(), password: $('#loginPass').value },
+      anonymous: true,
+      body: { username, password },
     });
     $('#loginPass').value = '';
     await startApp(payload);
   } catch (error) {
-    if (!error.unauthorized) errorBox.textContent = error.message || 'Не удалось войти';
+    errorBox.textContent = error.message || 'Не удалось войти';
+    $('#loginPass').value = '';
+    $('#loginPass').focus();
   } finally {
     button.disabled = false;
     button.textContent = 'Войти';
@@ -369,9 +387,21 @@ async function onSignup(event) {
   const button = $('#signupSubmit');
   const errorBox = $('#signupError');
   errorBox.textContent = '';
+  const username = $('#signupUser').value.trim();
   const password = $('#signupPass').value;
+  if (!username) {
+    errorBox.textContent = 'Придумайте логин';
+    $('#signupUser').focus();
+    return;
+  }
+  if (password.length < 8) {
+    errorBox.textContent = 'Пароль должен быть не короче 8 символов';
+    $('#signupPass').focus();
+    return;
+  }
   if (password !== $('#signupPass2').value) {
     errorBox.textContent = 'Пароли не совпадают';
+    $('#signupPass2').focus();
     return;
   }
   button.disabled = true;
@@ -379,7 +409,8 @@ async function onSignup(event) {
   try {
     const payload = await api('/api/signup', {
       method: 'POST',
-      body: { username: $('#signupUser').value.trim(), password },
+      anonymous: true,
+      body: { username, password },
     });
     $('#signupPass').value = '';
     $('#signupPass2').value = '';
@@ -551,6 +582,15 @@ function projectNode(project) {
       });
       chatRow.appendChild(chatMenu);
       chatRow.addEventListener('click', () => openChat(chat.id));
+      /* Диалог — тоже кнопка: с клавиатуры он открывается Enter и пробелом. */
+      chatRow.setAttribute('role', 'button');
+      chatRow.tabIndex = 0;
+      chatRow.addEventListener('keydown', (event) => {
+        if (event.target !== chatRow) return;
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        event.preventDefault();
+        openChat(chat.id);
+      });
       list.appendChild(chatRow);
     }
     wrap.appendChild(list);
@@ -576,10 +616,19 @@ function workflowNode(workflow) {
     openWorkflowMenu(event, workflow);
   });
   row.appendChild(menuBtn);
-  row.addEventListener('click', () => {
+  const toggleFolder = () => {
     if (state.collapsedWorkflows.has(workflow.id)) state.collapsedWorkflows.delete(workflow.id);
     else state.collapsedWorkflows.add(workflow.id);
     renderSidebar();
+  };
+  row.addEventListener('click', toggleFolder);
+  /* Папка раскрывается и с клавиатуры — как строка проекта. */
+  row.tabIndex = 0;
+  row.addEventListener('keydown', (event) => {
+    if (event.target !== row) return;
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    event.preventDefault();
+    toggleFolder();
   });
   node.appendChild(row);
 
@@ -602,6 +651,17 @@ function renderSidebar() {
     }
     for (const workflow of state.workflows) root.appendChild(workflowNode(workflow));
   }
+  /* Папку проектов до этого можно было создать только запросом к API: меню
+     папки умело её переименовать и удалить, «Переместить в папку» советовало
+     «сначала создайте папку», а создать её было негде. Строка внизу списка
+     закрывает этот разрыв. */
+  const addFolder = el('button', 'list-add');
+  addFolder.type = 'button';
+  addFolder.id = 'newWorkflowBtn';
+  addFolder.title = 'Создать папку для проектов';
+  addFolder.innerHTML = `<span class="list-add-icon"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 6.5A1.5 1.5 0 014.5 5h3l1.5 2h6.5A1.5 1.5 0 0117 8.5v6A1.5 1.5 0 0115.5 16h-11A1.5 1.5 0 013 14.5v-8z"/><path d="M10 9.2v5M7.5 11.7h5"/></svg></span><span>Новая папка</span>`;
+  addFolder.addEventListener('click', (event) => createWorkflowModal({ anchor: event.currentTarget }));
+  root.appendChild(addFolder);
 }
 
 function updateCrumbs() {
@@ -617,7 +677,12 @@ function updateCrumbs() {
 }
 
 async function openChat(chatId) {
-  if (state.streaming) return;
+  /* Во время ответа переключение диалога молча не срабатывало — выглядело как
+     «кнопка не работает». Теперь сервис объясняет, что делать. */
+  if (state.streaming) {
+    toast('Дождитесь ответа или нажмите «Стоп»');
+    return;
+  }
   try {
     const data = await api(`/api/chats/${chatId}`);
     state.chat = data.chat;
@@ -1194,7 +1259,7 @@ function renderAttachStrip() {
     chip.appendChild(el('span', 'fc-size', fmtSize(att.size)));
     if (att.status === 'uploading' || att.status === 'processing') {
       const status = el('span', 'fc-status');
-      status.innerHTML = '<span class="spinner" style="width:10px;height:10px;border-width:1.4px;border-radius:50%;border:1.4px solid rgba(86,134,254,.25);border-top-color:#5686fe;display:inline-block"></span>';
+      status.innerHTML = '<span class="spinner"></span>';
       chip.appendChild(status);
     } else if (att.status === 'error') {
       const status = el('span', 'fc-status', 'ошибка');
@@ -1368,9 +1433,20 @@ function renderFiles() {
   if (state.filesPath !== '.') {
     const up = el('div', 'file-row');
     up.innerHTML = `<span class="f-icon">${ICONS.folder}</span><span class="f-name">Наверх</span>`;
-    up.addEventListener('click', () => {
+    const goUp = () => {
       const parent = state.filesPath.split('/').slice(0, -1).join('/') || '.';
       loadFiles(parent);
+    };
+    up.addEventListener('click', goUp);
+    /* Строка ведёт себя как кнопка и с клавиатуры — так же, как строки файлов. */
+    up.setAttribute('role', 'button');
+    up.tabIndex = 0;
+    up.setAttribute('aria-label', 'Наверх, в родительскую папку');
+    up.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        goUp();
+      }
     });
     list.appendChild(up);
   }
@@ -1417,6 +1493,20 @@ function renderFiles() {
         window.open(fileUrl(item.path, true), '_blank');
       });
       actions.appendChild(download);
+      /* Документ можно прочитать здесь же — на телефоне это единственный
+         надёжный способ посмотреть docx/xlsx, если нет приложения Office. */
+      if (canPreview(item.name)) {
+        const preview = el('button', 'btn btn-ghost btn-icon file-preview-btn');
+        preview.type = 'button';
+        preview.title = 'Посмотреть';
+        preview.setAttribute('aria-label', `Посмотреть «${item.name}»`);
+        preview.innerHTML = ICONS.eye;
+        preview.addEventListener('click', (event) => {
+          event.stopPropagation();
+          openFilePreview(item);
+        });
+        actions.appendChild(preview);
+      }
     }
     const del = el('button', 'btn btn-ghost btn-icon');
     del.type = 'button';
@@ -1502,6 +1592,63 @@ const OFFICE_PROTOCOLS = {
   pptx: ['ms-powerpoint', 'PowerPoint'],
   ppt: ['ms-powerpoint', 'PowerPoint'],
 };
+
+/* Документы, которые сервер умеет прочитать как текст: их можно посмотреть
+   прямо в сервисе, не открывая Word/Excel и не скачивая файл. */
+const PREVIEWABLE = /^(docx?|xlsx?|pptx?|pdf|txt|md|markdown|csv|tsv|json|log|ya?ml)$/;
+
+function canPreview(name) {
+  const ext = String(name).split('.').pop().toLowerCase();
+  return PREVIEWABLE.test(ext);
+}
+
+/* Просмотр документа на чтение: телефон не всегда умеет открывать docx, а файл
+   нужен сейчас. Сервер отдаёт уже извлечённый текст, здесь только показываем. */
+async function openFilePreview(item) {
+  const body = el('div', 'preview');
+  body.innerHTML = '<div class="preview-loading"><span class="spinner"></span> Читаем файл…</div>';
+  const actions = [
+    { label: 'Скачать', onClick: () => window.open(fileUrl(item.path, true), '_blank') },
+    { label: 'Закрыть' },
+    {
+      label: 'Открыть',
+      kind: 'primary',
+      onClick: () => {
+        /* Открытие в программе просмотра — тем же путём, что и щелчок по файлу. */
+        setTimeout(() => openFileViewer(item), 0);
+      },
+    },
+  ];
+  openModal({
+    title: item.name,
+    wide: true,
+    className: 'preview-modal',
+    body,
+    actions,
+    onMount: async (bodyNode) => {
+      try {
+        const data = await api(`/api/projects/${state.activeProjectId}/file-preview?path=${encodeURIComponent(item.path)}`);
+        bodyNode.innerHTML = '';
+        const meta = el('div', 'preview-meta');
+        meta.textContent = [data.kindLabel || 'Файл', fmtSize(data.size)].filter(Boolean).join(' · ');
+        bodyNode.appendChild(meta);
+        for (const warning of data.warnings || []) {
+          bodyNode.appendChild(el('p', 'preview-warn', warning));
+        }
+        if (String(data.text || '').trim()) {
+          const pre = el('pre', 'preview-text');
+          pre.textContent = data.text;
+          bodyNode.appendChild(pre);
+        } else if (!(data.warnings || []).length) {
+          bodyNode.appendChild(el('p', 'preview-empty', 'В файле нет текста для чтения — откройте или скачайте его.'));
+        }
+      } catch (error) {
+        bodyNode.innerHTML = '';
+        bodyNode.appendChild(el('p', 'preview-empty', error.message));
+      }
+    },
+  });
+}
 
 /* Клик по файлу сразу открывает его в подходящей программе — без предпросмотра
    в окне приложения: документы в Word/Excel/PowerPoint, PDF и картинки в новой
@@ -2257,6 +2404,30 @@ function createProjectModal({ workflowId = '', anchor = null } = {}) {
   });
 }
 
+/* Новая папка проектов. Карточка та же, что у переименования папки: заголовок,
+   поле, «Отмена» и главная кнопка. */
+async function createWorkflowModal({ anchor = null } = {}) {
+  const value = await promptPopover({
+    anchor: anchor || $('#newWorkflowBtn') || $('#newProjectBtn'),
+    title: 'Новая папка',
+    label: 'Как назвать папку проектов?',
+    placeholder: 'Например, Работа',
+    confirm: 'Создать папку',
+  });
+  if (value === null) return;
+  const name = value.trim() || 'Новая папка';
+  try {
+    const data = await api('/api/workflows', { method: 'POST', body: { name } });
+    const workflow = data.workflow;
+    state.workflows.push(workflow);
+    state.collapsedWorkflows.delete(workflow.id);
+    renderSidebar();
+    toast(`Папка «${workflow.name}» создана`, 'ok');
+  } catch (error) {
+    if (!error.unauthorized) toast(error.message);
+  }
+}
+
 async function renameWorkflow(workflow, anchor = null) {
   const name = await promptPopover({
     anchor: anchor || $('#newProjectBtn'),
@@ -2766,15 +2937,17 @@ function applyTheme(theme, persist = true) {
       /* ignore */
     }
   }
-  const toggle = $('#themeToggle');
-  if (!toggle) return;
+  /* Кнопка темы есть и на экране входа: обе должны показывать одно и то же. */
   const light = next === 'light';
-  toggle.title = light ? 'Тёмная тема' : 'Светлая тема';
-  toggle.setAttribute('aria-label', light ? 'Включить тёмную тему' : 'Включить светлую тему');
-  const moon = $('.icon-moon', toggle);
-  const sun = $('.icon-sun', toggle);
-  if (moon) moon.classList.toggle('hidden', light);
-  if (sun) sun.classList.toggle('hidden', !light);
+  const toggles = document.querySelectorAll('.theme-toggle');
+  for (const toggle of toggles) {
+    toggle.title = light ? 'Тёмная тема' : 'Светлая тема';
+    toggle.setAttribute('aria-label', light ? 'Включить тёмную тему' : 'Включить светлую тему');
+    const moon = $('.icon-moon', toggle);
+    const sun = $('.icon-sun', toggle);
+    if (moon) moon.classList.toggle('hidden', light);
+    if (sun) sun.classList.toggle('hidden', !light);
+  }
   const meta = document.querySelector('meta[name="theme-color"]');
   if (meta) meta.setAttribute('content', light ? '#ffffff' : '#151517');
 }
@@ -3035,7 +3208,10 @@ function toggleDictation() {
 /* ------------------------------ spellcheck ------------------------------ */
 
 async function checkSpelling() {
-  if (state.streaming) return;
+  if (state.streaming) {
+    toast('Дождитесь ответа — проверка начнётся после');
+    return;
+  }
   const input = $('#input');
   const source = input.value;
   if (!source.trim()) {
@@ -3106,15 +3282,34 @@ $('#backdrop').addEventListener('click', () => {
 });
 /* Крестик в заголовке ящика: тем же путём, что затемнение и кнопка-папка. */
 $('#filesClose').addEventListener('click', () => closeFilesDrawer());
+/* «Ещё» в шапке. Раньше без открытого диалога кнопка молча ничего не делала:
+   в новом проекте это выглядело как поломка. Теперь меню всегда открывается —
+   без диалога в нём создание диалога и выгрузка проекта. */
 $('#chatMenuBtn').addEventListener('click', (event) => {
-  if (!state.chat) return;
   const anchor = event.currentTarget;
-  openContextMenu(anchor, [
-    { label: 'Переименовать диалог', icon: ICONS.pen, action: () => renameChat(state.chat, anchor) },
-    { label: 'Скачать проект', icon: ICONS.archive, action: () => window.open(`/api/projects/${state.activeProjectId}/download`, '_blank') },
-    { sep: true },
-    { label: 'Удалить диалог', icon: ICONS.trash, danger: true, action: () => deleteChat(state.chat, anchor) },
-  ]);
+  const chat = state.chat;
+  const items = [];
+  if (chat) {
+    items.push({ label: 'Переименовать диалог', icon: ICONS.pen, action: () => renameChat(chat, anchor) });
+  } else if (state.activeProjectId) {
+    items.push({ label: 'Новый диалог', icon: ICONS.plus, action: () => ensureChat().then(() => $('#input').focus()) });
+  }
+  if (state.activeProjectId) {
+    items.push({
+      label: 'Скачать проект',
+      icon: ICONS.archive,
+      action: () => window.open(`/api/projects/${state.activeProjectId}/download`, '_blank'),
+    });
+  }
+  if (chat) {
+    items.push({ sep: true });
+    items.push({ label: 'Удалить диалог', icon: ICONS.trash, danger: true, action: () => deleteChat(chat, anchor) });
+  }
+  if (!items.length) {
+    toast('Сначала создайте проект');
+    return;
+  }
+  openContextMenu(anchor, items);
 });
 
 /* ------------------------------ panel resize ------------------------------ */
@@ -3366,9 +3561,11 @@ $('#input').addEventListener('keydown', (event) => {
     sendMessage();
   }
 });
-$('#themeToggle').addEventListener('click', () => {
-  applyTheme(currentTheme() === 'light' ? 'dark' : 'light');
-});
+for (const toggle of document.querySelectorAll('.theme-toggle')) {
+  toggle.addEventListener('click', () => {
+    applyTheme(currentTheme() === 'light' ? 'dark' : 'light');
+  });
+}
 $('#micBtn').addEventListener('click', toggleDictation);
 $('#dictationCancel').addEventListener('click', () => stopDictation(true));
 $('#spellBtn').addEventListener('click', checkSpelling);

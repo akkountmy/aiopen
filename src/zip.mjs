@@ -27,14 +27,23 @@ function findEocd(buf) {
 }
 
 /** Читает zip-архив (docx/xlsx/pptx) в память: Map<имя, Buffer>. */
+/* Чтение архива для разбора документов. Распаковка ограничена по размеру:
+   «zip-бомба» в docx иначе раздувается на гигабайты прямо в процессе сервера
+   и останавливает работу всех пользователей. */
+const ZIP_MAX_ENTRY_BYTES = 48 * 1024 * 1024;
+const ZIP_MAX_TOTAL_BYTES = 128 * 1024 * 1024;
+
 export function readZip(buf) {
   const eocd = findEocd(buf);
   if (eocd < 0) throw new Error('Не zip-архив');
   const count = buf.readUInt16LE(eocd + 10);
   const cdOffset = buf.readUInt32LE(eocd + 16);
   const entries = new Map();
+  let total = 0;
+  let skipped = 0;
   let ptr = cdOffset;
   for (let i = 0; i < count; i++) {
+    if (total >= ZIP_MAX_TOTAL_BYTES) break;
     if (ptr + 46 > buf.length || buf.readUInt32LE(ptr) !== 0x02014b50) break;
     const method = buf.readUInt16LE(ptr + 10);
     const compSize = buf.readUInt32LE(ptr + 20);
@@ -51,14 +60,32 @@ export function readZip(buf) {
     const lExtraLen = buf.readUInt16LE(localOffset + 28);
     const dataStart = localOffset + 30 + lNameLen + lExtraLen;
     const data = buf.subarray(dataStart, dataStart + compSize);
+    /* Заявленный размер в оглавлении может врать — режем по факту распаковки. */
+    const cap = Math.min(ZIP_MAX_ENTRY_BYTES, ZIP_MAX_TOTAL_BYTES - total);
+    if (rawSize > cap * 32) {
+      skipped += 1;
+      continue;
+    }
     try {
-      if (method === 0) entries.set(name, Buffer.from(data));
-      else if (method === 8) entries.set(name, zlib.inflateRawSync(data));
+      if (method === 0) {
+        if (data.length > cap) {
+          skipped += 1;
+          continue;
+        }
+        entries.set(name, Buffer.from(data));
+        total += data.length;
+      } else if (method === 8) {
+        const inflated = zlib.inflateRawSync(data, { maxOutputLength: cap });
+        entries.set(name, inflated);
+        total += inflated.length;
+      }
     } catch {
-      /* пропускаем повреждённую запись */
+      /* пропускаем повреждённую или слишком большую запись */
+      skipped += 1;
     }
     if (rawSize === 0) continue;
   }
+  entries.skippedCount = skipped;
   return entries;
 }
 

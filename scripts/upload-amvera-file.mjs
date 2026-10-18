@@ -1,4 +1,4 @@
-﻿// Р—Р°РіСЂСѓР·РєР° РѕРґРЅРѕРіРѕ С„Р°Р№Р»Р° РІ Amvera: node scripts/_upload-one.mjs public/app.js
+// Загрузка одного файла в Amvera: node scripts/_upload-one.mjs public/app.js
 import fs from 'node:fs';
 import path from 'node:path';
 import { callTool } from './amvera-mcp.mjs';
