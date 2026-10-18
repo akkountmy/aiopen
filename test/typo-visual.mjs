@@ -6,7 +6,9 @@
 // Эталон — типографика DSH (dsh-client-ui-theme): 14/22 основной текст, 13/20
 // второй уровень, 12/18 подписи, 11/14 метки, шкала заголовков 16/24 – 21/30,
 // markdown 14/24 с h1 700 21/30, h2 700 19/28, h3 700 18/26, h4 600 14/24,
-// код 11/19, таблица 13/22. Ни один размер не меняется по ширине экрана.
+// код 11/19, таблица 13/22. Ни один размер не меняется по ширине экрана —
+// единственное исключение поле ввода на телефоне: 16 px вместо 14, иначе
+// iOS Safari сам увеличивает страницу при фокусе (см. test/ui-keyboard.mjs).
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -115,6 +117,11 @@ const EXPECTED = {
   '.file-row': ['13px', '20px', null],
   '.modal-title': ['16px', '24px', '600'],
 };
+
+// Осознанное отклонение от «шкала не зависит от ширины»: на телефоне и узком
+// планшете поле ввода набирается кеглем 16 px, иначе iOS приближает страницу
+// при фокусе и правый край уезжает за экран.
+const IOS_INPUT_FIX = { selector: '#input', upTo: 860, value: ['16px', '24px', null] };
 
 // Значения внутри markdown проверяем на искусственном блоке: он получает те же
 // классы, что и ответ ассистента, поэтому CSS применяется ровно тот же.
@@ -264,8 +271,11 @@ try {
       return out;
     })()`);
 
+    const expectedFor = { ...EXPECTED };
+    if (breakpoint.width <= IOS_INPUT_FIX.upTo) expectedFor[IOS_INPUT_FIX.selector] = IOS_INPUT_FIX.value;
+
     const problems = [];
-    for (const [selector, expected] of Object.entries(EXPECTED)) {
+    for (const [selector, expected] of Object.entries(expectedFor)) {
       const actual = measured[selector];
       if (!actual) continue; // элемента нет в этой раскладке — не ошибка
       for (let index = 0; index < 3; index += 1) {
@@ -305,6 +315,7 @@ try {
         for (const [selector, actual] of Object.entries(measured)) {
           const base = desktop[selector];
           if (!actual || !base) continue;
+          if (selector === IOS_INPUT_FIX.selector && breakpoint.width <= IOS_INPUT_FIX.upTo) continue;
           if (actual[0] !== base[0] || actual[1] !== base[1]) {
             scale.push(`${selector}: ${base.slice(0, 2).join('/')} -> ${actual.slice(0, 2).join('/')}`);
           }

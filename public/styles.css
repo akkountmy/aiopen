@@ -61,11 +61,12 @@
   --lh-30: 30px;
   --lh-32: 32px;
   --shadow: 0 18px 44px rgba(0, 0, 0, 0.45);
-  /* Ширины боковых панелей повторяют эталонный макет: слева постоянная
-     колонка проектов 280 px, справа «Файлы проекта» — 45% окна
-     (не меньше 300 px и не больше 70%, диалогу остаётся минимум 400 px). */
+  /* Боковые панели одинаковые по ширине: слева «Проекты», справа «Файлы
+     проекта» — по умолчанию 280 px у обеих (одна и та же переменная), каждая
+     тянется за свой разделитель в пределах 264…420 px, диалогу всегда остаётся
+     минимум 400 px. Пока правую панель не тянули, она повторяет ширину левой. */
   --sidebar: 280px;
-  --files: clamp(300px, 45vw, 70vw);
+  --files: var(--sidebar);
   --head-h: 52px;
   color-scheme: dark;
 }
@@ -365,6 +366,11 @@ svg {
   color: var(--text-4);
 }
 
+/* Подсказка внутри карточки: не прилипает к списку или полю выше. */
+.popover-form .form-hint {
+  margin: 8px 0 0;
+}
+
 .field-error {
   min-height: 18px;
   margin: 2px 0 10px;
@@ -518,12 +524,14 @@ svg {
   grid-template-columns: var(--sidebar) minmax(0, 1fr) var(--files);
 }
 
-/* На узких экранах панель «Файлы проекта» — выезжающий ящик, и колонка диалога
-   не должна растягиваться на всю ширину: длинные строки читаются хуже, а
-   кнопки уезжают далеко от текста. */
-.app:not(.with-files) .thread,
-.app:not(.with-files) .composer {
+/* Колонка диалога не растягивается на всю ширину: длинные строки читаются хуже,
+   а кнопки уезжают далеко от текста. Мера одна и с открытой панелью файлов, и
+   без неё — при одинаковых боковых панелях диалог остаётся по центру. */
+.app .thread,
+.app .composer {
   width: min(780px, 100%);
+  margin-left: auto;
+  margin-right: auto;
 }
 
 .sidebar {
@@ -1128,29 +1136,13 @@ body.resizing {
   align-items: center;
   gap: 8px;
   min-width: 0;
-  /* Длинная цепочка «проект / диалог» обрезается по краю шапки, а не уезжает
-     под кнопки справа (тема, меню): иначе текст просвечивает сквозь подсветку
-     кнопок при наведении. */
+  /* В шапке только название диалога: длинное обрезается по краю шапки, а не
+     уезжает под кнопки справа (тема, меню) — иначе текст просвечивает сквозь
+     подсветку кнопок при наведении. */
   flex: 1 1 auto;
   overflow: hidden;
   font-size: var(--fs-14);
   line-height: var(--lh-20);
-}
-
-.crumb-project {
-  color: var(--text-3);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  /* Имя проекта полезно прочитать, поэтому оно не сжимается до «От…»:
-     держим минимум, а остальное место отдаём названию диалога. */
-  flex: 0 1 auto;
-  min-width: 72px;
-  max-width: 40%;
-}
-
-.crumb-sep {
-  color: var(--text-4);
 }
 
 .crumb-chat {
@@ -2112,6 +2104,11 @@ body.resizing {
   line-height: var(--lh-16);
 }
 
+/* В корне проекта путь не показываем: пустая строка не должна занимать место. */
+.files-crumb:empty {
+  display: none;
+}
+
 .files-list {
   flex: 1;
   overflow-y: auto;
@@ -2311,6 +2308,12 @@ body.resizing {
 
 /* ------------------------------ popover ------------------------------ */
 
+/* --------------------------- карточки и меню ---------------------------
+   Всё, что всплывает над панелью — карточка одного вида: тот же фон, граница,
+   скругление и тень. Форма («Новый проект», переименование) и меню действий
+   отличаются только внутренним ритмом, поэтому и меню, и форма стоят в одном
+   стиле. */
+
 .popover {
   position: fixed;
   z-index: 80;
@@ -2324,10 +2327,11 @@ body.resizing {
   animation: popover-in 0.14s ease-out;
 }
 
-/* Телефон: карточка, вызванная из выезжающей панели проектов («Новый
-   проект», подтверждение удаления), живёт внутри самой панели и не вылезает
-   за её скруглённые края. Позицию по вертикали считает placePopover. */
-.popover.in-drawer {
+/* Карточка, вызванная из боковой панели, живёт внутри неё и встаёт по её
+   границам: поля слева и справа одинаковые (10 px), поэтому окно симметрично
+   своему блоку — и на широком экране, и в выезжающем ящике на телефоне.
+   Позицию по вертикали считает placeInPanel(). */
+.popover.in-panel {
   position: absolute;
   left: 10px;
   right: 10px;
@@ -2388,6 +2392,47 @@ body.resizing {
   color: var(--text-4);
 }
 
+/* Пояснение над полем ввода — такой же мелкий текст, как подписи в формах. */
+.popover-label {
+  margin-bottom: 8px;
+  font-size: var(--fs-12);
+  color: var(--text-2);
+  line-height: var(--lh-16);
+}
+
+/* Список внутри карточки выглядит как её поле ввода, только со стрелкой. */
+.popover-select {
+  display: block;
+  width: 100%;
+  height: 36px;
+  padding: 0 30px 0 10px;
+  background-color: var(--layer-2);
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M6 8l4 4 4-4' fill='none' stroke='%238b8b93' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 9px center;
+  background-size: 13px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--fs-14);
+  outline: none;
+  appearance: none;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+  line-height: var(--lh-22);
+}
+
+.popover-select:focus {
+  border-color: rgba(86, 134, 254, 0.55);
+  background-color: var(--layer-3);
+}
+
+.popover-select option {
+  background: var(--layer-2);
+  color: var(--text);
+}
+
 .popover-actions {
   display: flex;
   justify-content: flex-end;
@@ -2425,16 +2470,22 @@ body.resizing {
 .menu {
   position: fixed;
   min-width: 190px;
-  background: var(--layer-2);
+  background: var(--layer-1);
   border: 1px solid var(--line-strong);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius);
   box-shadow: var(--shadow);
-  padding: 5px;
+  padding: 6px;
   z-index: 70;
 }
 
-.menu.in-drawer {
+/* Меню, открытое кнопкой внутри панели, тоже встаёт по её границам с равными
+   полями слева и справа — как карточка формы, а не узкой полоской у правого
+   края. */
+.menu.in-panel {
   position: absolute;
+  left: 10px;
+  right: 10px;
+  min-width: 0;
   z-index: 6;
 }
 
@@ -2444,10 +2495,10 @@ body.resizing {
   gap: 9px;
   width: 100%;
   height: 32px;
-  padding: 0 9px;
+  padding: 0 10px;
   border: none;
   background: transparent;
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-sm);
   color: var(--text-2);
   font-size: var(--fs-13);
   text-align: left;
@@ -3055,10 +3106,6 @@ body.resizing {
   .crumbs {
     gap: 6px;
   }
-  .crumb-project,
-  .crumb-sep {
-    display: none;
-  }
   .user-chip-top {
     height: 40px;
     width: 40px;
@@ -3295,6 +3342,9 @@ body.resizing {
     padding: 14px;
   }
   .popover-input {
+    height: 44px;
+  }
+  .popover-select {
     height: 44px;
   }
   .popover-actions .btn {

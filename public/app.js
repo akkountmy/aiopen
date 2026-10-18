@@ -603,8 +603,13 @@ function renderSidebar() {
 
 function updateCrumbs() {
   const project = activeProject();
-  $('#crumbProject').textContent = project ? project.name : '';
-  $('#crumbChat').textContent = state.chat?.title || 'Новый диалог';
+  /* В шапке только название диалога — без «проект /». Пока диалога нет,
+     показываем имя проекта, чтобы шапка не пустовала, но и без косой черты:
+     название проекта целиком живёт в боковой панели. */
+  $('#crumbChat').textContent = state.chat?.title || project?.name || '';
+  const crumb = $('#crumbChat');
+  const caption = state.chat?.title || project?.name || '';
+  crumb.title = caption;
   document.title = state.chat?.title ? `${state.chat.title} — DSH Open` : 'DSH Open';
 }
 
@@ -1351,7 +1356,11 @@ async function loadFiles(relPath) {
 function renderFiles() {
   const list = $('#filesList');
   const crumb = $('#filesCrumb');
-  crumb.textContent = state.filesPath === '.' ? '/ проект' : `/ ${state.filesPath}`;
+  /* В корне проекта строка пути не нужна: заголовок панели уже говорит «Файлы
+     проекта», а слово «проект» вверху панели только повторяло шапку. */
+  const atRoot = state.filesPath === '.';
+  crumb.textContent = atRoot ? '' : `/ ${state.filesPath}`;
+  crumb.classList.toggle('hidden', atRoot);
   list.innerHTML = '';
   if (state.filesPath !== '.') {
     const up = el('div', 'file-row');
@@ -1412,7 +1421,14 @@ function renderFiles() {
     del.innerHTML = ICONS.trash;
     del.addEventListener('click', async (event) => {
       event.stopPropagation();
-      const ok = await confirmDialog('Удалить файл?', `«${item.path}» будет удалён из проекта.`, 'Удалить', true);
+      /* Подтверждение — та же карточка в панели файлов, что и удаление проекта
+         в панели проектов: один стиль у всех удалений. */
+      const ok = await confirmPopover({
+        anchor: del,
+        title: 'Удалить файл?',
+        text: `«${item.path}» будет удалён из проекта.`,
+        confirmLabel: 'Удалить',
+      });
       if (!ok) return;
       try {
         await api(`/api/projects/${state.activeProjectId}/file?path=${encodeURIComponent(item.path)}`, { method: 'DELETE' });
@@ -1580,19 +1596,19 @@ function closeMenus() {
   $$('.menu').forEach((menu) => menu.remove());
 }
 
-/* На телефоне панель проектов — выезжающий ящик. Всплывающие карточки и меню,
-   вызванные из него, монтируем внутрь ящика: иначе они шире панели и вылезают
-   за её скруглённый край. На широком экране всё остаётся как было. */
-const drawerQuery = window.matchMedia('(max-width: 860px)');
-
-function drawerHostFor(anchor) {
-  if (!anchor || !drawerQuery.matches || !anchor.closest) return null;
-  return anchor.closest('.sidebar');
+/* Панель, из которой вызвана карточка или меню: слева «Проекты», справа «Файлы
+   проекта». Внутри панели окно живёт в ней самой (абсолютное позиционирование),
+   встаёт по её границам с равными полями слева и справа и не вылезает за
+   скруглённые края — одинаково на широком экране и в выезжающем ящике. */
+function panelHostFor(anchor) {
+  if (!anchor || !anchor.closest) return null;
+  return anchor.closest('.sidebar, .files-panel');
 }
 
-/* Позиция карточки внутри ящика: ширину задают стили (.popover.in-drawer),
-   здесь считаем вертикаль — под якорем, а если снизу нет места, то над ним. */
-function placePopoverInDrawer(node, anchor, host) {
+/* Вертикаль карточки внутри панели: под якорем, а если снизу нет места — над
+   ним. Горизонталь задана стилями (.in-panel): равные поля слева и справа. */
+function placeInPanel(node, anchor, host) {
+  if (!anchor.isConnected) return;
   const hostRect = host.getBoundingClientRect();
   const rect = anchor.getBoundingClientRect();
   const pad = 10;
@@ -1603,24 +1619,6 @@ function placePopoverInDrawer(node, anchor, host) {
     top = above > pad ? above : hostRect.height - height - pad;
   }
   node.style.top = `${Math.max(pad, top)}px`;
-}
-
-/* Меню внутри ящика: прижимаем к правому краю якоря и не выпускаем за границы
-   панели ни по горизонтали, ни по вертикали. */
-function placeMenuInDrawer(menu, anchor, host) {
-  const hostRect = host.getBoundingClientRect();
-  const rect = anchor.getBoundingClientRect();
-  const menuRect = menu.getBoundingClientRect();
-  const pad = 8;
-  let left = rect.right - hostRect.left - menuRect.width;
-  left = Math.max(pad, Math.min(left, hostRect.width - menuRect.width - pad));
-  let top = rect.bottom - hostRect.top + 6;
-  if (top + menuRect.height > hostRect.height - pad) {
-    const above = rect.top - hostRect.top - menuRect.height - 6;
-    top = above > pad ? above : hostRect.height - menuRect.height - pad;
-  }
-  menu.style.left = `${left}px`;
-  menu.style.top = `${Math.max(pad, top)}px`;
 }
 
 function openContextMenu(anchor, items) {
@@ -1642,11 +1640,11 @@ function openContextMenu(anchor, items) {
     });
     menu.appendChild(button);
   }
-  const host = drawerHostFor(anchor);
+  const host = panelHostFor(anchor);
   if (host) {
-    menu.classList.add('in-drawer');
+    menu.classList.add('in-panel');
     host.appendChild(menu);
-    placeMenuInDrawer(menu, anchor, host);
+    placeInPanel(menu, anchor, host);
   } else {
     document.body.appendChild(menu);
     const menuRect = menu.getBoundingClientRect();
@@ -1811,9 +1809,9 @@ function openPopover({ anchor, title = '', body, actions = [], onMount, onClose 
     node.appendChild(row);
   }
 
-  const host = drawerHostFor(anchor);
+  const host = panelHostFor(anchor);
   if (host) {
-    node.classList.add('in-drawer');
+    node.classList.add('in-panel');
     host.appendChild(node);
   } else {
     document.body.appendChild(node);
@@ -1822,7 +1820,7 @@ function openPopover({ anchor, title = '', body, actions = [], onMount, onClose 
   popoverAnchor = anchor;
   popoverHost = host;
   popoverOnClose = onClose;
-  if (host) placePopoverInDrawer(node, anchor, host);
+  if (host) placeInPanel(node, anchor, host);
   else placePopover(node, anchor, { align });
 
   const onDocDown = (event) => {
@@ -1838,7 +1836,7 @@ function openPopover({ anchor, title = '', body, actions = [], onMount, onClose 
   };
   const onViewportChange = () => {
     if (popoverNode && popoverHost) {
-      placePopoverInDrawer(popoverNode, anchor, popoverHost);
+      placeInPanel(popoverNode, anchor, popoverHost);
       return;
     }
     closePopover();
@@ -1944,7 +1942,59 @@ function confirmDialog(title, text, confirmLabel = 'Подтвердить', dan
   });
 }
 
-/* Подтверждение в виде карточки у левой панели — тем же блоком, что и «Новый проект». */
+/* Ввод в виде карточки рядом с кнопкой, из которой его открыли, — тот же блок,
+   что «Новый проект» и подтверждение удаления: заголовок, поле, «Отмена» и
+   главная кнопка. Возвращает введённое значение или null, если отменили. */
+function promptPopover({ anchor, title, label = '', value = '', placeholder = '', confirm = 'Сохранить', password = false }) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      resolve(result);
+    };
+    const form = el('form', 'popover-form');
+    if (label) form.appendChild(el('div', 'popover-label', label));
+    const input = el('input', 'popover-input');
+    input.type = password ? 'password' : 'text';
+    input.value = value;
+    input.placeholder = placeholder;
+    input.autocomplete = password ? 'new-password' : 'off';
+    input.setAttribute('aria-label', label || title);
+    form.appendChild(input);
+    const submit = (api) => {
+      finish(input.value.trim());
+      if (api) api.close();
+    };
+    openPopover({
+      anchor,
+      title,
+      body: form,
+      actions: [
+        { label: 'Отмена', kind: 'quiet', onClick: () => finish(null) },
+        { label: confirm, kind: 'primary', onClick: () => submit() },
+      ],
+      onClose: () => finish(null),
+    });
+    form.addEventListener('submit', (event) => {
+      event.preventDefault();
+      submit();
+      closePopover();
+    });
+    input.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter') return;
+      event.preventDefault();
+      submit();
+      closePopover();
+    });
+    setTimeout(() => {
+      input.focus();
+      input.select();
+    }, 40);
+  });
+}
+
+/* Подтверждение в виде карточки в своей панели — тем же блоком, что и «Новый проект». */
 function confirmPopover({ anchor, title, text, confirmLabel = 'Удалить' }) {
   return new Promise((resolve) => {
     let settled = false;
@@ -1955,7 +2005,6 @@ function confirmPopover({ anchor, title, text, confirmLabel = 'Удалить' }
     };
     openPopover({
       anchor,
-      align: 'sidebar',
       title,
       body: el('p', 'popover-text', text),
       actions: [
@@ -1991,11 +2040,11 @@ function openUserMenu(event) {
 function openProjectMenu(event, project) {
   const anchor = event.currentTarget;
   const items = [
-    { label: 'Переименовать', icon: ICONS.pen, action: () => renameProject(project) },
+    { label: 'Переименовать', icon: ICONS.pen, action: () => renameProject(project, anchor) },
     { label: 'Новый диалог', icon: ICONS.file, action: () => newChatFor(project) },
   ];
   if (state.workflows.length) {
-    items.push({ label: 'Переместить в папку', icon: ICONS.folder, action: () => moveProjectModal(project) });
+    items.push({ label: 'Переместить в папку', icon: ICONS.folder, action: () => moveProjectPopover(project, anchor) });
   }
   items.push({ sep: true }, { label: 'Удалить проект', icon: ICONS.trash, danger: true, action: () => deleteProject(project, anchor) });
   openContextMenu(anchor, items);
@@ -2005,7 +2054,7 @@ function openWorkflowMenu(event, workflow) {
   const anchor = event.currentTarget;
   openContextMenu(anchor, [
     { label: 'Новый проект в папке', icon: ICONS.folder, action: () => createProjectModal({ workflowId: workflow.id, anchor }) },
-    { label: 'Переименовать папку', icon: ICONS.pen, action: () => renameWorkflow(workflow) },
+    { label: 'Переименовать папку', icon: ICONS.pen, action: () => renameWorkflow(workflow, anchor) },
     { sep: true },
     { label: 'Удалить папку', icon: ICONS.trash, danger: true, action: () => deleteWorkflow(workflow, anchor) },
   ]);
@@ -2014,14 +2063,20 @@ function openWorkflowMenu(event, workflow) {
 function openChatMenu(event, chat) {
   const anchor = event.currentTarget;
   openContextMenu(anchor, [
-    { label: 'Переименовать', icon: ICONS.pen, action: () => renameChat(chat) },
+    { label: 'Переименовать', icon: ICONS.pen, action: () => renameChat(chat, anchor) },
     { sep: true },
     { label: 'Удалить диалог', icon: ICONS.trash, danger: true, action: () => deleteChat(chat, anchor) },
   ]);
 }
 
-async function renameProject(project) {
-  const name = await promptDialog({ title: 'Название проекта', label: 'Как назвать проект?', value: project.name });
+async function renameProject(project, anchor = null) {
+  const name = await promptPopover({
+    anchor: anchor || $('#newProjectBtn'),
+    title: 'Название проекта',
+    label: 'Как назвать проект?',
+    value: project.name,
+    confirm: 'Сохранить',
+  });
   if (!name || name === project.name) return;
   try {
     await api(`/api/projects/${project.id}`, { method: 'PATCH', body: { name } });
@@ -2100,10 +2155,11 @@ async function newChat() {
 
 /* ---------------------- проекты и workflow ---------------------- */
 
-function workflowSelectField({ value = '', allowNone = true } = {}) {
-  const field = el('label', 'field');
-  field.appendChild(el('span', 'field-label', 'Папка проектов'));
-  const select = el('select');
+function workflowSelectField({ value = '', allowNone = true, variant = 'form' } = {}) {
+  const inPopover = variant === 'popover';
+  const field = el(inPopover ? 'div' : 'label', inPopover ? 'popover-field' : 'field');
+  field.appendChild(el(inPopover ? 'div' : 'span', inPopover ? 'popover-label' : 'field-label', 'Папка проектов'));
+  const select = el('select', inPopover ? 'popover-select' : '');
   if (allowNone) {
     const none = el('option');
     none.value = '';
@@ -2167,7 +2223,12 @@ function createProjectModal({ workflowId = '', anchor = null } = {}) {
     anchor: anchor || $('#newProjectBtn'),
     title: folder ? `Новый проект в «${folder.name}»` : 'Новый проект',
     body: form,
-    actions: [{ id: 'create', label: 'Создать проект', kind: 'primary', onClick: submit }],
+    /* Тот же низ карточки, что у подтверждения удаления: «Отмена» и главная
+       кнопка. Раньше здесь была одна кнопка, и окно выглядело чужим. */
+    actions: [
+      { id: 'cancel', label: 'Отмена', kind: 'quiet' },
+      { id: 'create', label: 'Создать проект', kind: 'primary', onClick: submit },
+    ],
     onMount: (_body, _node, actions) => {
       nameInput.addEventListener('keydown', (event) => {
         if (event.key === 'Enter') {
@@ -2180,11 +2241,13 @@ function createProjectModal({ workflowId = '', anchor = null } = {}) {
   });
 }
 
-async function renameWorkflow(workflow) {
-  const name = await promptDialog({
+async function renameWorkflow(workflow, anchor = null) {
+  const name = await promptPopover({
+    anchor: anchor || $('#newProjectBtn'),
     title: 'Название папки',
     label: 'Как назвать папку проектов?',
     value: workflow.name,
+    confirm: 'Сохранить',
   });
   if (!name || name === workflow.name) return;
   try {
@@ -2223,16 +2286,18 @@ async function deleteWorkflow(workflow, anchor = null) {
   }
 }
 
-function moveProjectModal(project) {
+function moveProjectPopover(project, anchor = null) {
   if (!state.workflows.length) {
     toast('Сначала создайте папку проектов');
     return;
   }
-  const form = el('form', 'form-grid');
-  const { field, select } = workflowSelectField({ value: project.workflowId || '' });
+  if (!anchor) return;
+  const form = el('div', 'popover-form');
+  const { field, select } = workflowSelectField({ value: project.workflowId || '', variant: 'popover' });
   form.appendChild(field);
-  form.appendChild(el('p', 'form-hint', 'Файлы и диалоги проекта останутся на месте.'));
-  openModal({
+  form.appendChild(el('p', 'form-hint', 'Файлы проекта останутся на месте.'));
+  openPopover({
+    anchor,
     title: 'Переместить проект',
     body: form,
     actions: [
@@ -2259,8 +2324,14 @@ function moveProjectModal(project) {
   });
 }
 
-async function renameChat(chat) {
-  const title = await promptDialog({ title: 'Название диалога', label: 'Как назвать диалог?', value: chat.title });
+async function renameChat(chat, anchor = null) {
+  const title = await promptPopover({
+    anchor: anchor || $('#newProjectBtn'),
+    title: 'Название диалога',
+    label: 'Как назвать диалог?',
+    value: chat.title,
+    confirm: 'Сохранить',
+  });
   if (!title || title === chat.title) return;
   try {
     await api(`/api/chats/${chat.id}`, { method: 'PATCH', body: { title } });
@@ -3019,11 +3090,12 @@ $('#backdrop').addEventListener('click', () => {
 });
 $('#chatMenuBtn').addEventListener('click', (event) => {
   if (!state.chat) return;
-  openContextMenu(event.currentTarget, [
-    { label: 'Переименовать диалог', icon: ICONS.pen, action: () => renameChat(state.chat) },
+  const anchor = event.currentTarget;
+  openContextMenu(anchor, [
+    { label: 'Переименовать диалог', icon: ICONS.pen, action: () => renameChat(state.chat, anchor) },
     { label: 'Скачать проект', icon: ICONS.archive, action: () => window.open(`/api/projects/${state.activeProjectId}/download`, '_blank') },
     { sep: true },
-    { label: 'Удалить диалог', icon: ICONS.trash, danger: true, action: () => deleteChat(state.chat) },
+    { label: 'Удалить диалог', icon: ICONS.trash, danger: true, action: () => deleteChat(state.chat, anchor) },
   ]);
 });
 
@@ -3032,29 +3104,47 @@ $('#chatMenuBtn').addEventListener('click', (event) => {
    за разделитель, ширины запоминаются. На телефоне панели — выезжающие ящики,
    там ширина задана экраном, поэтому ручки скрыты. */
 
-const LAYOUT_KEY = 'dshow-layout-v2';
-/* Размеры колонок повторяют эталонный макет: слева постоянная колонка
-   проектов 280 px (264…420), справа «Файлы проекта» — 45% окна
-   (не меньше 300 px и не больше 70%), диалогу всегда остаётся минимум 400 px. */
+const LAYOUT_KEY = 'dshow-layout-v3';
+/* Боковые панели одинаковые по ширине: слева «Проекты», справа «Файлы проекта»,
+   по умолчанию 280 px у обеих, каждая тянется в пределах 264…420 px, диалогу
+   всегда остаётся минимум 400 px. Пока правую панель не тянули, она повторяет
+   ширину левой — блоки симметричны, и это видно на любой ширине окна. */
 const PANEL_RULES = {
   sidebar: { min: 264, max: () => 420, def: () => 280 },
-  files: { min: 300, max: () => Math.round(window.innerWidth * 0.7), def: () => Math.round(window.innerWidth * 0.45) },
+  files: { min: 264, max: () => 420, def: () => 280 },
 };
 
-function readLayout() {
-  let saved = {};
+function readLayoutRaw() {
   try {
-    saved = JSON.parse(localStorage.getItem(LAYOUT_KEY) || '{}') || {};
+    const saved = JSON.parse(localStorage.getItem(LAYOUT_KEY) || '{}');
+    return saved && typeof saved === 'object' ? saved : {};
   } catch {
-    saved = {};
+    return {};
   }
-  const fit = (kind, value) => (Number.isFinite(value) ? Math.round(value) : PANEL_RULES[kind].def());
-  return { sidebar: fit('sidebar', saved.sidebar), files: fit('files', saved.files) };
 }
 
-function saveLayout(next) {
+/* Правая панель без своего размера равна левой: отдельного значения нет —
+   значит тянем её вслед за левой. */
+function readLayout() {
+  const raw = readLayoutRaw();
+  const sidebar = Number.isFinite(raw.sidebar) ? Math.round(raw.sidebar) : PANEL_RULES.sidebar.def();
+  const filesCustom = Number.isFinite(raw.files);
+  return { sidebar, files: filesCustom ? Math.round(raw.files) : sidebar, filesCustom };
+}
+
+function saveLayout(patch) {
   try {
-    localStorage.setItem(LAYOUT_KEY, JSON.stringify(next));
+    localStorage.setItem(LAYOUT_KEY, JSON.stringify({ ...readLayoutRaw(), ...patch }));
+  } catch {
+    /* приватный режим — просто не запоминаем */
+  }
+}
+
+function forgetLayout(key) {
+  const raw = readLayoutRaw();
+  delete raw[key];
+  try {
+    localStorage.setItem(LAYOUT_KEY, JSON.stringify(raw));
   } catch {
     /* приватный режим — просто не запоминаем */
   }
@@ -3066,12 +3156,22 @@ function clampPanel(kind, width, other) {
   return Math.max(rule.min, Math.min(limit, Math.round(width)));
 }
 
+/* Фактическая ширина панели на экране: из инлайнового стиля, а если его ещё
+   нет — из самого блока. */
+function appliedPanel(kind) {
+  const app = $('#app');
+  if (!app) return 0;
+  const value = Number.parseFloat(app.style.getPropertyValue(kind === 'sidebar' ? '--sidebar' : '--files'));
+  if (Number.isFinite(value)) return value;
+  const node = kind === 'sidebar' ? $('#sidebar') : $('#filesPanel');
+  return node ? Math.round(node.getBoundingClientRect().width) : 0;
+}
+
 function panelOtherWidth(kind) {
   const app = $('#app');
   if (!app) return 0;
-  const prefs = readLayout();
-  if (kind === 'sidebar') return app.classList.contains('with-files') ? prefs.files : 0;
-  return prefs.sidebar;
+  if (kind === 'sidebar') return app.classList.contains('with-files') ? appliedPanel('files') : 0;
+  return appliedPanel('sidebar');
 }
 
 function applyLayout() {
@@ -3083,8 +3183,11 @@ function applyLayout() {
     return;
   }
   const prefs = readLayout();
-  app.style.setProperty('--sidebar', `${clampPanel('sidebar', prefs.sidebar, panelOtherWidth('sidebar'))}px`);
-  app.style.setProperty('--files', `${clampPanel('files', prefs.files, panelOtherWidth('files'))}px`);
+  const sidebar = clampPanel('sidebar', prefs.sidebar, prefs.filesCustom ? prefs.files : 0);
+  app.style.setProperty('--sidebar', `${sidebar}px`);
+  /* Правую панель не настраивали — она равна левой, без собственного размера. */
+  const files = prefs.filesCustom ? clampPanel('files', prefs.files, sidebar) : sidebar;
+  app.style.setProperty('--files', `${files}px`);
 }
 
 function initPanelResize(handle, kind) {
@@ -3100,8 +3203,22 @@ function initPanelResize(handle, kind) {
   const setWidth = (width, persist) => {
     const next = clampPanel(kind, width, panelOtherWidth(kind));
     app.style.setProperty(prop, `${next}px`);
-    if (persist) saveLayout({ ...readLayout(), [kind]: next });
+    /* Пока правую панель не настраивали отдельно, она повторяет левую: блоки
+       остаются одинаковыми, даже если потянуть разделитель проектов. */
+    if (kind === 'sidebar' && !readLayout().filesCustom) app.style.setProperty('--files', `${next}px`);
+    if (persist) saveLayout({ [kind]: next });
     return next;
+  };
+
+  /* Сброс (двойной щелчок или Home) возвращает правую панель к ширине левой,
+     а левую — к обычным 280 px. */
+  const resetWidth = () => {
+    if (kind === 'files') {
+      forgetLayout('files');
+      app.style.setProperty('--files', `${appliedPanel('sidebar')}px`);
+      return;
+    }
+    setWidth(PANEL_RULES.sidebar.def(), true);
   };
 
   let drag = null;
@@ -3125,7 +3242,7 @@ function initPanelResize(handle, kind) {
   });
   const finish = (event) => {
     if (!drag) return;
-    if (drag.moved) saveLayout({ ...readLayout(), [kind]: applied() });
+    if (drag.moved) saveLayout({ [kind]: applied() });
     drag = null;
     handle.classList.remove('dragging');
     document.body.classList.remove('resizing');
@@ -3138,9 +3255,9 @@ function initPanelResize(handle, kind) {
   handle.addEventListener('pointerup', finish);
   handle.addEventListener('pointercancel', finish);
 
-  // Двойной щелчок — вернуть обычную ширину.
+  // Двойной щелчок — вернуть обычную ширину (правая панель снова равна левой).
   handle.addEventListener('dblclick', () => {
-    if (canResize()) setWidth(PANEL_RULES[kind].def(), true);
+    if (canResize()) resetWidth();
   });
   handle.addEventListener('keydown', (event) => {
     if (!canResize()) return;
@@ -3154,10 +3271,13 @@ function initPanelResize(handle, kind) {
       setWidth(applied() + step * grow, true);
     } else if (event.key === 'Home') {
       event.preventDefault();
-      setWidth(PANEL_RULES[kind].def(), true);
+      resetWidth();
     }
   });
-  handle.title = kind === 'sidebar' ? 'Потяните, чтобы изменить ширину панели проектов' : 'Потяните, чтобы изменить ширину панели файлов';
+  handle.title =
+    kind === 'sidebar'
+      ? 'Потяните, чтобы изменить ширину панели проектов (двойной щелчок — сбросить)'
+      : 'Потяните, чтобы изменить ширину панели файлов (двойной щелчок — как у левой панели)';
   handle.setAttribute('aria-label', handle.title);
 }
 
