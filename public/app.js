@@ -2925,9 +2925,12 @@ $('#chatMenuBtn').addEventListener('click', (event) => {
    там ширина задана экраном, поэтому ручки скрыты. */
 
 const LAYOUT_KEY = 'dshow-layout';
-const PANEL_MIN = 200;
+/* Базовая ширина панелей — 200 px: узкие полосы по краям, диалогу остаётся
+   максимум места. Минимум чуть меньше, чтобы ручку можно было тянуть в обе
+   стороны даже от базовой ширины. */
+const PANEL_MIN = 180;
 const PANEL_MAX = 460;
-const PANEL_DEFAULT = 288;
+const PANEL_DEFAULT = 200;
 
 function readLayout() {
   let saved = {};

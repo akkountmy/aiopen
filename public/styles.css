@@ -28,8 +28,8 @@
   --font: -apple-system, BlinkMacSystemFont, "Segoe UI", "Inter", "Helvetica Neue", Arial, "Noto Sans", sans-serif;
   --mono: "SF Mono", "JetBrains Mono", "Fira Code", Consolas, "Liberation Mono", monospace;
   --shadow: 0 18px 44px rgba(0, 0, 0, 0.45);
-  --sidebar: 288px;
-  --files: 288px;
+  --sidebar: 200px;
+  --files: 200px;
   --head-h: 52px;
   color-scheme: dark;
 }
