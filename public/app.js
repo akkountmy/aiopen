@@ -3185,19 +3185,31 @@ if (document.fonts && document.fonts.ready) document.fonts.ready.then(autoResize
   const vv = window.visualViewport;
   if (!vv) return;
   const root = document.documentElement;
+  let frame = 0;
   const apply = () => {
-    const hidden = Math.round(window.innerHeight - vv.height);
+    frame = 0;
+    /* Safari подкручивает страницу, чтобы показать поле над клавиатурой. От
+       этого правый край уезжал за экран, а внизу оставалась полоса с адресом.
+       Возвращаем страницу на место — поле и так видно: высоту мы считаем. */
+    if (vv.offsetTop) window.scrollTo(0, 0);
+    const hidden = Math.round(window.innerHeight - vv.height - (vv.offsetTop || 0));
     if (hidden > 120) {
       root.classList.add('kb-open');
       root.style.setProperty('--app-h', `${Math.round(vv.height)}px`);
+      root.style.setProperty('--kb-offset', `${hidden}px`);
     } else {
       root.classList.remove('kb-open');
       root.style.removeProperty('--app-h');
+      root.style.removeProperty('--kb-offset');
     }
   };
+  const schedule = () => {
+    if (frame) return;
+    frame = requestAnimationFrame(apply);
+  };
   apply();
-  vv.addEventListener('resize', apply);
-  vv.addEventListener('scroll', apply);
+  vv.addEventListener('resize', schedule);
+  vv.addEventListener('scroll', schedule);
   window.addEventListener('orientationchange', () => setTimeout(apply, 250));
 })();
 

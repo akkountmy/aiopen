@@ -2961,6 +2961,34 @@ body.resizing {
     --radius-sm: 8px;
     --radius-xs: 6px;
   }
+  /* Телефон не должен растягиваться вбок: длинные адреса и строки переносятся
+     внутри своей колонки, а не выпихивают композер за правый край экрана.
+     Без этого при открытой клавиатуре страница «съезжала» вправо. */
+  html,
+  body {
+    overflow-x: hidden;
+    max-width: 100%;
+  }
+  .app,
+  .main,
+  .thread,
+  .composer-wrap,
+  .composer {
+    min-width: 0;
+    max-width: 100%;
+  }
+  .md,
+  .msg-user .bubble,
+  .tool-group .t-arg,
+  .tool-chip .t-arg {
+    overflow-wrap: anywhere;
+  }
+  .md pre,
+  .md .table-wrap,
+  .md img,
+  .md table {
+    max-width: 100%;
+  }
   .app,
   .app.with-files {
     grid-template-columns: minmax(0, 1fr);
@@ -3136,10 +3164,13 @@ body.resizing {
     width: 19px;
     height: 19px;
   }
-  /* 16 px — иначе iOS сам увеличивает страницу при фокусе, и края уезжают. */
+  /* 16 px — иначе iOS сам увеличивает страницу при фокусе, и края уезжают:
+     сообщения обрезаны справа, кнопка отправки оказывается за экраном. */
   #input {
     min-height: 38px;
     padding: 8px 4px;
+    font-size: 16px;
+    max-width: 100%;
   }
   .tool-btn {
     width: 36px;
@@ -3155,6 +3186,25 @@ body.resizing {
   .btn-send svg {
     width: 19px;
     height: 19px;
+  }
+
+  /* Авто-увеличение Safari срабатывает на любом поле, где шрифт меньше 16 px:
+     поиск, название проекта, имя файла. Держим минимум во всех полях. */
+  input,
+  textarea,
+  select {
+    font-size: max(16px, var(--fs-14));
+  }
+
+  /* Клавиатура открыта: под полем больше нет отступа «под домашний жест»,
+     иначе между полем и клавиатурой оставалась полоса с адресом страницы. */
+  html.kb-open .composer-wrap {
+    padding-bottom: 4px;
+  }
+  /* Пока клавиатура на экране, высота окна меньше обычной: лишние поля в
+     диалоге съедают место для сообщений. */
+  html.kb-open .thread {
+    padding-bottom: 4px;
   }
 
   /* ------------------------------- сайдбар ------------------------------- */
