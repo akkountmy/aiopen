@@ -542,6 +542,15 @@ function projectNode(project) {
     state.activeProjectId = project.id;
     if (!wasActive) {
       if (chats.length) state.expanded.add(project.id);
+      /* Проект — это отдельная папка со своими файлами. При переключении
+         закрываем диалог прошлого проекта и перечитываем «Файлы проекта»,
+         иначе справа оставался список чужой папки. */
+      state.chat = null;
+      state.activeChatId = null;
+      state.attachments = [];
+      renderAttachStrip();
+      state.filesPath = '.';
+      if (state.filesOpen) loadFiles('.');
     } else if (chats.length) {
       if (state.expanded.has(project.id)) state.expanded.delete(project.id);
       else state.expanded.add(project.id);
@@ -651,17 +660,6 @@ function renderSidebar() {
     }
     for (const workflow of state.workflows) root.appendChild(workflowNode(workflow));
   }
-  /* Папку проектов до этого можно было создать только запросом к API: меню
-     папки умело её переименовать и удалить, «Переместить в папку» советовало
-     «сначала создайте папку», а создать её было негде. Строка внизу списка
-     закрывает этот разрыв. */
-  const addFolder = el('button', 'list-add');
-  addFolder.type = 'button';
-  addFolder.id = 'newWorkflowBtn';
-  addFolder.title = 'Создать папку для проектов';
-  addFolder.innerHTML = `<span class="list-add-icon"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 6.5A1.5 1.5 0 014.5 5h3l1.5 2h6.5A1.5 1.5 0 0117 8.5v6A1.5 1.5 0 0115.5 16h-11A1.5 1.5 0 013 14.5v-8z"/><path d="M10 9.2v5M7.5 11.7h5"/></svg></span><span>Новая папка</span>`;
-  addFolder.addEventListener('click', (event) => createWorkflowModal({ anchor: event.currentTarget }));
-  root.appendChild(addFolder);
 }
 
 function updateCrumbs() {
@@ -1405,19 +1403,24 @@ function closeFilesDrawer() {
 
 async function loadFiles(relPath) {
   if (!state.activeProjectId) return;
+  /* Проект мог смениться, пока шёл запрос: ответ от прошлого проекта не должен
+     перерисовать список уже выбранного. */
+  const projectId = state.activeProjectId;
   const list = $('#filesList');
   list.innerHTML = '<div class="files-empty"><div class="spin-lg"></div></div>';
   state.filesLoading = true;
   try {
-    const data = await api(`/api/projects/${state.activeProjectId}/files?path=${encodeURIComponent(relPath)}&depth=6`);
+    const data = await api(`/api/projects/${projectId}/files?path=${encodeURIComponent(relPath)}&depth=6`);
+    if (projectId !== state.activeProjectId) return;
     state.filesPath = relPath;
     state.files = data.items || [];
     renderFiles();
   } catch (error) {
+    if (projectId !== state.activeProjectId) return;
     list.innerHTML = '';
     list.appendChild(el('div', 'files-empty', error.message));
   } finally {
-    state.filesLoading = false;
+    if (projectId === state.activeProjectId) state.filesLoading = false;
   }
 }
 
@@ -1451,7 +1454,7 @@ function renderFiles() {
     list.appendChild(up);
   }
   if (!state.files.length) {
-    list.appendChild(el('div', 'files-empty', 'Пока пусто. Перетащите файлы сюда или нажмите «Загрузить файлы».'));
+    list.appendChild(el('div', 'files-empty', 'Пока пусто. Загрузите файл кнопкой выше.'));
     return;
   }
   for (const item of state.files) {
@@ -1580,18 +1583,34 @@ function mimeOf(fileName) {
   return map[ext] || 'application/octet-stream';
 }
 
-/* Программы, которые открывают свой файл сами, по ссылке.
-   Word, Excel и PowerPoint умеют это через протоколы ms-word / ms-excel / ms-powerpoint. */
-const OFFICE_PROTOCOLS = {
-  docx: ['ms-word', 'Word'],
-  doc: ['ms-word', 'Word'],
-  rtf: ['ms-word', 'Word'],
-  xlsx: ['ms-excel', 'Excel'],
-  xlsm: ['ms-excel', 'Excel'],
-  xls: ['ms-excel', 'Excel'],
-  pptx: ['ms-powerpoint', 'PowerPoint'],
-  ppt: ['ms-powerpoint', 'PowerPoint'],
-};
+/* Документы Word, Excel и PowerPoint читаем прямо в сервисе: сервер уже умеет
+   доставать из них текст. Так щелчок по файлу не уводит в Office по ссылке —
+   а именно этот переход и показывал предупреждение «Некоторые файлы содержат
+   вирусы…» с адресом файла. Скачать оригинал можно кнопкой «Скачать». */
+const OFFICE_DOCS = /^(docx?|xlsm?|xlsx?|rtf|pptx?|ppt)$/;
+
+/* Клик по файлу открывает его без предупреждений: документ — в окне просмотра,
+   PDF и картинки — в новой вкладке браузера, HTML — в изолированной вкладке,
+   архивы и двоичные файлы сразу сохраняются. */
+function openFileViewer(item) {
+  const ext = String(item.name).split('.').pop().toLowerCase();
+  /* Архивы, видео и прочие двоичные файлы смотреть нечем — сразу сохраняем. */
+  if (/^(zip|rar|7z|tar|gz|tgz|bz2|xz|exe|msi|dll|so|dylib|bin|iso|dmg|apk|jar|mp4|webm|mov|avi|mkv|mp3|wav|flac|ogg|opus|ttf|otf|woff2?|eot|psd|ai|sketch|fig|sqlite|db)$/.test(ext)) {
+    window.open(fileUrl(item.path, true), '_blank');
+    return;
+  }
+  if (OFFICE_DOCS.test(ext)) {
+    openFilePreview(item);
+    return;
+  }
+  if (ext === 'html' || ext === 'htm') {
+    window.open(`/api/projects/${state.activeProjectId}/preview?path=${encodeURIComponent(item.path)}`, '_blank');
+    return;
+  }
+  /* PDF, изображения, тексты и таблицы открывает браузер — в новой вкладке. */
+  window.open(fileUrl(item.path, false), '_blank');
+}
+
 
 /* Документы, которые сервер умеет прочитать как текст: их можно посмотреть
    прямо в сервисе, не открывая Word/Excel и не скачивая файл. */
@@ -1607,18 +1626,20 @@ function canPreview(name) {
 async function openFilePreview(item) {
   const body = el('div', 'preview');
   body.innerHTML = '<div class="preview-loading"><span class="spinner"></span> Читаем файл…</div>';
+  const ext = String(item.name).split('.').pop().toLowerCase();
   const actions = [
     { label: 'Скачать', onClick: () => window.open(fileUrl(item.path, true), '_blank') },
-    { label: 'Закрыть' },
-    {
+  ];
+  /* У документов Office кнопки «Открыть» нет: она снова увела бы файл в Office
+     по ссылке, а вместе с ней вернулось бы предупреждение о безопасности. */
+  if (!OFFICE_DOCS.test(ext)) {
+    actions.push({
       label: 'Открыть',
       kind: 'primary',
-      onClick: () => {
-        /* Открытие в программе просмотра — тем же путём, что и щелчок по файлу. */
-        setTimeout(() => openFileViewer(item), 0);
-      },
-    },
-  ];
+      onClick: () => setTimeout(() => openFileViewer(item), 0),
+    });
+  }
+  actions.push({ label: 'Закрыть' });
   openModal({
     title: item.name,
     wide: true,
@@ -1640,7 +1661,7 @@ async function openFilePreview(item) {
           pre.textContent = data.text;
           bodyNode.appendChild(pre);
         } else if (!(data.warnings || []).length) {
-          bodyNode.appendChild(el('p', 'preview-empty', 'В файле нет текста для чтения — откройте или скачайте его.'));
+          bodyNode.appendChild(el('p', 'preview-empty', 'В файле нет текста для чтения — скачайте его кнопкой «Скачать».'));
         }
       } catch (error) {
         bodyNode.innerHTML = '';
@@ -1648,48 +1669,6 @@ async function openFilePreview(item) {
       }
     },
   });
-}
-
-/* Клик по файлу сразу открывает его в подходящей программе — без предпросмотра
-   в окне приложения: документы в Word/Excel/PowerPoint, PDF и картинки в новой
-   вкладке браузера, HTML в изолированной вкладке. */
-function openFileViewer(item) {
-  const ext = String(item.name).split('.').pop().toLowerCase();
-  /* Архивы, видео и прочие двоичные файлы смотреть нечем — сразу сохраняем. */
-  if (/^(zip|rar|7z|tar|gz|tgz|bz2|xz|exe|msi|dll|so|dylib|bin|iso|dmg|apk|jar|mp4|webm|mov|avi|mkv|mp3|wav|flac|ogg|opus|ttf|otf|woff2?|eot|psd|ai|sketch|fig|sqlite|db)$/.test(ext)) {
-    window.open(fileUrl(item.path, true), '_blank');
-    return;
-  }
-  if (ext === 'html' || ext === 'htm') {
-    window.open(`/api/projects/${state.activeProjectId}/preview?path=${encodeURIComponent(item.path)}`, '_blank');
-    return;
-  }
-  const office = OFFICE_PROTOCOLS[ext];
-  if (office) {
-    openInOffice(item, office[0], office[1]);
-    return;
-  }
-  /* PDF, изображения, тексты и таблицы открывает браузер — в новой вкладке. */
-  window.open(fileUrl(item.path, false), '_blank');
-}
-
-/* Word/Excel/PowerPoint скачивают файл сами, без cookie браузера, поэтому
-   сервер выдаёт отдельную короткую ссылку именно на этот файл. Адрес намеренно
-   короткий: Excel отказывается открывать файл, если путь длиннее 218 знаков. */
-async function openInOffice(item, protocol, appName) {
-  let link;
-  try {
-    link = await api(`/api/projects/${state.activeProjectId}/file-link?path=${encodeURIComponent(item.path)}`);
-  } catch (error) {
-    toast(`Не удалось открыть файл в ${appName}: ${error.message}`);
-    return;
-  }
-  try {
-    window.location.href = `${protocol}:ofe|u|${link.url}`;
-    toast(`Открываю в ${appName}… Если окно не появилось — скачайте файл кнопкой «Скачать».`, 'ok');
-  } catch {
-    toast(`Не удалось запустить ${appName}. Скачайте файл кнопкой «Скачать».`);
-  }
 }
 
 /* Загрузка файлов в проект. dir — папка внутри проекта ('.' — корень):
@@ -1755,6 +1734,13 @@ function panelHostFor(anchor) {
   return anchor.closest('.sidebar, .files-panel');
 }
 
+/* Нижняя граница видимой области: при открытой клавиатуре это её верх, а не
+   низ окна браузера. Карточка в панели должна целиком помещаться над ней. */
+function viewportBottom() {
+  const vv = window.visualViewport;
+  return vv ? vv.height + (vv.offsetTop || 0) : window.innerHeight;
+}
+
 /* Вертикаль карточки внутри панели: под якорем, а если снизу нет места — над
    ним. Горизонталь задана стилями (.in-panel): равные поля слева и справа. */
 function placeInPanel(node, anchor, host) {
@@ -1763,10 +1749,17 @@ function placeInPanel(node, anchor, host) {
   const rect = anchor.getBoundingClientRect();
   const pad = 10;
   const height = node.offsetHeight;
+  /* Панель тянется до низа окна, но клавиатура перекрывает его часть —
+     считаем доступной только видимую высоту. */
+  const limit = Math.min(hostRect.height, viewportBottom() - hostRect.top);
+  /* Если карточка выше видимой области, она прокручивается внутри себя —
+     тогда поле и кнопки всё равно доступны над клавиатурой. */
+  node.style.maxHeight = `${Math.max(160, limit - pad * 2)}px`;
+  node.style.overflowY = 'auto';
   let top = rect.bottom - hostRect.top + 8;
-  if (top + height > hostRect.height - pad) {
+  if (top + height > limit - pad) {
     const above = rect.top - hostRect.top - height - 8;
-    top = above > pad ? above : hostRect.height - height - pad;
+    top = above > pad ? above : limit - height - pad;
   }
   node.style.top = `${Math.max(pad, top)}px`;
 }
@@ -2402,30 +2395,6 @@ function createProjectModal({ workflowId = '', anchor = null } = {}) {
       setTimeout(() => nameInput.focus(), 30);
     },
   });
-}
-
-/* Новая папка проектов. Карточка та же, что у переименования папки: заголовок,
-   поле, «Отмена» и главная кнопка. */
-async function createWorkflowModal({ anchor = null } = {}) {
-  const value = await promptPopover({
-    anchor: anchor || $('#newWorkflowBtn') || $('#newProjectBtn'),
-    title: 'Новая папка',
-    label: 'Как назвать папку проектов?',
-    placeholder: 'Например, Работа',
-    confirm: 'Создать папку',
-  });
-  if (value === null) return;
-  const name = value.trim() || 'Новая папка';
-  try {
-    const data = await api('/api/workflows', { method: 'POST', body: { name } });
-    const workflow = data.workflow;
-    state.workflows.push(workflow);
-    state.collapsedWorkflows.delete(workflow.id);
-    renderSidebar();
-    toast(`Папка «${workflow.name}» создана`, 'ok');
-  } catch (error) {
-    if (!error.unauthorized) toast(error.message);
-  }
 }
 
 async function renameWorkflow(workflow, anchor = null) {
@@ -3282,36 +3251,6 @@ $('#backdrop').addEventListener('click', () => {
 });
 /* Крестик в заголовке ящика: тем же путём, что затемнение и кнопка-папка. */
 $('#filesClose').addEventListener('click', () => closeFilesDrawer());
-/* «Ещё» в шапке. Раньше без открытого диалога кнопка молча ничего не делала:
-   в новом проекте это выглядело как поломка. Теперь меню всегда открывается —
-   без диалога в нём создание диалога и выгрузка проекта. */
-$('#chatMenuBtn').addEventListener('click', (event) => {
-  const anchor = event.currentTarget;
-  const chat = state.chat;
-  const items = [];
-  if (chat) {
-    items.push({ label: 'Переименовать диалог', icon: ICONS.pen, action: () => renameChat(chat, anchor) });
-  } else if (state.activeProjectId) {
-    items.push({ label: 'Новый диалог', icon: ICONS.plus, action: () => ensureChat().then(() => $('#input').focus()) });
-  }
-  if (state.activeProjectId) {
-    items.push({
-      label: 'Скачать проект',
-      icon: ICONS.archive,
-      action: () => window.open(`/api/projects/${state.activeProjectId}/download`, '_blank'),
-    });
-  }
-  if (chat) {
-    items.push({ sep: true });
-    items.push({ label: 'Удалить диалог', icon: ICONS.trash, danger: true, action: () => deleteChat(chat, anchor) });
-  }
-  if (!items.length) {
-    toast('Сначала создайте проект');
-    return;
-  }
-  openContextMenu(anchor, items);
-});
-
 /* ------------------------------ panel resize ------------------------------ */
 /* Полная версия: ширину панели проектов и панели файлов можно тянуть мышью
    за разделитель, ширины запоминаются. На телефоне панели — выезжающие ящики,
@@ -3514,43 +3453,72 @@ if (document.fonts && document.fonts.ready) document.fonts.ready.then(autoResize
 
 /* Клавиатура телефона: окно держим по видимой области, иначе поле ввода
    уезжает под клавиатуру или страница прыгает при фокусе. */
-(function watchKeyboard() {
+function syncKeyboardViewport() {
   const vv = window.visualViewport;
   if (!vv) return;
   const root = document.documentElement;
+  /* Safari подкручивает страницу, чтобы показать поле над клавиатурой. От
+     этого правый край уезжал за экран, а внизу оставалась полоса с адресом.
+     Возвращаем страницу на место — поле и так видно: высоту мы считаем. */
+  if (vv.offsetTop) window.scrollTo(0, 0);
+  const hidden = Math.round(window.innerHeight - vv.height - (vv.offsetTop || 0));
+  if (hidden > 120) {
+    root.classList.add('kb-open');
+    root.style.setProperty('--app-h', `${Math.round(vv.height)}px`);
+    root.style.setProperty('--kb-offset', `${hidden}px`);
+  } else {
+    root.classList.remove('kb-open');
+    root.style.removeProperty('--app-h');
+    root.style.removeProperty('--kb-offset');
+  }
+  /* Карточка в панели проектов/файлов не должна прятаться за клавиатурой:
+     пересчитываем её положение по новой видимой высоте. */
+  if (popoverNode && popoverHost) {
+    placeInPanel(popoverNode, popoverAnchor, popoverHost);
+  }
+}
+
+(function watchKeyboard() {
+  const vv = window.visualViewport;
+  if (!vv) return;
   let frame = 0;
-  const apply = () => {
-    frame = 0;
-    /* Safari подкручивает страницу, чтобы показать поле над клавиатурой. От
-       этого правый край уезжал за экран, а внизу оставалась полоса с адресом.
-       Возвращаем страницу на место — поле и так видно: высоту мы считаем. */
-    if (vv.offsetTop) window.scrollTo(0, 0);
-    const hidden = Math.round(window.innerHeight - vv.height - (vv.offsetTop || 0));
-    if (hidden > 120) {
-      root.classList.add('kb-open');
-      root.style.setProperty('--app-h', `${Math.round(vv.height)}px`);
-      root.style.setProperty('--kb-offset', `${hidden}px`);
-    } else {
-      root.classList.remove('kb-open');
-      root.style.removeProperty('--app-h');
-      root.style.removeProperty('--kb-offset');
-    }
-  };
   const schedule = () => {
     if (frame) return;
-    frame = requestAnimationFrame(apply);
+    frame = requestAnimationFrame(() => {
+      frame = 0;
+      syncKeyboardViewport();
+    });
   };
-  apply();
+  syncKeyboardViewport();
   vv.addEventListener('resize', schedule);
   vv.addEventListener('scroll', schedule);
-  window.addEventListener('orientationchange', () => setTimeout(apply, 250));
+  window.addEventListener('orientationchange', () => setTimeout(syncKeyboardViewport, 250));
 })();
+
+/* Поле внутри карточки или окна: после появления клавиатуры поднимаем его в
+   видимую часть экрана. Ждём конца анимации клавиатуры — на телефоне это
+   около 300 мс. */
+document.addEventListener('focusin', (event) => {
+  if (!window.matchMedia('(max-width: 860px)').matches) return;
+  const target = event.target;
+  if (!(target instanceof HTMLElement)) return;
+  if (!target.matches('input, textarea, select')) return;
+  if (!target.closest('.popover, .modal')) return;
+  setTimeout(() => {
+    syncKeyboardViewport();
+    if (popoverNode && popoverHost) {
+      placeInPanel(popoverNode, popoverAnchor, popoverHost);
+    }
+    target.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }, 320);
+});
 
 // На телефоне фокус в поле ввода поднимает клавиатуру: лента должна
 // остаться у последнего сообщения, а не показывать середину переписки.
 $('#input').addEventListener('focus', () => {
   if (!window.matchMedia('(max-width: 860px)').matches) return;
   setTimeout(() => {
+    syncKeyboardViewport();
     const scroll = $('#scroll');
     if (scroll) scroll.scrollTop = scroll.scrollHeight;
   }, 300);

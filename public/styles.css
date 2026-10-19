@@ -493,6 +493,9 @@ svg {
   height: 18px;
   flex: none;
   color: var(--text-2);
+  /* Иконка нарисована в сетке 24 px: чуть плотнее штрих, чтобы по весу она
+     совпадала с остальными значками в сетке 20 px. */
+  stroke-width: 1.9;
 }
 
 .btn-new span {
@@ -2229,8 +2232,10 @@ body.resizing {
 }
 
 .files-head-actions .btn-icon {
-  width: 32px;
-  height: 32px;
+  /* Кнопка «Скачать» — ровно тот же блок, что заголовок «Файлы проекта»:
+     её hover-фон не должен быть меньше соседнего блока. */
+  width: 36px;
+  height: 36px;
 }
 
 .files-head-actions svg {
@@ -3318,18 +3323,18 @@ body.resizing {
   /* «Три точки» в шапке на телефоне не нужны: те же действия есть в строке
      диалога в ящике проектов (переименовать, удалить), а «скачать проект» —
      кнопка в панели файлов. Место в шапке дороже. */
-  #chatMenuBtn {
-    display: none;
-  }
   .crumbs {
     gap: 6px;
   }
+  /* Учётная запись на телефоне — значок вместе с ником: по одному человечку
+     не понять, под какой учёткой открыт сервис. Высота та же, что у соседних
+     кнопок шапки, ник обрезается, чтобы не выдавить остальные кнопки. */
   .user-chip-top {
     height: 40px;
-    width: 40px;
-    max-width: none;
-    padding: 0;
-    gap: 0;
+    width: auto;
+    max-width: 172px;
+    padding: 0 8px;
+    gap: 6px;
     justify-content: center;
     border-radius: var(--radius-md);
   }
@@ -3338,7 +3343,17 @@ body.resizing {
     width: 20px;
     height: 20px;
   }
-  .user-chip-top .user-meta,
+  .user-chip-top .user-meta {
+    display: flex;
+    flex: 0 1 auto;
+    min-width: 0;
+  }
+  .user-chip-top .user-name {
+    display: block;
+    max-width: 108px;
+    font-size: var(--fs-13);
+    line-height: var(--lh-20);
+  }
   .user-chip-top .chev {
     display: none;
   }
@@ -3429,9 +3444,12 @@ body.resizing {
     height: 38px;
     margin-bottom: 0;
   }
+  /* Скрепка нарисована в сетке 24 px: при том же размере значка штрих чуть
+     плотнее, иначе она выглядит тоньше орфографии и микрофона. */
   .attach-btn svg {
     width: 19px;
     height: 19px;
+    stroke-width: 1.9;
   }
   /* 16 px — иначе iOS сам увеличивает страницу при фокусе, и края уезжают:
      сообщения обрезаны справа, кнопка отправки оказывается за экраном. */
@@ -3441,10 +3459,17 @@ body.resizing {
     font-size: 16px;
     max-width: 100%;
   }
+  /* Скрепка, орфография и микрофон — одинаковые кнопки 38×38 с значком 19 px:
+     раньше скрепка была 38, инструменты 36, и ряд выглядел разнокалиберным. */
   .tool-btn {
-    width: 36px;
-    height: 36px;
-    margin-bottom: 1px;
+    width: 38px;
+    height: 38px;
+    margin-bottom: 0;
+    border-radius: var(--radius-sm);
+  }
+  .tool-btn svg {
+    width: 19px;
+    height: 19px;
   }
   .btn-send,
   .btn-stop {
@@ -3526,8 +3551,8 @@ body.resizing {
     height: 40px;
   }
   .files-head-actions .btn-icon {
-    width: 38px;
-    height: 38px;
+    width: 40px;
+    height: 40px;
   }
   .files-head-actions svg {
     width: 18px;
@@ -3538,6 +3563,11 @@ body.resizing {
   }
   .files-upload {
     height: 40px;
+  }
+  /* На телефоне подсказка про перетаскивание лишняя: файлы с компьютера туда
+     не перетащить, а кнопка «Загрузить файлы» стоит прямо над списком. */
+  .files-drop-note {
+    display: none;
   }
   .file-row {
     height: 38px;
@@ -3550,6 +3580,17 @@ body.resizing {
   .modal {
     width: 100%;
     max-height: min(88dvh, 760px);
+  }
+  /* Клавиатура открыта: окно живёт в видимой части экрана, а не уходит под
+     неё. Поле ввода остаётся на виду, кнопки — над клавиатурой. */
+  html.kb-open .modal-root {
+    bottom: var(--kb-offset, 0px);
+    align-items: flex-start;
+    padding-top: 8px;
+    padding-bottom: 8px;
+  }
+  html.kb-open .modal {
+    max-height: 100%;
   }
   .modal-head {
     padding: 12px 14px 10px;
@@ -3651,37 +3692,38 @@ body.resizing {
     height: 19px;
   }
   .user-chip-top {
-    width: 38px;
     height: 38px;
+    max-width: 146px;
+    padding: 0 6px;
+    gap: 5px;
   }
   .user-chip-top .account-glyph {
     width: 18px;
     height: 18px;
   }
+  .user-chip-top .user-name {
+    max-width: 88px;
+  }
   .balance-chip {
     height: 38px;
-    padding: 0 10px;
+    padding: 0 6px;
     margin-right: 0;
+    font-size: var(--fs-12);
   }
   .composer-row {
     gap: 3px;
   }
-  .attach-btn {
-    width: 34px;
-    height: 34px;
-  }
+  /* На узком экране кнопки ввода не уменьшаем: ряд из скрепки, орфографии,
+     микрофона и отправки остаётся одного размера — 38×38. */
+  .attach-btn,
   .tool-btn {
-    width: 32px;
-    height: 32px;
-  }
-  .tool-btn svg {
-    width: 17px;
-    height: 17px;
+    width: 38px;
+    height: 38px;
   }
   .btn-send,
   .btn-stop {
-    width: 36px;
-    height: 36px;
+    width: 38px;
+    height: 38px;
   }
 }
 

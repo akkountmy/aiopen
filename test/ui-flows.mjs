@@ -18,6 +18,7 @@ const STAMP = Date.now().toString().slice(-6);
 const NEW_USER = `flow_${STAMP}`;
 const NEW_PASS = 'Flow-pass-2026';
 const FILE_NAME = `flows-${STAMP}.txt`;
+const DOCX_NAME = `office-${STAMP}.docx`;
 
 const CHROME_CANDIDATES = [
   path.join(process.env['ProgramFiles'] || 'C:\\Program Files', 'Google', 'Chrome', 'Application', 'chrome.exe'),
@@ -291,63 +292,22 @@ try {
   const renamed = await waitFor(`[...document.querySelectorAll('.project-row .p-name')].some(n => n.textContent === ${JSON.stringify(`Проект ${STAMP} 2`)})`);
   renamed ? ok('проект переименован') : fail('переименование проекта', 'имя не изменилось');
 
-  /* ------------------------- 4. папка проектов ------------------------- */
+  /* ------------------------- 4. папки проектов ------------------------- */
 
-  const folderExists = await count('.workflow-row');
-  if (!folderExists && (await exists('#newWorkflowBtn'))) {
-    await click('#newWorkflowBtn');
-    await waitFor(`!!document.querySelector('.sidebar .popover input')`);
-    await fill('.sidebar .popover input', `Папка ${STAMP}`);
-    await press('.sidebar .popover input', 'Enter');
-    const folderAdded = await waitFor(`[...document.querySelectorAll('.workflow-row .w-name')].some(n => n.textContent.includes(${JSON.stringify(STAMP)}))`);
-    folderAdded ? ok('папка проектов создаётся из панели') : fail('создание папки', 'строки нет');
-  } else if (!folderExists) {
-    fail('папка проектов', 'в панели нет способа создать папку');
-  }
-
-  if (await count('.workflow-row')) {
-    const workflowId = await evaluate(`(() => {
-      const boot = [...document.querySelectorAll('.workflow-row .w-name')];
-      const row = boot.find(n => n.textContent.includes(${JSON.stringify(STAMP)}));
-      return row ? true : false;
-    })()`);
-    if (workflowId) {
-      // Переместить проект в папку через меню проекта.
-      await evaluate(`(() => {
-        const row = [...document.querySelectorAll('.project-row')].find(n => n.textContent.includes(${JSON.stringify(STAMP)}));
-        row.querySelector('.row-menu').click();
-      })()`);
-      await waitFor(`!!document.querySelector('.menu')`);
-      await evaluate(`(() => {
-        const item = [...document.querySelectorAll('.menu button')].find(b => b.textContent.includes('Переместить в папку'));
-        if (!item) throw new Error('нет пункта перемещения');
-        item.click();
-      })()`);
-      const selectShown = await waitFor(`!!document.querySelector('.sidebar .popover select')`);
-      if (selectShown) {
-        const options = await evaluate(`[...document.querySelectorAll('.sidebar .popover select option')].map(o => ({ v: o.value, t: o.textContent.trim() }))`);
-        const target = options.find((o) => o.t.includes('Папка ' + STAMP));
-        if (target) {
-          await evaluate(`(() => {
-            const select = document.querySelector('.sidebar .popover select');
-            select.value = ${JSON.stringify(target.v)};
-            select.dispatchEvent(new Event('change', { bubbles: true }));
-            return true;
-          })()`);
-          await evaluate(`(() => {
-            const btn = [...document.querySelectorAll('.sidebar .popover .btn-primary')][0];
-            btn.click();
-          })()`);
-          const moved = await waitFor(`!!document.querySelector('.workflow .project-row .p-name')`);
-          moved ? ok('проект перемещён в папку') : fail('перемещение проекта', 'под папкой строки нет');
-        } else {
-          fail('перемещение проекта', 'в списке папок нет созданной');
-        }
-      } else {
-        fail('перемещение проекта', 'карточка выбора папки не открылась');
-      }
-    }
-  }
+  /* В панели больше нет создания папок: остались только «Новый проект» и
+     диалоги внутри проектов. Старые папки (если есть) только переименовываются
+     и удаляются — проверяем, что кнопки создания действительно нет. */
+  const folderCreateBtn = await exists('#newWorkflowBtn');
+  folderCreateBtn
+    ? fail('создание папки', 'кнопка «Новая папка» всё ещё в панели')
+    : ok('в панели нет создания папки — только проект и диалоги');
+  const folderCreatesFromMenu = await evaluate(`(() => {
+    const row = document.querySelector('.workflow-row .row-menu');
+    return Boolean(row);
+  })()`);
+  folderCreatesFromMenu
+    ? ok('у старой папки осталось только меню переименования и удаления')
+    : ok('старых папок нет — меню папки не проверяем');
 
   /* ------------------------- 5. диалоги ------------------------- */
 
@@ -487,6 +447,51 @@ try {
         removed ? ok('файл удалён после подтверждения') : fail('удаление файла', 'строка осталась');
       } else {
         fail('удаление файла', 'подтверждение не открылось');
+      }
+
+      /* Клик по документу Office не должен уводить в Word/Excel по протоколу
+         ms-word/ms-excel: именно этот переход показывал предупреждение
+         «Некоторые файлы содержат вирусы…». Ждём окно просмотра внутри сервиса. */
+      await setInputFile('#filesPanelInput', DOCX_NAME, 'проверка клика по документу');
+      const docxUploaded = await waitFor(`[...document.querySelectorAll('.file-row .f-name')].some(n => n.textContent === ${JSON.stringify(DOCX_NAME)})`, 10000);
+      if (docxUploaded) {
+        const hrefBefore = await evaluate('location.href');
+        await evaluate(`(() => {
+          const row = [...document.querySelectorAll('.file-row')].find(r => (r.querySelector('.f-name') || {}).textContent === ${JSON.stringify(DOCX_NAME)});
+          row.querySelector('.f-name').click();
+        })()`);
+        const docxModal = await waitFor(`!!document.querySelector('.preview-modal')`, 8000);
+        const hrefAfter = await evaluate('location.href');
+        docxModal && hrefAfter === hrefBefore
+          ? ok('клик по документу Office открывает просмотр без перехода в Office')
+          : fail('клик по документу Office', { docxModal, before: hrefBefore, after: hrefAfter });
+        await evaluate(`document.querySelector('.modal-foot .btn-quiet')?.click()`);
+        await waitFor(`!document.querySelector('.preview-modal')`);
+
+        /* «Файлы проекта» принадлежат выбранному проекту: после переключения
+           в списке не должно остаться файлов прошлого проекта. */
+        const switched = await evaluate(`(() => {
+          const other = [...document.querySelectorAll('.project-row')].find(r => !r.textContent.includes(${JSON.stringify(STAMP)}));
+          if (!other) return false;
+          other.click();
+          return true;
+        })()`);
+        if (switched) {
+          await sleep(800);
+          const staleFiles = await evaluate(`[...document.querySelectorAll('.file-row .f-name')].map(n => n.textContent).filter(n => n === ${JSON.stringify(DOCX_NAME)})`);
+          staleFiles.length === 0
+            ? ok('файлы показывают только выбранный проект')
+            : fail('файлы проекта', 'остался список прошлого проекта');
+          await evaluate(`(() => {
+            const mine = [...document.querySelectorAll('.project-row')].find(r => r.textContent.includes(${JSON.stringify(STAMP)}));
+            if (!mine) return false;
+            mine.click();
+            return true;
+          })()`);
+          await sleep(800);
+        }
+      } else {
+        fail('клик по документу Office', 'файл не загрузился');
       }
     }
   } else {
