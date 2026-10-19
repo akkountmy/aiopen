@@ -3833,3 +3833,45 @@ body.resizing {
     transition-duration: 0.001ms !important;
   }
 }
+
+/* ------------------- подсказка про ярлык приложения ------------------- */
+
+.a2hs {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+/* Иконка прозрачная: подложка даёт ей воздух на тёмной теме и не мешает светлой. */
+.a2hs-icon {
+  flex: none;
+  width: 56px;
+  height: 56px;
+  border-radius: 13px;
+  background: var(--layer-2);
+}
+
+.a2hs-text {
+  min-width: 0;
+}
+
+.a2hs-text p {
+  margin: 0 0 8px;
+}
+
+.a2hs-steps {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 5px;
+  color: var(--text-2);
+}
+
+@media (max-width: 560px) {
+  .a2hs-icon {
+    width: 44px;
+    height: 44px;
+    border-radius: 11px;
+  }
+}
+

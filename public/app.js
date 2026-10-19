@@ -3662,6 +3662,84 @@ document.addEventListener('paste', (event) => {
   if (files.length) uploadFiles(files);
 });
 
+/* ---------------------- ярлык на домашний экран ---------------------- */
+
+/* Подсказка «поставьте ярлык» — ровно один раз на телефон и только в браузере:
+   если страница уже открыта как приложение, предлагать нечего. */
+const HOME_SCREEN_KEY = 'dshow-home-screen-offer-v1';
+
+function homeScreenPlatform() {
+  const ua = navigator.userAgent || '';
+  /* iPadOS с 13 версии представляется настольным Mac — отличаем планшет по мультитачу. */
+  if (/iPad|iPhone|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)) return 'ios';
+  if (/Android/i.test(ua)) return 'android';
+  return '';
+}
+
+function openedAsApp() {
+  return (
+    window.navigator.standalone === true ||
+    ['standalone', 'fullscreen', 'minimal-ui'].some((mode) => window.matchMedia(`(display-mode: ${mode})`).matches)
+  );
+}
+
+const HOME_SCREEN_STEPS = {
+  ios: [
+    'Нажмите «Поделиться» (значок квадрата со стрелкой вверх) внизу экрана.',
+    'Выберите «На экран „Домой“».',
+    'Нажмите «Добавить» — ярлык встанет рядом с приложениями.',
+  ],
+  android: [
+    'Откройте меню браузера — три точки в правом верхнем углу.',
+    'Выберите «Установить приложение» или «Добавить на главный экран».',
+    'Подтвердите «Установить» — ярлык появится на рабочем столе.',
+  ],
+};
+
+function offerHomeScreenOnce() {
+  const platform = homeScreenPlatform();
+  if (!platform || openedAsApp()) return;
+  try {
+    if (localStorage.getItem(HOME_SCREEN_KEY)) return;
+    /* Отмечаем сразу: подсказка не должна возвращаться ни при отказе, ни при сбое. */
+    localStorage.setItem(HOME_SCREEN_KEY, String(Date.now()));
+  } catch {
+    /* Без хранилища подсказка стала бы вечной — молчим. */
+    return;
+  }
+
+  const body = el('div', 'a2hs');
+  const icon = el('img', 'a2hs-icon');
+  icon.src = '/icons/icon-192.png';
+  icon.alt = '';
+  icon.width = 56;
+  icon.height = 56;
+  const text = el('div', 'a2hs-text');
+  text.appendChild(
+    el(
+      'p',
+      '',
+      'Вижу, вы открыли сервис с телефона. Добавьте DSH Open на домашний экран — тогда он запускается в одно касание и выглядит как обычное приложение, без адресной строки.',
+    ),
+  );
+  const steps = el('ol', 'a2hs-steps');
+  for (const step of HOME_SCREEN_STEPS[platform] || HOME_SCREEN_STEPS.android) {
+    steps.appendChild(el('li', '', step));
+  }
+  text.appendChild(steps);
+  body.append(icon, text);
+  openModal({ title: 'Добавить на домашний экран', body, actions: [{ label: 'Понятно', kind: 'primary' }] });
+}
+
+/* Воркер нужен только ради установки ярлыка как приложения (см. /sw.js): кэша
+   в нём нет, обновления подхватываются сразу. */
+function registerServiceWorker() {
+  if (!('serviceWorker' in navigator) || location.protocol !== 'https:') return;
+  navigator.serviceWorker.register('/sw.js').catch(() => {
+    /* Без воркера сайт работает как раньше: ярлык просто станет закладкой. */
+  });
+}
+
 /* ------------------------------ boot ------------------------------ */
 
 (async function boot() {
@@ -3676,4 +3754,7 @@ document.addEventListener('paste', (event) => {
     }
   }
   syncSignupAvailability();
+  registerServiceWorker();
+  /* Подсказку показываем, когда экран уже нарисован: иначе окно висит над пустой страницей. */
+  setTimeout(offerHomeScreenOnce, 1200);
 })();
