@@ -159,12 +159,30 @@ function tableBlock(slide, table, { x = M, y = 1.95, w = CONTENT_W, h } = {}) {
   const rows = (table.rows || []).filter((row) => Array.isArray(row) && row.length);
   const columnCount = Math.max(headers.length, ...rows.map((row) => row.length), 1);
   const cellOptions = { fontSize: 12, fontFace: font, color: COLORS.ink, valign: 'middle' };
+  const NUMERIC = /^[-+]?[\d\s.,]+\s*(%|₽|\$|€|x|×|шт\.?|мес\.?|нед\.?)?$/u;
+  const numericColumns = Array.from({ length: columnCount }, (_, columnIndex) => {
+    const sample = rows.map((row) => row[columnIndex]).filter((value) => value !== undefined && value !== null && value !== '');
+    if (!sample.length) return false;
+    const numeric = sample.filter((value) => typeof value === 'number' || NUMERIC.test(String(value).trim()));
+    return numeric.length / sample.length >= 0.6;
+  });
+  /* Ширины по содержимому: текстовая колонка шире числовой, иначе
+     «Содержание работ» ломается по три строки, а «1,5» занимает пол-слайда. */
+  const weights = Array.from({ length: columnCount }, (_, columnIndex) => {
+    const sample = [headers[columnIndex], ...rows.map((row) => row[columnIndex])]
+      .filter((value) => value !== undefined && value !== null && value !== '')
+      .map((value) => String(value).length);
+    const average = sample.length ? sample.reduce((sum, value) => sum + value, 0) / sample.length : 8;
+    return numericColumns[columnIndex] ? Math.min(1.4, Math.max(1.05, average / 10)) : Math.min(3, Math.max(1.6, average / 14));
+  });
+  const weightTotal = weights.reduce((sum, value) => sum + value, 0) || 1;
+  const colW = weights.map((weight) => (w * weight) / weightTotal);
   const body = rows.map((row, rowIndex) =>
     Array.from({ length: columnCount }, (_, columnIndex) => ({
       text: String(row[columnIndex] ?? ''),
       options: {
         ...cellOptions,
-        align: columnIndex === 0 ? 'left' : 'right',
+        align: columnIndex === 0 || !numericColumns[columnIndex] ? 'left' : 'right',
         fill: { color: rowIndex % 2 === 1 ? 'F7F8FA' : COLORS.white },
       },
     })),
@@ -178,7 +196,7 @@ function tableBlock(slide, table, { x = M, y = 1.95, w = CONTENT_W, h } = {}) {
         color: COLORS.white,
         fontSize: 12,
         fill: { color: COLORS.navy },
-        align: columnIndex === 0 ? 'left' : 'right',
+        align: columnIndex === 0 || !numericColumns[columnIndex] ? 'left' : 'right',
       },
     })),
   ];
@@ -187,9 +205,9 @@ function tableBlock(slide, table, { x = M, y = 1.95, w = CONTENT_W, h } = {}) {
     y,
     w,
     h: h ?? Math.min(4.3, 0.42 * (body.length + 1)),
-    colW: Array.from({ length: columnCount }, () => w / columnCount),
+    colW,
     border: { type: 'solid', color: COLORS.grid, pt: 0.75 },
-    margin: 0.08,
+    margin: 0.1,
     autoPage: false,
   });
 }
