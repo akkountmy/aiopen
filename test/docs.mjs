@@ -118,6 +118,15 @@ test('Word: настоящая диаграмма и картинка', async ()
               { name: '2026', values: [12, 15, 18] },
             ],
           },
+          /* Вторая диаграмма идёт массивом: у каждой свой rId и своя часть. */
+          charts: [
+            {
+              type: 'pie',
+              title: 'Доли каналов',
+              categories: ['B2B', 'Розница', 'Партнёры'],
+              series: [{ name: 'Доля', values: [56, 30, 14] }],
+            },
+          ],
         },
         { heading: 'Схема', images: [{ path: 'logo.png', caption: 'Логотип проекта' }] },
       ],
@@ -129,6 +138,8 @@ test('Word: настоящая диаграмма и картинка', async ()
   const buffer = read('Медиа.docx');
   const parts = await zipNames(buffer);
   assert.ok(parts.has('word/charts/chart1.xml'), 'нет части диаграммы');
+  assert.ok(parts.has('word/charts/chart2.xml'), 'вторая диаграмма потерялась');
+  assert.ok(parts.has('word/embeddings/chart2.xlsx'), 'у второй диаграммы нет книги данных');
   assert.ok(parts.has('word/charts/_rels/chart1.xml.rels'), 'нет связей диаграммы');
   assert.ok(parts.has('word/embeddings/chart1.xlsx'), 'нет книги данных диаграммы');
   assert.ok([...parts].some((name) => /^word\/media\//.test(name)), 'нет файла картинки');
@@ -143,6 +154,8 @@ test('Word: настоящая диаграмма и картинка', async ()
   assert.match(chart, /^<\?xml/);
   assert.match(chart, /c:externalData/, 'диаграмма без ссылки на книгу данных');
   assert.match(chart, /<c:barChart>/, 'тип диаграммы не столбцы');
+  const pie = await zipText(buffer, 'word/charts/chart2.xml');
+  assert.match(pie, /<c:pieChart>/, 'вторая диаграмма не круговая');
 
   const types = await zipText(buffer, '[Content_Types].xml');
   assert.match(types, /drawingml\.chart\+xml/, 'нет типа содержимого для диаграммы');
@@ -150,7 +163,7 @@ test('Word: настоящая диаграмма и картинка', async ()
   const rels = await zipText(buffer, 'word/_rels/document.xml.rels');
   assert.match(rels, /relationships\/chart/, 'нет связи документа с диаграммой');
 
-  assert.match(result.text, /диаграмм: 1/);
+  assert.match(result.text, /диаграмм: 2/);
   assert.match(result.text, /картинок: 1/);
 
   /* Книга данных должна читаться офисным движком, иначе «Изменить данные» сломано. */
