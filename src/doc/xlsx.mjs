@@ -15,6 +15,18 @@ const medium = { style: 'medium', color: { argb: argb(COLORS.navy) } };
 
 const isFormula = (value) => typeof value === 'string' && value.startsWith('=');
 
+/**
+ * Формат числа — в канонический вид. «# ##0», как пишут руками по-русски, Excel
+ * применяет только к последним разрядам и показывает «20400 000»; запятая —
+ * разделитель групп, который Excel сам рисует пробелом в русской локали.
+ */
+function normaliseNumFmt(format) {
+  if (!format) return format;
+  return String(format)
+    .trim()
+    .replace(/([#0])\s+([#0])/g, '$1,$2');
+}
+
 function normaliseCell(value) {
   if (isFormula(value)) return { formula: value.slice(1) };
   if (value === null || value === undefined || value === '') return null;
@@ -71,7 +83,7 @@ function buildSheet(workbook, sheet, index) {
       style: {
         font: { name: 'Segoe UI', size: 10 },
         alignment: { vertical: 'middle', horizontal: column.align || (Number(column.numeric) ? 'right' : 'left'), wrapText: column.wrap !== false },
-        numFmt: column.numFmt,
+        numFmt: normaliseNumFmt(column.numFmt),
       },
     };
   });
@@ -102,20 +114,23 @@ function buildSheet(workbook, sheet, index) {
   const lastRow = worksheet.rowCount;
   for (let rowNumber = firstDataRow; rowNumber <= lastRow; rowNumber += 1) {
     const row = worksheet.getRow(rowNumber);
+    const isTotal = sheet.totalRow === true && rowNumber === lastRow;
     for (let columnIndex = 1; columnIndex <= columnCount; columnIndex += 1) {
       const cell = row.getCell(columnIndex);
       const column = columns[columnIndex - 1] || {};
-      if (column.numFmt) cell.numFmt = column.numFmt;
-      cell.font = { name: 'Segoe UI', size: 10, bold: sheet.totalRow === true && rowNumber === lastRow, color: { argb: argb(COLORS.ink) } };
+      if (column.numFmt) cell.numFmt = normaliseNumFmt(column.numFmt);
+      cell.font = { name: 'Segoe UI', size: 10, bold: isTotal, color: { argb: argb(COLORS.ink) } };
       cell.alignment = { vertical: 'middle', horizontal: column.align || (Number(column.numeric) ? 'right' : 'left'), wrapText: column.wrap !== false };
-      cell.border = sheet.totalRow === true && rowNumber === lastRow
-        ? { top: medium }
-        : { bottom: thin };
-      if (sheet.totalRow === true && rowNumber === lastRow) {
-        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: argb(COLORS.soft) } };
+      cell.border = isTotal ? { top: medium } : { bottom: thin };
+      if (isTotal) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: argb(COLORS.soft) } };
+      /* Лёгкая полосатость: длинную таблицу читаешь по строке и не съезжаешь. */
+      else if (sheet.banding !== false && (rowNumber - firstDataRow) % 2 === 1) {
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: argb(COLORS.band) } };
       }
     }
-    row.height = 18;
+    /* Итог часто длиннее колонки («Итого за 12 месяцев»): высоту не фиксируем,
+       иначе вторая строка подписи налезает на соседнюю строку. */
+    if (!isTotal) row.height = 18;
   }
 
   if (hasHeader && sheet.autoFilter !== false && rows.length > 0) {
@@ -143,9 +158,12 @@ function buildSheet(workbook, sheet, index) {
 
   if (sheet.note) {
     const noteRow = worksheet.rowCount + 2;
+    /* Сноска идёт через всю таблицу: в одной узкой колонке она рвётся по слогам. */
+    if (columnCount > 1) worksheet.mergeCells(noteRow, 1, noteRow, columnCount);
     const cell = worksheet.getCell(noteRow, 1);
     cell.value = String(sheet.note);
     cell.font = { name: 'Segoe UI', size: 9, italic: true, color: { argb: argb(COLORS.muted) } };
+    cell.alignment = { vertical: 'top', horizontal: 'left', wrapText: false };
   }
 
   worksheet.headerFooter = {
@@ -163,7 +181,9 @@ function chartSpecFor(sheet, built, sheetIndex) {
   const categoriesColumn = Number(chart.categoriesColumn) || 1;
   const valueColumns = (Array.isArray(chart.valueColumns) && chart.valueColumns.length ? chart.valueColumns : [Math.min(categoriesColumn + 1, built.columnCount)]).map(Number);
   const from = built.firstDataRow;
-  const to = built.lastRow;
+  /* Строка «Итого» в диаграмму не идёт: итог — не точка ряда, из-за него
+     последний столбец вырастает в разы и ломает масштаб всего графика. */
+  const to = sheet.totalRow === true ? built.lastRow - 1 : built.lastRow;
   if (to < from) return null;
   const categories = [];
   for (let rowNumber = from; rowNumber <= to; rowNumber += 1) {
@@ -217,6 +237,9 @@ export async function buildXlsxPro(spec = {}) {
   workbook.lastModifiedBy = 'DSH Open Web';
   workbook.created = new Date();
   workbook.modified = new Date();
+  /* Формулы считаются при открытии: иначе книга показывает пустые ячейки, пока
+     пользователь не нажмёт F9, а диаграммы — значения из кэша (нули). */
+  workbook.calcProperties = { fullCalcOnLoad: true };
 
   const charts = [];
   sheets.forEach((sheet, index) => {

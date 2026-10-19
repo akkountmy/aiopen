@@ -142,7 +142,13 @@ function kpiRow(slide, items, { y = 1.95 } = {}) {
   });
 }
 
-function tableBlock(slide, table, { y = 1.95, h } = {}) {
+/** Естественная высота таблицы: не растягиваем строки на весь слайд. */
+function naturalTableHeight(table) {
+  const rows = Array.isArray(table?.rows) ? table.rows.length : 0;
+  return Math.min(4.3, 0.42 * (rows + 1));
+}
+
+function tableBlock(slide, table, { x = M, y = 1.95, w = CONTENT_W, h } = {}) {
   const headers = (table.headers || []).map(String);
   const rows = (table.rows || []).filter((row) => Array.isArray(row) && row.length);
   const columnCount = Math.max(headers.length, ...rows.map((row) => row.length), 1);
@@ -171,11 +177,11 @@ function tableBlock(slide, table, { y = 1.95, h } = {}) {
     })),
   ];
   slide.addTable([...head, ...body], {
-    x: M,
+    x,
     y,
-    w: CONTENT_W,
+    w,
     h: h ?? Math.min(4.3, 0.42 * (body.length + 1)),
-    colW: Array.from({ length: columnCount }, () => CONTENT_W / columnCount),
+    colW: Array.from({ length: columnCount }, () => w / columnCount),
     border: { type: 'solid', color: COLORS.grid, pt: 0.75 },
     margin: 0.08,
     autoPage: false,
@@ -200,12 +206,23 @@ function chartBlock(slide, chart, box) {
       valign: 'top',
     });
   }
+  /* Один ряд — один цвет: иначе PowerPoint красит каждую точку своим цветом и
+     диаграмма выглядит пёстро. В столбиках последний столбик (текущее значение)
+     выделяем акцентом, остальные держим в основном цвете бренда. */
+  const labels = (chart.categories || []).length || 1;
+  let chartColors = PALETTE;
+  if (kind !== 'pie' && kind !== 'doughnut' && series.length === 1) {
+    chartColors =
+      kind === 'bar'
+        ? Array.from({ length: labels }, (_, index) => (index === labels - 1 ? COLORS.accent : COLORS.navy))
+        : [COLORS.navy];
+  }
   slide.addChart(kind, series, {
     x: box.x,
     y: box.y,
     w: box.w,
     h: box.h,
-    chartColors: PALETTE,
+    chartColors,
     barDir: String(chart.type || 'column') === 'bar' ? 'bar' : 'col',
     barGrouping: 'clustered',
     showLegend: series.length > 1 || kind === 'pie' || kind === 'doughnut',
@@ -322,27 +339,41 @@ function contentSlide(slide, spec, meta) {
     });
   }
   if (spec.table) {
-    tableBlock(slide, spec.table, { y: bodyY, h: Math.max(1.5, H - bodyY - 1.0) });
+    /* С текстом слева таблица занимает правую половину, а не всю ширину. */
+    const box = hasVisual && (paragraphs.length || bullets.length)
+      ? { x: M + CONTENT_W * 0.5, y: bodyY, w: CONTENT_W * 0.5, h: naturalTableHeight(spec.table) }
+      : { y: bodyY, h: naturalTableHeight(spec.table) };
+    tableBlock(slide, spec.table, box);
   }
   footer(slide, meta);
 }
 
 function visualSlide(slide, spec, meta) {
   heading(slide, { kicker: spec.kicker, title: spec.title, wide: true });
-  if (spec.kpi?.length) kpiRow(slide, spec.kpi);
-  if (spec.chart) {
-    chartBlock(slide, spec.chart, { x: M, y: 2.35, w: CONTENT_W, h: H - 3.1 });
-  } else if (spec.table) {
-    tableBlock(slide, spec.table);
+  /* Теснота под графиком — самая частая причина наложения: сначала считаем,
+     сколько места съедят KPI и тезисы, и только потом отдаём остаток графику. */
+  let top = 2.35;
+  if (spec.kpi?.length) {
+    kpiRow(slide, spec.kpi);
+    top = 3.6;
   }
   const bullets = toList(spec.bullets);
-  if (bullets.length) {
+  const hasBullets = bullets.length > 0;
+  const bottom = hasBullets ? 5.45 : H - 0.95;
+  if (spec.chart) {
+    chartBlock(slide, spec.chart, { x: M, y: top, w: CONTENT_W, h: Math.max(2.1, bottom - top) });
+  } else if (spec.table) {
+    tableBlock(slide, spec.table, { y: top, h: Math.min(naturalTableHeight(spec.table), bottom - top) });
+  }
+  if (hasBullets) {
     slide.addText(bulletBlock(bullets, { fontSize: 13 }), {
       x: M,
-      y: H - 1.55,
+      y: H - 1.95,
       w: CONTENT_W,
-      h: 0.8,
+      h: 1.1,
       valign: 'top',
+      paraSpaceAfter: 4,
+      lineSpacingMultiple: 1.1,
     });
   }
   footer(slide, meta);
@@ -385,9 +416,10 @@ export async function buildPptxPro(spec = {}) {
   pptx.subject = spec.subtitle || '';
 
   const slides = Array.isArray(spec.slides) ? spec.slides : [];
-  const meta = { total: slides.length + (spec.cover === false || !spec.title ? 0 : 1), footerText: spec.footerText };
+  const hasCover = spec.cover !== false && Boolean(spec.title);
+  const meta = { total: slides.length + (hasCover ? 1 : 0), footerText: spec.footerText };
 
-  if (spec.cover !== false && spec.title) {
+  if (hasCover) {
     const slide = newSlide(pptx);
     coverSlide(slide, spec);
     if (spec.footerText) {
@@ -402,7 +434,8 @@ export async function buildPptxPro(spec = {}) {
 
   slides.forEach((raw, index) => {
     const slide = newSlide(pptx);
-    const slideMeta = { ...meta, index };
+    /* Номер слайда — его настоящее место в файле: обложка тоже считается. */
+    const slideMeta = { ...meta, index: index + (hasCover ? 1 : 0) };
     const layout = String(raw.layout || (raw.chart || raw.table ? 'visual' : 'content')).toLowerCase();
     if (layout === 'cover') coverSlide(slide, { ...spec, ...raw });
     else if (layout === 'section' || layout === 'divider') sectionSlide(slide, raw);

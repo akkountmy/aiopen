@@ -25,8 +25,10 @@ function rangeRef(sheetName, from, to) {
   return `${quoted}!${from}${to === from ? '' : `:${to}`}`;
 }
 
-function seriesXml({ name, nameRef, catRef, valRef, values, categories, index, isPie }) {
-  const color = PALETTE[(isPie ? 0 : index) % PALETTE.length];
+function seriesXml({ name, nameRef, catRef, valRef, values, categories, index, isPie, total }) {
+  /* Один ряд — тёмно-синий, как в отчётах; палитра нужна только когда рядов
+     несколько, иначе первая же красная серия выглядит как тревога. */
+  const color = total === 1 && !isPie ? '10233F' : PALETTE[(isPie ? 0 : index) % PALETTE.length];
   const catPoints = categories.length
     ? `<c:cat><c:strRef><c:f>${xmlEscape(catRef)}</c:f><c:strCache><c:ptCount val="${categories.length}"/>${categories
         .map((label, i) => `<c:pt idx="${i}"><c:v>${xmlEscape(label)}</c:v></c:pt>`)
@@ -85,7 +87,7 @@ function chartXml({ type, title, series, anchor }) {
   const legend = multiple || kind === 'pie' || kind === 'doughnut'
     ? '<c:legend><c:legendPos val="t"/><c:overlay val="0"/><c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr sz="900"><a:latin typeface="Segoe UI"/></a:defRPr></a:pPr><a:endParaRPr lang="ru-RU"/></a:p></c:txPr></c:legend>'
     : '';
-  const seriesXmlText = series.map((item, index) => seriesXml({ ...item, index, isPie })).join('');
+  const seriesXmlText = series.map((item, index) => seriesXml({ ...item, index, isPie, total: series.length })).join('');
   const plotInner = chartBody(kind, seriesXmlText);
   const axes = isPie
     ? ''

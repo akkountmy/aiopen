@@ -244,8 +244,13 @@ function drawKpiRow(doc, items, { width, y, x } = {}) {
     while (size > 9 && doc.font('sans-bold').fontSize(size).widthOfString(value) > boxWidth - 22) size -= 0.5;
     setFont(doc, true, size, COLORS.navy);
     doc.text(value, x + 11, y + 11, { width: boxWidth - 20, lineBreak: false });
-    setFont(doc, false, 7.5, COLORS.muted);
-    doc.text(String(item.label ?? '').toUpperCase(), x + 11, y + 34, { width: boxWidth - 20, characterSpacing: 0.4, lineBreak: false });
+    /* Подпись уменьшаем, пока не влезет в одну строку: перенос за границу
+       плашки читается как обрезанный текст. */
+    const label = String(item.label ?? '').toUpperCase();
+    let labelSize = 7.5;
+    while (labelSize > 5.2 && doc.font('sans').fontSize(labelSize).widthOfString(label) + label.length * 0.4 > boxWidth - 20) labelSize -= 0.2;
+    setFont(doc, false, labelSize, COLORS.muted);
+    doc.text(label, x + 11, y + 34, { width: boxWidth - 20, characterSpacing: 0.4, lineBreak: false });
   });
   return y + boxHeight + 14;
 }
@@ -254,7 +259,9 @@ function drawSectionBody(doc, section, { width }) {
   const x0 = doc.page.margins.left;
   for (const text of toList(section.paragraphs)) {
     setFont(doc, false, 10.5, COLORS.ink);
-    doc.text(text, x0, doc.y, { width, align: 'justify', lineGap: 3.4, paragraphGap: 7 });
+    /* Выключка по левому краю: pdfkit не переносит слова по слогам, и в
+       выключенном абзаце между словами появляются «реки» из пробелов. */
+    doc.text(text, x0, doc.y, { width, align: 'left', lineGap: 3.4, paragraphGap: 7 });
   }
   for (const item of toList(section.bullets)) {
     const y = doc.y;

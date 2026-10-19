@@ -11,6 +11,8 @@ export const COLORS = {
   muted: '6B6D76',
   hairline: 'D9DBE2',
   soft: 'F2F3F6',
+  /** Полосатость чётных строк в таблицах: светлее soft, чтобы не спорить с итогом. */
+  band: 'F8F9FB',
   white: 'FFFFFF',
   grid: 'E2E2E8',
 };

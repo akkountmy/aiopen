@@ -32,6 +32,10 @@ const PAGE_A4 = { width: Math.round(21 * TWIP_PER_CM), height: Math.round(29.7 *
 const MARGIN = { top: 1247, bottom: 1247, left: 1361, right: 1134, header: 708, footer: 708 };
 const BODY_WIDTH = PAGE_A4.width - MARGIN.left - MARGIN.right; // twips внутри полей
 
+/** Ячейка вида «320 000 ₽», «7,8%», «1,5 мес.», «-3,4%» — числовая. */
+const NUMERIC_CELL =
+  /^[-+−]?\d[\d\s\u00a0.,]*\s*(?:%|[₽₸$€£]|руб\.?|р\.?|тыс\.?|млн|млрд|шт\.?|чел\.?|мес\.?|дн\.?|лет|года?|кв\.?)?$/i;
+
 const run = (text, options = {}) =>
   new TextRun({
     text: String(text ?? ''),
@@ -89,7 +93,9 @@ function headerBlock({ title, kicker, subtitle, author, date, cover }) {
     para(kicker || '', { size: 9, bold: true, color: COLORS.accent, caps: true, after: 160 }),
     new Paragraph({
       children: [run(title || 'Документ', { size: 34, bold: true, color: COLORS.navy })],
-      spacing: { after: 200, line: 480 },
+      /* Крупный заголовок обложки: одинарный интервал — у крупного кегля 1,15
+         читается как двойной и рвёт строку заголовка на этажи. */
+      spacing: { after: 200, line: 240 },
     }),
   ];
   if (subtitle) children.push(para(subtitle, { size: DOC_TYPE.lede, color: COLORS.ink, after: 320, line: 320 }));
@@ -136,7 +142,12 @@ function dataTable(table) {
       ? table.numericColumns
       : headers.map((_, index) => index).filter((index) => {
           const sample = rows.map((row) => row[index]).filter((value) => value !== '' && value !== null && value !== undefined);
-          return sample.length > 0 && sample.every((value) => typeof value === 'number' || /^[-+]?[\d\s.,]+%?$/.test(String(value)));
+          if (!sample.length) return false;
+          /* Число с единицей измерения («320 000 ₽», «1,5 мес.») — всё ещё число:
+             такие колонки выравниваем по правому краю. Достаточно большинства,
+             чтобы одиночное «—» или «н/д» не ломало колонку. */
+          const numeric = sample.filter((value) => typeof value === 'number' || NUMERIC_CELL.test(String(value).trim()));
+          return numeric.length / sample.length >= 0.6;
         })
     ).map((index) => Number(index)),
   );
@@ -309,10 +320,11 @@ export async function buildDocxPro(spec = {}) {
   const toc = spec.toc === true && !cover;
   if (spec.toc === true) {
     children.push(
+      /* Заголовок «Содержание» — обычный абзац, а не Heading 1: иначе он сам
+         попадает в оглавление первой строкой (и указывает на себя же). */
       new Paragraph({
-        heading: HeadingLevel.HEADING_1,
         children: [run('Содержание', { size: DOC_TYPE.h1, bold: true, color: COLORS.navy })],
-        spacing: { after: 160 },
+        spacing: { before: 0, after: 200, line: 276 },
       }),
       new TableOfContents('Содержание', { hyperlink: true, headingStyleRange: '1-3' }),
       new Paragraph({ children: [new PageBreak()] }),
