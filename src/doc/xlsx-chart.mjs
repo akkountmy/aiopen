@@ -92,7 +92,11 @@ function chartXml({ type, title, series, anchor }) {
   /* Длинные подписи по горизонтали ломаются посередине слова — при 8+ категориях
      поворачиваем их на 45° и уменьшаем кегль, как это делает сам Excel. */
   const categoryCount = (series[0]?.categories || []).length;
-  const rotate = !isPie && kind !== 'bar' && categoryCount > 7;
+  const categoriesText = (series[0]?.categories || []).map((item) => String(item ?? ''));
+  const averageLabel = categoriesText.length
+    ? categoriesText.reduce((sum, item) => sum + item.length, 0) / categoriesText.length
+    : 0;
+  const rotate = !isPie && kind !== 'bar' && categoryCount > 7 && averageLabel > 4.5;
   const catBody = rotate ? '<a:bodyPr rot="-2700000" vert="horz"/>' : '<a:bodyPr/>';
   const catFontSize = categoryCount > 12 ? 800 : 900;
   const catTxPr = `<c:txPr>${catBody}<a:lstStyle/><a:p><a:pPr><a:defRPr sz="${catFontSize}"><a:solidFill><a:srgbClr val="6B6D76"/></a:solidFill><a:latin typeface="Segoe UI"/></a:defRPr></a:pPr><a:endParaRPr lang="ru-RU"/></a:p></c:txPr>`;
