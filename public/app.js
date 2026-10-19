@@ -85,6 +85,22 @@ function fmtSize(bytes) {
   return `${(bytes / 1024 / 1024).toFixed(1)} МБ`;
 }
 
+/* Имя файла в списке может не поместиться, но формат (.pdf, .docx, .xlsx, .pptx)
+   обрезать нельзя: режем только основу имени, а расширение оставляем целым.
+   Тогда длинное название превращается в «Отчёт по итогам… .pdf», а не в «Отчёт по и». */
+function fileNameEl(name, cls) {
+  const wrap = el('span', cls);
+  const text = String(name ?? '');
+  const dot = text.lastIndexOf('.');
+  if (dot <= 0 || dot === text.length - 1) {
+    wrap.textContent = text;
+    return wrap;
+  }
+  wrap.appendChild(el('span', 'nm-base', text.slice(0, dot)));
+  wrap.appendChild(el('span', 'nm-ext', text.slice(dot)));
+  return wrap;
+}
+
 function fmtUsd(value) {
   return `$${Number(value || 0).toFixed(2)}`;
 }
@@ -888,7 +904,7 @@ function userAttachmentChips(attachments) {
   for (const att of attachments || []) {
     const chip = el('span', 'file-chip');
     chip.innerHTML = `<span class="f-icon">${att.kind === 'image' ? ICONS.image : ICONS.file}</span>`;
-    const name = el('span', 'fc-name', att.name);
+    const name = fileNameEl(att.name, 'fc-name');
     name.title = att.name;
     chip.appendChild(name);
     if (att.size) chip.appendChild(el('span', 'fc-size', fmtSize(att.size)));
@@ -1251,7 +1267,7 @@ function renderAttachStrip() {
   for (const att of state.attachments) {
     const chip = el('span', 'file-chip');
     chip.innerHTML = `<span class="f-icon">${att.kind === 'image' ? ICONS.image : ICONS.file}</span>`;
-    const name = el('span', 'fc-name', att.name);
+    const name = fileNameEl(att.name, 'fc-name');
     name.title = att.name;
     chip.appendChild(name);
     chip.appendChild(el('span', 'fc-size', fmtSize(att.size)));
@@ -1462,7 +1478,7 @@ function renderFiles() {
     const row = el('div', 'file-row');
     const isImage = /\.(png|jpe?g|webp|gif|bmp)$/i.test(item.name);
     row.innerHTML = `<span class="f-icon">${item.dir ? ICONS.folder : isImage ? ICONS.image : ICONS.file}</span>`;
-    const name = el('span', 'f-name', item.name);
+    const name = fileNameEl(item.name, 'f-name');
     const officeApp = item.dir ? null : officeOpener(item.name);
     name.title = item.dir
       ? item.path

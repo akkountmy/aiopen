@@ -1853,8 +1853,10 @@ body.resizing {
 }
 
 .file-chip .fc-name {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
   overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
@@ -2352,8 +2354,26 @@ body.resizing {
 .file-row .f-name {
   flex: 1;
   min-width: 0;
+  display: flex;
+  align-items: baseline;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+/* Основа имени — единственная часть, которая сжимается и получает многоточие.
+   Расширение (.pdf, .docx, …) всегда остаётся целиком: по нему видно формат. */
+.file-row .f-name > .nm-base,
+.file-chip .fc-name > .nm-base {
+  flex: 0 1 auto;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-row .f-name > .nm-ext,
+.file-chip .fc-name > .nm-ext {
+  flex: none;
   white-space: nowrap;
 }
 
