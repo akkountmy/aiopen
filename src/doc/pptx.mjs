@@ -83,10 +83,15 @@ function heading(slide, { kicker, title, wide = false }) {
       valign: 'top',
     });
   }
-  slide.addText(text(title, { fontSize: SLIDE_TYPE.title, bold: true, color: COLORS.navy }), {
+  const titleWidth = wide ? CONTENT_W : CONTENT_W * 0.86;
+  /* Длинный заголовок при фиксированном кегле уходит на третью строку и
+     наезжает на контент: шаг вниз на 2 pt, пока не уложится в две строки. */
+  let titleSize = SLIDE_TYPE.title;
+  while (titleSize > 24 && countLines(title, titleWidth, titleSize) > 2) titleSize -= 2;
+  slide.addText(text(title, { fontSize: titleSize, bold: true, color: COLORS.navy }), {
     x: M,
     y: kicker ? 0.78 : 0.6,
-    w: wide ? CONTENT_W : CONTENT_W * 0.86,
+    w: titleWidth,
     h: 1.05,
     valign: 'top',
   });
@@ -245,6 +250,31 @@ function chartBlock(slide, chart, box) {
   });
 }
 
+/** Сколько строк займёт заголовок при заданном кегле (жадный перенос по словам). */
+function countLines(value, widthIn, fontSize, bold = true) {
+  const perChar = fontSize * (bold ? 0.545 : 0.52) / 72; /* средняя ширина знака в дюймах */
+  const limit = Math.max(1, Math.floor(widthIn / perChar));
+  let lines = 1;
+  let current = 0;
+  for (const word of String(value ?? '').split(/\s+/).filter(Boolean)) {
+    const length = word.length + (current > 0 ? 1 : 0);
+    if (current > 0 && current + length > limit) {
+      lines += 1;
+      current = word.length;
+    } else {
+      current += length;
+    }
+  }
+  return lines;
+}
+
+/** Кегль заголовка обложки: уменьшаем, пока текст не уложится в maxLines строк. */
+function coverTitleSize(value, widthIn, base, maxLines = 3, min = 26) {
+  let size = base;
+  while (size > min && countLines(value, widthIn, size) > maxLines) size -= 2;
+  return size;
+}
+
 function coverSlide(slide, spec) {
   background(slide, COLORS.navy);
   slide.addShape('rect', { x: 0, y: 0, w: 0.16, h: H, fill: { color: COLORS.accent }, line: { width: 0 } });
@@ -256,19 +286,26 @@ function coverSlide(slide, spec) {
       h: 0.35,
     });
   }
-  slide.addText(text(spec.title || 'Презентация', { fontSize: SLIDE_TYPE.cover, bold: true, color: COLORS.white }), {
+  const titleWidth = CONTENT_W - 0.4;
+  const titleSize = coverTitleSize(spec.title || 'Презентация', titleWidth, SLIDE_TYPE.cover);
+  const titleLines = countLines(spec.title || 'Презентация', titleWidth, titleSize);
+  const titleHeight = (titleLines * titleSize * 1.22) / 72;
+  slide.addText(text(spec.title || 'Презентация', { fontSize: titleSize, bold: true, color: COLORS.white }), {
     x: M + 0.2,
     y: 2.4,
-    w: CONTENT_W - 0.4,
-    h: 1.7,
+    w: titleWidth,
+    h: titleHeight + 0.12,
     valign: 'top',
   });
   if (spec.subtitle) {
+    /* Подзаголовок ставим сразу под фактической высотой заголовка, а не по
+       фиксированной координате: длинный заголовок иначе на него налезает. */
+    const subtitleY = Math.min(2.4 + titleHeight + 0.18, H - 2.4);
     slide.addText(text(spec.subtitle, { fontSize: 16, color: 'C9CCD6' }), {
       x: M + 0.2,
-      y: 4.15,
+      y: subtitleY,
       w: CONTENT_W - 1.6,
-      h: 1.0,
+      h: Math.max(0.5, H - 1.6 - subtitleY),
       valign: 'top',
     });
   }
