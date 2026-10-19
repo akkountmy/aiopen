@@ -767,6 +767,18 @@ class Store {
     return meta;
   }
 
+  /* Метка «в диалоге идёт работа». Живёт рядом с диалогом, в метаданных: по ней
+     видно, что задача шла, даже если процесс перезапустился и самой задачи уже
+     нет. Запись null снимает метку. */
+  setChatRunning(id, info) {
+    const meta = this.getChatMeta(id);
+    if (!meta) return null;
+    if (info) meta.running = { runId: String(info.runId || ''), startedAt: info.startedAt || nowIso() };
+    else delete meta.running;
+    this.save();
+    return meta;
+  }
+
   deleteChat(id) {
     this.state.chats = this.state.chats.filter((c) => c.id !== id);
     for (const [attId, att] of Object.entries(this.state.attachments)) {

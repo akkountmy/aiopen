@@ -834,6 +834,50 @@ body.resizing {
   white-space: nowrap;
 }
 
+/* Диалог, в котором прямо сейчас работает агент: маленькая пульсирующая
+   точка. Она видна и когда открыт другой проект — задача от переключения не
+   срывается, и это видно в списке. */
+.chat-row .c-live {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: live-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes live-pulse {
+  0%,
+  100% {
+    opacity: 0.45;
+    transform: scale(0.85);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* Точка у проекта: внутри идёт задача, а список диалогов свёрнут. */
+.project.live > .project-row .p-name::after {
+  content: '';
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-left: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  vertical-align: middle;
+  animation: live-pulse 1.6s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-row .c-live,
+  .project.live > .project-row .p-name::after {
+    animation: none;
+  }
+}
+
 /* Действия диалога — того же размера, что у проекта (см. .row-menu). */
 .chat-row .row-menu {
   opacity: 0.6;

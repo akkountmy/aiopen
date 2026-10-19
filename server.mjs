@@ -68,6 +68,183 @@ const runningChats = new Set();
 const runningByUser = new Map();
 const attachmentQueue = new Set();
 
+/* ---------------- живые задачи ----------------
+   Ответ агента больше не живёт внутри одного соединения с браузером. Пока идёт
+   работа, её состояние (текст, шаги, заголовок) обновляется здесь: вкладку можно
+   перезагрузить, уйти в другой проект, открыть диалог с телефона — при
+   возвращении клиент получает готовый снимок и продолжает живой поток.
+   Останавливает задачу только человек (кнопка «Стоп») или конец работы агента. */
+/* Сколько держим завершённый запуск для позднего переподключения. */
+const RUN_KEEP_MS = 15 * 60 * 1000;
+const runs = new Map();
+const runByChat = new Map();
+const chatRunKey = (userId, chatId) => `${userId}:${chatId}`;
+
+function liveRunForChat(userId, chatId) {
+  const run = runByChat.get(chatRunKey(userId, chatId));
+  return run && run.status === 'running' ? run : null;
+}
+
+function publicRun(run) {
+  return {
+    id: run.id,
+    chatId: run.chatId,
+    projectId: run.projectId,
+    status: run.status,
+    startedAt: run.startedAt,
+    seq: run.seq,
+    chars: run.text.length,
+  };
+}
+
+/* Полное состояние задачи на текущий момент: по нему вкладка рисует ответ,
+   даже если подключилась на середине. */
+function runSnapshot(run) {
+  return {
+    ...publicRun(run),
+    text: run.text,
+    tools: run.tools,
+    title: run.title,
+    budget: run.budget,
+  };
+}
+
+function activeRunsFor(userId) {
+  return [...runs.values()]
+    .filter((run) => run.userId === userId && run.status === 'running')
+    .map(publicRun);
+}
+
+function createRun({ user, project, chat }) {
+  const run = {
+    id: uid('run_'),
+    userId: user.id,
+    projectId: project.id,
+    chatId: chat.id,
+    user,
+    project,
+    chat,
+    status: 'running',
+    startedAt: nowIso(),
+    startedMs: Date.now(),
+    seq: 0,
+    text: '',
+    tools: [],
+    title: '',
+    budget: null,
+    subscribers: new Set(),
+    controller: new AbortController(),
+  };
+  runs.set(run.id, run);
+  runByChat.set(chatRunKey(user.id, chat.id), run);
+  runningChats.add(chatRunKey(user.id, chat.id));
+  runningByUser.set(user.id, (runningByUser.get(user.id) || 0) + 1);
+  /* Метка в файле чата переживает перезапуск сервиса: если процесса, который
+     её поставил, уже нет, при следующем входе честно скажем, что задача
+     прервалась, вместо вечного «работаю…». */
+  store.setChatRunning(chat.id, { runId: run.id, startedAt: run.startedAt });
+  return run;
+}
+
+/* Одно событие задачи: обновляет состояние и уходит всем подключённым вкладкам —
+   их может быть несколько: ноутбук, телефон, ярлык. */
+function publishRun(run, data) {
+  if (run.status !== 'running' && data.type !== 'end') return;
+  run.seq += 1;
+  const event = { ...data, runId: run.id };
+  if (data.type === 'delta') run.text += data.text || '';
+  else if (data.type === 'tool') {
+    const known = run.tools.find((tool) => tool.id === data.id);
+    if (known) Object.assign(known, data);
+    else run.tools.push({ id: data.id, label: data.label, summary: data.summary, status: data.status });
+  } else if (data.type === 'title') run.title = data.title || run.title;
+  else if (data.type === 'budget') run.budget = { spentUsd: data.spentUsd, limitUsd: data.limitUsd, status: 'pending' };
+  else if (data.type === 'approval' && data.approval) run.budget = data.approval;
+  for (const subscriber of [...run.subscribers]) {
+    try {
+      subscriber(event);
+    } catch {
+      run.subscribers.delete(subscriber);
+    }
+  }
+  return event;
+}
+
+/* Подключение к задаче: снимок уже полученного результата, затем живой поток.
+   Никакого повтора событий — снимок сам содержит всё накопленное, поэтому текст
+   не удваивается даже после десяти переподключений. */
+function attachRun(res, run) {
+  const stream = openStream(res, { 'X-DShow-Run': run.id });
+  const subscriber = (event) => {
+    stream.emit(event);
+    /* Закрываем только по настоящему концу: «done» и «error» — это итог работы,
+       после них приходит «end», и вкладке нужно увидеть оба. */
+    if (event.type === 'end') {
+      run.subscribers.delete(subscriber);
+      setTimeout(() => stream.close(), 40);
+    }
+  };
+  stream.emit({ type: 'snapshot', run: runSnapshot(run) });
+  if (run.status !== 'running') {
+    stream.emit({ type: 'end', status: run.status, runId: run.id });
+    setTimeout(() => stream.close(), 40);
+    return;
+  }
+  run.subscribers.add(subscriber);
+  /* Пока задача думает, в поток может не уходить ни одного события. Пустой
+     комментарий SSE раз в 15 секунд не даёт прокси и телефону закрыть
+     «молчащее» соединение. Клиент такие строки просто пропускает. */
+  const ping = setInterval(() => {
+    if (stream.isClosed()) return;
+    res.write(': ping\n\n');
+  }, 15000);
+  ping.unref?.();
+  res.on('close', () => {
+    clearInterval(ping);
+    run.subscribers.delete(subscriber);
+  });
+}
+
+function finishRun(run, status) {
+  if (run.status !== 'running') return;
+  publishRun(run, { type: 'end', status });
+  run.status = status;
+  run.finishedMs = Date.now();
+  runByChat.delete(chatRunKey(run.userId, run.chatId));
+  runningChats.delete(chatRunKey(run.userId, run.chatId));
+  const left = (runningByUser.get(run.userId) || 1) - 1;
+  if (left > 0) runningByUser.set(run.userId, left);
+  else runningByUser.delete(run.userId);
+  run.subscribers.clear();
+  store.setChatRunning(run.chatId, null);
+  const timer = setTimeout(() => {
+    if (runs.get(run.id) === run) runs.delete(run.id);
+  }, RUN_KEEP_MS);
+  if (timer.unref) timer.unref();
+}
+
+/* Задача жила в памяти: после перезапуска сервиса в диалоге остаётся вопрос без
+   ответа. Дописываем пометку один раз — чтобы не выглядело, будто ответ идёт. */
+function recoverStaleRuns(user) {
+  for (const meta of store.state.chats) {
+    if (meta.ownerId !== user.id || !meta.running) continue;
+    if (liveRunForChat(user.id, meta.id)) continue;
+    store.setChatRunning(meta.id, null);
+    const chat = store.getChat(meta.id, user.id);
+    if (!chat) continue;
+    const last = chat.messages[chat.messages.length - 1];
+    if (last?.interrupted) continue;
+    chat.messages.push({
+      role: 'assistant',
+      content: '',
+      error: 'Сервис перезапускался, поэтому задача прервалась. Отправьте её ещё раз — контекст диалога сохранён.',
+      interrupted: true,
+      at: nowIso(),
+    });
+    store.saveChat(chat.id, { messages: chat.messages, history: chat.history, memory: chat.memory });
+  }
+}
+
 const MIME = {
   '.html': 'text/html; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
@@ -486,6 +663,9 @@ function chatMeta(chat) {
     createdAt: chat.createdAt,
     updatedAt: chat.updatedAt,
     messageCount: chat.messageCount || 0,
+    /* В диалоге прямо сейчас работает агент: по этому признаку в списке
+       диалогов виден индикатор, даже если открыт другой проект. */
+    running: Boolean(liveRunForChat(chat.ownerId, chat.id)),
   };
 }
 
@@ -539,6 +719,9 @@ function bootstrapPayload(user) {
   /* У нового аккаунта сразу есть своё рабочее место: собственный проект и
      пустой диалог. Чужих проектов и истории этот вызов не касается. */
   store.ensurePersonalProject(user.id);
+  /* Если сервис перезапускался во время работы, метка «идёт ответ» осталась в
+     файле чата без живой задачи — закрываем её честной пометкой. */
+  recoverStaleRuns(user);
   const projects = store.projectsFor(user.id).map((project) => ({
     ...project,
     chats: store.chatsFor(project.id).map(chatMeta),
@@ -547,6 +730,9 @@ function bootstrapPayload(user) {
     user: store.publicUser(user.id),
     projects,
     workflows: store.workflowsFor(user.id),
+    /* Незавершённые задачи: вкладка после перезагрузки сразу подключается к
+       той, что идёт, вместо пустого экрана. */
+    runs: activeRunsFor(user.id),
     keys: { vision: keyStatus().vision },
     limits: {
       maxAttachments: LIMITS.maxAttachmentsPerMessage,
@@ -828,13 +1014,14 @@ function attachmentContext(attachments) {
   return { text: blocks.join('\n\n'), images };
 }
 
-function openStream(res) {
+function openStream(res, extraHeaders = {}) {
   res.writeHead(200, {
     'Content-Type': 'text/event-stream; charset=utf-8',
     'Cache-Control': 'no-cache, no-transform',
     Connection: 'keep-alive',
     'X-Accel-Buffering': 'no',
     ...SECURITY_HEADERS,
+    ...extraHeaders,
   });
   res.write(': connected\n\n');
   let closed = false;
@@ -907,31 +1094,50 @@ async function handleMessageStream(req, res, user, chatId) {
      успевают проскочить проверку до того, как первая займёт диалог.
      Один диалог — один ответ (иначе сообщения перепутаются), но разные диалоги
      считаются независимо: ноутбук и телефон могут работать одновременно. */
-  const runKey = `${user.id}:${chat.id}`;
-  if (runningChats.has(runKey)) {
-    return sendError(res, 429, 'Ответ в этом диалоге уже идёт — дождитесь его завершения.');
+  const active = liveRunForChat(user.id, chat.id);
+  if (active) {
+    /* Ответ уже идёт — возможно, начатый с другого устройства или переживший
+       перезагрузку этой страницы. Второй не запускаем: отдаём клиенту
+       идентификатор запуска, и вкладка подключается к нему. */
+    return sendJson(res, 429, {
+      error: 'Ответ в этом диалоге уже идёт — подключаюсь к нему.',
+      run: publicRun(active),
+    });
   }
-  const running = runningByUser.get(user.id) || 0;
-  if (running >= LIMITS.agentConcurrencyPerUser) {
+  const busy = runningByUser.get(user.id) || 0;
+  if (busy >= LIMITS.agentConcurrencyPerUser) {
     return sendError(
       res,
       429,
-      `Сейчас идёт ${running} ${running === 1 ? 'ответ' : 'ответа'} — дождитесь завершения хотя бы одного.`,
+      `Сейчас идёт ${busy} ${busy === 1 ? 'ответ' : 'ответа'} — дождитесь завершения хотя бы одного.`,
     );
   }
 
-  runningChats.add(runKey);
-  runningByUser.set(user.id, running + 1);
-  const stream = openStream(res);
-  const controller = new AbortController();
-  res.on('close', () => {
-    if (!res.writableEnded) controller.abort();
+  const run = createRun({ user, project, chat });
+  /* Текущее соединение подписывается на запуск. Работа идёт отдельно от него:
+     обрыв этого сокета (перезагрузка страницы, уход на другой проект, сон
+     телефона) задачу больше не прерывает. */
+  attachRun(res, run);
+  void executeRun(run, {
+    text,
+    attachmentIds,
+    isFirstMessage: chat.messages.length === 0,
   });
+}
 
-  const isFirstMessage = chat.messages.length === 0;
+/* Сама работа. Живёт своей жизнью: её не останавливает закрытие вкладки, а все
+   события складываются в запуск — подключиться и догнать можно в любой момент. */
+async function executeRun(run, job) {
+  const { user, project, chat } = run;
+  const { text, attachmentIds, isFirstMessage } = job;
+  const controller = run.controller;
+  const stream = { emit: (data) => publishRun(run, data) };
+
   let assistantText = '';
   try {
     const attachments = await waitForAttachments(attachmentIds, user, chat, stream.emit);
+    /* Пока ждали вложения, человек мог нажать «Стоп» — тогда работу не начинаем. */
+    if (controller.signal.aborted) throw Object.assign(new Error('Остановлено'), { name: 'AbortError' });
     const ctx = attachmentContext(attachments);
     const userMessage = {
       role: 'user',
@@ -1027,6 +1233,7 @@ async function handleMessageStream(req, res, user, chatId) {
       }
     }
     stream.emit({ type: 'done', usage: outcome.usage, tools: outcome.tools.length, balanceUsd });
+    finishRun(run, 'done');
   } catch (error) {
     const aborted = error?.name === 'AbortError' || controller.signal.aborted;
     const message = aborted ? 'Остановлено' : describeFailure(error);
@@ -1038,13 +1245,7 @@ async function handleMessageStream(req, res, user, chatId) {
     }
     store.saveChat(chat.id, { messages: chat.messages, history: chat.history, memory: chat.memory });
     stream.emit({ type: 'error', message, aborted });
-  } finally {
-    runningChats.delete(runKey);
-    const left = (runningByUser.get(user.id) || 1) - 1;
-    if (left > 0) runningByUser.set(user.id, left);
-    else runningByUser.delete(user.id);
-    stream.cleanup();
-    stream.close();
+    finishRun(run, aborted ? 'stopped' : 'error');
   }
 }
 
@@ -1466,6 +1667,8 @@ async function route(req, res) {
             title: chat.title,
             messages: chat.messages,
             attachments,
+            /* Если в диалоге идёт работа, вкладка сразу подключится к ней. */
+            run: liveRunForChat(user.id, chat.id) ? publicRun(liveRunForChat(user.id, chat.id)) : null,
           },
         });
       }
@@ -1479,6 +1682,27 @@ async function route(req, res) {
       }
       if (parts[3] === 'messages' && method === 'POST') {
         return await handleMessageStream(req, res, user, chat.id);
+      }
+    }
+
+    /* ---- живые задачи ----
+       Задача живёт на сервере, поэтому её можно найти, догнать и остановить
+       независимо от того, какая вкладка её запустила. */
+    if (pathname === '/api/runs' && method === 'GET') {
+      return sendJson(res, 200, { runs: activeRunsFor(user.id) });
+    }
+    if (parts[1] === 'runs' && parts[2]) {
+      const run = runs.get(parts[2]);
+      if (!run || run.userId !== user.id) return sendError(res, 404, 'Задача не найдена');
+      if (parts.length === 3 && method === 'GET') return sendJson(res, 200, { run: publicRun(run) });
+      if (parts[3] === 'stream' && method === 'GET') return attachRun(res, run);
+      if (parts[3] === 'stop' && method === 'POST') {
+        if (run.status !== 'running') return sendJson(res, 200, { ok: true, status: run.status });
+        /* Останавливает человек, а не обрыв связи: прерываем работу агента,
+           а вкладки получат событие «end» и покажут сохранённый ответ. */
+        run.stoppedBy = user.id;
+        run.controller.abort();
+        return sendJson(res, 200, { ok: true, status: 'stopping' });
       }
     }
 

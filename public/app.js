@@ -51,7 +51,11 @@ const state = {
   chat: null,
   attachments: [],
   streaming: false,
-  abort: null,
+  /* Незавершённые задачи (ключ — id запуска на сервере) и открытые к ним
+     потоки. Живут отдельно от текущего диалога: диалог можно закрыть, а
+     задача продолжается и видна в списке. */
+  liveRuns: new Map(),
+  liveStreams: new Map(),
   filesOpen: true,
   filesDrawerOpen: false,
   filesPath: '.',
@@ -492,9 +496,17 @@ async function startApp(payload) {
     state.expanded.add(first.id);
     state.activeProjectId = first.id;
   }
+  /* Задачи, которые шли в момент перезагрузки страницы: подхватываем их сразу,
+     чтобы работа выглядела непрерывной. */
+  for (const run of payload.runs || []) trackRun(run.id, run.chatId);
   renderSidebar();
-  const existingChat = first?.chats?.[0];
-  if (existingChat) await openChat(existingChat.id);
+  /* Открываем диалог с живой задачей, иначе последний открытый, иначе первый
+     в проекте — после перезагрузки человек возвращается туда, где работал. */
+  const runningChat = (payload.runs || []).find((run) => findChatProject(run.chatId));
+  const remembered = lastChatId();
+  const target =
+    runningChat?.chatId || (remembered && findChatProject(remembered) ? remembered : '') || first?.chats?.[0]?.id || '';
+  if (target) await openChat(target);
   else renderThread();
   updateCrumbs();
   watchWideBlocks();
@@ -515,9 +527,11 @@ function projectNode(project) {
   const chats = project.chats || [];
   const open = state.expanded.has(project.id);
   const collapsed = Boolean(chats.length) && !open;
+  /* Знак того, что внутри проекта идёт работа: видно и при свёрнутом списке. */
+  const hasLiveRun = chats.some((chat) => liveRunFor(chat.id));
   const wrap = el(
     'div',
-    `project${project.id === state.activeProjectId ? ' active' : ''}${project.workflowId ? ' in-workflow' : ''}${collapsed ? ' collapsed' : ''}`,
+    `project${project.id === state.activeProjectId ? ' active' : ''}${project.workflowId ? ' in-workflow' : ''}${collapsed ? ' collapsed' : ''}${hasLiveRun ? ' live' : ''}`,
   );
   const row = el('div', 'project-row');
   row.setAttribute('role', 'button');
@@ -567,6 +581,9 @@ function projectNode(project) {
          иначе справа оставался список чужой папки. */
       state.chat = null;
       state.activeChatId = null;
+      /* Здесь ответ не показываем, но задача в покинутом диалоге продолжается:
+         в списке она отмечена точкой «идёт». */
+      setStreaming(false);
       state.attachments = [];
       renderAttachStrip();
       state.filesPath = '.';
@@ -601,6 +618,12 @@ function projectNode(project) {
       const title = el('span', 'c-title', chat.title || 'Новый диалог');
       title.title = chat.title || '';
       chatRow.appendChild(title);
+      if (liveRunFor(chat.id)) {
+        const live = el('span', 'c-live');
+        live.title = 'В диалоге идёт задача';
+        live.setAttribute('aria-label', 'Идёт задача');
+        chatRow.appendChild(live);
+      }
       const chatMenu = el('button', 'row-menu');
       chatMenu.type = 'button';
       chatMenu.title = 'Действия с диалогом';
@@ -694,13 +717,31 @@ function updateCrumbs() {
   document.title = state.chat?.title ? `${state.chat.title} — DSH Open` : 'DSH Open';
 }
 
-async function openChat(chatId) {
-  /* Во время ответа переключение диалога молча не срабатывало — выглядело как
-     «кнопка не работает». Теперь сервис объясняет, что делать. */
-  if (state.streaming) {
-    toast('Дождитесь ответа или нажмите «Стоп»');
-    return;
+/* Какой диалог был открыт последним: после перезагрузки страницы человек
+   возвращается туда же, а не в первый попавшийся диалог. */
+function rememberChat(chatId) {
+  try {
+    if (chatId) localStorage.setItem('dshow.lastChat', chatId);
+  } catch {
+    /* приватный режим браузера — не критично */
   }
+}
+
+function lastChatId() {
+  try {
+    return localStorage.getItem('dshow.lastChat') || '';
+  } catch {
+    return '';
+  }
+}
+
+function findChatProject(chatId) {
+  return state.projects.find((project) => (project.chats || []).some((chat) => chat.id === chatId)) || null;
+}
+
+async function openChat(chatId) {
+  /* Переключение во время ответа теперь разрешено: работа идёт на сервере, а
+     вкладка просто показывает другой диалог и возвращается к потоку позже. */
   try {
     const data = await api(`/api/chats/${chatId}`);
     state.chat = data.chat;
@@ -709,11 +750,21 @@ async function openChat(chatId) {
     state.expanded.add(state.activeProjectId);
     state.attachments = [];
     renderAttachStrip();
+    if (data.chat.run?.id) trackRun(data.chat.run.id, chatId);
     renderSidebar();
     renderThread();
     updateCrumbs();
     if (state.filesOpen) loadFiles('.');
     closeSidebar();
+    rememberChat(chatId);
+    /* В этом диалоге идёт задача — подключаемся и показываем накопленное. */
+    const run = liveRunFor(chatId);
+    if (run) {
+      paintRun(run);
+      if (!state.liveStreams.has(run.id)) watchRun(run.id, chatId);
+    } else {
+      setStreaming(false);
+    }
     $('#input').focus();
   } catch (error) {
     if (!error.unauthorized) toast(error.message);
@@ -1006,7 +1057,287 @@ function watchWideBlocks() {
   wideObserver.observe($('#thread'), { childList: true, subtree: true, characterData: true });
 }
 
-/* ------------------------------ streaming ------------------------------ */
+/* ------------------------------ живые задачи ------------------------------
+   Ответ выполняет сервер, а не вкладка. Поэтому страницу можно перезагрузить,
+   уйти в другой проект или свернуть телефон: задача продолжается, вкладка
+   отключается от потока, а при возвращении забирает всё пропущенное. */
+
+/* Сколько поток может молчать, прежде чем считать его мёртвым. Сервис присылает
+   пустой комментарий раз в 15 секунд, так что молчание дольше — обрыв. */
+const RUN_IDLE_MS = 25000;
+
+function liveRunFor(chatId) {
+  for (const run of state.liveRuns.values()) if (run.chatId === chatId) return run;
+  return null;
+}
+
+function currentLiveRun() {
+  return state.chat ? liveRunFor(state.chat.id) : null;
+}
+
+/* Пузырь ответа, который сейчас наполняется. Если человек смотрит на этот
+   диалог — берём (или создаём) сообщение в нём, иначе обновляем только данные
+   запуска: при возвращении в диалог всё нарисуется из них. */
+function streamingMessageOf(run) {
+  if (!run || !state.chat || state.chat.id !== run.chatId) return null;
+  const messages = state.chat.messages;
+  let message = messages.find((item) => item.runId === run.id);
+  if (!message) message = messages.find((item) => item.streaming && !item.runId);
+  if (!message) {
+    message = { role: 'assistant', content: '', tools: [], streaming: true, at: new Date().toISOString() };
+    messages.push(message);
+  }
+  message.runId = run.id;
+  return message;
+}
+
+function trackRun(runId, chatId) {
+  let run = state.liveRuns.get(runId);
+  if (!run) {
+    run = {
+      id: runId,
+      chatId: chatId || state.chat?.id,
+      projectId: state.chat?.projectId,
+      content: '',
+      tools: [],
+      budget: null,
+      error: '',
+      status: 'running',
+    };
+    state.liveRuns.set(runId, run);
+    /* Точка «идёт задача» в списке диалогов должна появляться сразу, а не после
+       первого события задачи: иначе, уйдя в другой проект в первую секунду,
+       человек не увидит, что работа продолжается. */
+    renderSidebar();
+  }
+  return run;
+}
+
+function applyRunTitle(run, title) {
+  if (!title) return;
+  const project = state.projects.find((item) => item.id === run.projectId);
+  const meta = project?.chats?.find((chat) => chat.id === run.chatId);
+  if (meta) meta.title = title;
+  if (state.chat && state.chat.id === run.chatId) state.chat.title = title;
+  renderSidebar();
+  updateCrumbs();
+}
+
+function paintRun(run) {
+  const message = streamingMessageOf(run);
+  if (message) {
+    message.content = run.content;
+    message.tools = run.tools;
+    if (run.budget) message.budget = run.budget;
+    if (run.error && !run.content) message.error = run.error;
+    else if (run.content) delete message.error;
+    message.streaming = run.status === 'running' && !run.error;
+    scheduleStreamRender();
+  }
+  setStreaming(Boolean(currentLiveRun()));
+}
+
+function closeRunView(run, status) {
+  state.liveRuns.delete(run.id);
+  const streamState = state.liveStreams.get(run.id);
+  if (streamState) {
+    state.liveStreams.delete(run.id);
+    try {
+      streamState.controller.abort();
+    } catch {
+      /* ignore */
+    }
+  }
+  const viewing = state.chat && state.chat.id === run.chatId;
+  const message = viewing ? state.chat.messages.find((item) => item.runId === run.id) : null;
+  if (message) {
+    message.streaming = false;
+    if (run.content) message.content = run.content;
+    if (run.tools.length) message.tools = run.tools;
+    if (run.error && !run.content) message.error = run.error;
+  }
+  setStreaming(Boolean(currentLiveRun()));
+  renderSidebar();
+  if (viewing) {
+    renderThread();
+    /* Окончательный вид ответа берём с сервера: там уже сохранённые пометки
+       инструментов, расход и заголовок диалога. */
+    reloadChatInPlace(run.chatId);
+  } else if (status === 'done') {
+    toast('Задача в другом диалоге завершена');
+  }
+  if (state.filesOpen) loadFiles(state.filesPath);
+}
+
+async function reloadChatInPlace(chatId) {
+  try {
+    const data = await api(`/api/chats/${chatId}`);
+    const project = state.projects.find((item) => item.id === data.chat.projectId);
+    const meta = project?.chats?.find((chat) => chat.id === chatId);
+    if (meta) {
+      meta.title = data.chat.title;
+      meta.messageCount = data.chat.messages.length;
+      meta.running = false;
+    }
+    if (state.chat && state.chat.id === chatId) {
+      state.chat = data.chat;
+      renderThread();
+      updateCrumbs();
+    }
+    renderSidebar();
+  } catch {
+    /* нет связи — остаётся то, что уже нарисовано */
+  }
+}
+
+function applyRunEvent(run, event) {
+  if (event.type === 'snapshot' && event.run) {
+    run.content = event.run.text || '';
+    run.tools = (event.run.tools || []).map((tool) => ({ ...tool }));
+    if (event.run.status) run.status = event.run.status;
+    if (event.run.title) applyRunTitle(run, event.run.title);
+  } else if (event.type === 'delta') {
+    run.content += event.text || '';
+  } else if (event.type === 'tool') {
+    const known = run.tools.find((tool) => tool.id === event.id);
+    const tool = { id: event.id, label: event.label, summary: event.summary, status: event.status };
+    if (known) Object.assign(known, tool);
+    else run.tools.push(tool);
+  } else if (event.type === 'title') {
+    applyRunTitle(run, event.title);
+  } else if (event.type === 'budget') {
+    run.budget = { spentUsd: event.spentUsd, limitUsd: event.limitUsd, status: 'pending' };
+  } else if (event.type === 'approval' && event.approval) {
+    run.budget = {
+      spentUsd: event.approval.spentUsd,
+      limitUsd: event.approval.limitUsd,
+      status: event.approval.status || 'pending',
+    };
+    toast('Запрос отправлен администратору: задача тяжелее обычного порога.', 'warn');
+  } else if (event.type === 'done') {
+    run.status = 'done';
+    updateBalance(event.balanceUsd);
+  } else if (event.type === 'error') {
+    run.status = event.aborted ? 'stopped' : 'error';
+    run.error = event.message || 'Ошибка';
+    if (event.message && !event.aborted) toast(event.message);
+  } else if (event.type === 'end') {
+    closeRunView(run, event.status || run.status);
+    return;
+  }
+  paintRun(run);
+}
+
+/* Разбор потока событий задачи. */
+async function readRunStream(response, streamState) {
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let ended = false;
+  while (true) {
+    const chunk = await reader.read();
+    if (chunk.done) break;
+    /* Любой байт из потока — признак живой связи: сервис присылает и пустые
+       комментарии, пока задача думает. */
+    streamState.lastEventAt = Date.now();
+    buffer += decoder.decode(chunk.value, { stream: true });
+    const blocks = buffer.split('\n\n');
+    buffer = blocks.pop() || '';
+    for (const block of blocks) {
+      for (const line of block.split('\n')) {
+        if (!line.startsWith('data:')) continue;
+        const payload = line.slice(5).trim();
+        if (!payload) continue;
+        let event;
+        try {
+          event = JSON.parse(payload);
+        } catch {
+          continue;
+        }
+        if (event.runId && event.runId !== streamState.run.id) continue;
+        if (event.type === 'end') ended = true;
+        applyRunEvent(streamState.run, event);
+      }
+    }
+  }
+  return ended;
+}
+
+/* Подключение к задаче на сервере. Снимок даёт всё, что уже готово, дальше идёт
+   живой поток; если связь оборвалась, а задача жива — повторяем подключение. */
+async function watchRun(runId, chatId) {
+  const run = trackRun(runId, chatId);
+  if (state.liveStreams.has(runId)) return;
+  const streamState = { controller: new AbortController(), run, lastEventAt: Date.now() };
+  state.liveStreams.set(runId, streamState);
+  let attempt = 0;
+  while (attempt < 10) {
+    attempt += 1;
+    try {
+      const response = await fetch(`/api/runs/${runId}/stream`, {
+        credentials: 'same-origin',
+        signal: streamState.controller.signal,
+      });
+      if (response.status === 401) {
+        showAuth();
+        break;
+      }
+      if (response.status === 404) {
+        /* Задачу уже убрали из памяти — показываем то, что сохранено. */
+        state.liveStreams.delete(runId);
+        closeRunView(run, 'done');
+        return;
+      }
+      if (!response.ok || !response.body) throw new Error(`HTTP ${response.status}`);
+      const ended = await readRunStream(response, streamState);
+      if (ended || !state.liveRuns.has(runId)) break;
+      await sleep(Math.min(4000, 500 * attempt));
+    } catch (error) {
+      if (error.name === 'AbortError') break;
+      if (!state.liveRuns.has(runId)) break;
+      await sleep(Math.min(4000, 500 * attempt));
+    }
+  }
+  if (state.liveStreams.get(runId) === streamState) state.liveStreams.delete(runId);
+  if (!state.liveRuns.has(runId)) return;
+  /* Связь пропала, а «конца» не было. Спрашиваем сервис прямо: если задачи уже
+     нет, показываем сохранённый ответ, иначе оставляем пометку «идёт». */
+  try {
+    const data = await api(`/api/runs/${runId}`);
+    if (data.run && data.run.status !== 'running') {
+      closeRunView(run, data.run.status);
+      return;
+    }
+  } catch (error) {
+    if (error.status === 404) {
+      closeRunView(run, 'done');
+      return;
+    }
+  }
+  paintRun(run);
+  toast('Связь с задачей прервалась — она продолжается на сервере. Откройте диалог заново.', 'warn');
+}
+
+/* Возвращение на страницу: телефон вышел из сна, вкладку открыли снова,
+   пропала и вернулась сеть — догоняем все незавершённые задачи. Телефон мог
+   «заморозить» соединение, поэтому давно молчащий поток пересоздаём: сервер
+   отдаст свежий снимок, а старую подписку закроет сам. */
+function resumeLiveRuns() {
+  if (!state.user) return;
+  for (const run of state.liveRuns.values()) {
+    const stream = state.liveStreams.get(run.id);
+    if (stream && Date.now() - (stream.lastEventAt || 0) < RUN_IDLE_MS) continue;
+    if (stream) {
+      state.liveStreams.delete(run.id);
+      try {
+        stream.controller.abort();
+      } catch {
+        /* уже закрыт */
+      }
+    }
+    watchRun(run.id, run.chatId);
+  }
+}
 
 function setStreaming(active) {
   state.streaming = active;
@@ -1056,15 +1387,31 @@ function scheduleStreamRender() {
 }
 
 async function streamMessage(text, attachmentIds) {
-  const controller = new AbortController();
-  state.abort = controller;
-  const response = await fetch(`/api/chats/${state.chat.id}/messages`, {
+  const chatId = state.chat.id;
+  const response = await fetch(`/api/chats/${chatId}/messages`, {
     method: 'POST',
     credentials: 'same-origin',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      ...(openedAsApp() ? { 'X-Dshow-Display': 'standalone' } : {}),
+    },
     body: JSON.stringify({ text, attachmentIds }),
-    signal: controller.signal,
   });
+  if (response.status === 429) {
+    let data = {};
+    try {
+      data = await response.json();
+    } catch {
+      data = {};
+    }
+    if (data.run?.id) {
+      /* В диалоге уже идёт ответ — например, начатый с другого устройства или
+         переживший перезагрузку страницы. Подключаемся к нему. */
+      toast('Подключился к уже идущей задаче');
+      await watchRun(data.run.id, data.run.chatId || chatId);
+      return;
+    }
+  }
   if (!response.ok) {
     let data = {};
     try {
@@ -1074,119 +1421,22 @@ async function streamMessage(text, attachmentIds) {
     }
     throw new Error(data.error || 'Не удалось отправить сообщение');
   }
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-
-  const handle = (event) => {
-    if (event.type === 'delta') {
-      const message = getStreamingMessage();
-      if (message) {
-        message.content += event.text;
-        scheduleStreamRender();
-      }
-      return;
-    }
-    if (event.type === 'tool') {
-      const message = getStreamingMessage();
-      if (!message) return;
-      message.tools = message.tools || [];
-      const existing = message.tools.find((tool) => tool.id === event.id);
-      if (existing) Object.assign(existing, event);
-      else message.tools.push({ ...event });
-      scheduleStreamRender();
-      return;
-    }
-    if (event.type === 'start') {
-      scheduleStreamRender();
-      return;
-    }
-    if (event.type === 'title') {
-      if (state.chat && event.title) {
-        state.chat.title = event.title;
-        const project = activeProject();
-        const meta = project?.chats?.find((chat) => chat.id === state.chat.id);
-        if (meta) meta.title = event.title;
-        renderSidebar();
-        updateCrumbs();
-      }
-      return;
-    }
-    if (event.type === 'error') {
-      const message = getStreamingMessage();
-      if (message) {
-        message.streaming = false;
-        if (!message.content) message.error = event.message;
-      }
-      if (event.message && !event.aborted) toast(event.message);
-      return;
-    }
-    if (event.type === 'budget') {
-      const message = getStreamingMessage();
-      if (message) {
-        message.budget = {
-          ...(message.budget || {}),
-          spentUsd: event.spentUsd,
-          limitUsd: event.limitUsd,
-          status: 'pending',
-        };
-        scheduleStreamRender();
-      }
-      return;
-    }
-    if (event.type === 'approval') {
-      const message = getStreamingMessage();
-      if (message) {
-        message.budget = {
-          spentUsd: event.approval.spentUsd,
-          limitUsd: event.approval.limitUsd,
-          status: event.approval.status || 'pending',
-        };
-      }
-      toast('Запрос отправлен администратору: задача тяжелее обычного порога.', 'warn');
-      return;
-    }
-    if (event.type === 'done') {
-      const message = getStreamingMessage();
-      if (message) message.streaming = false;
-      updateBalance(event.balanceUsd);
-    }
-  };
-
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const blocks = buffer.split('\n\n');
-      buffer = blocks.pop() || '';
-      for (const block of blocks) {
-        for (const line of block.split('\n')) {
-          if (!line.startsWith('data:')) continue;
-          const payload = line.slice(5).trim();
-          if (!payload) continue;
-          try {
-            handle(JSON.parse(payload));
-          } catch {
-            /* ignore */
-          }
-        }
-      }
-    }
-  } finally {
-    const message = getStreamingMessage();
-    if (message) message.streaming = false;
-    state.abort = null;
-    setStreaming(false);
-    renderThread();
-    renderSidebar();
-    if (state.filesOpen) loadFiles(state.filesPath);
-  }
+  const runId = response.headers.get('X-DShow-Run');
+  if (!runId || !response.body) throw new Error('Сервер не начал задачу');
+  const run = trackRun(runId, chatId);
+  const streamState = { controller: new AbortController(), run };
+  state.liveStreams.set(runId, streamState);
+  /* Работа уже идёт на сервере: даже если это соединение оборвётся (страницу
+     обновили, ушли в другой проект), ответ сохранится, а вкладка догонит его. */
+  const ended = await readRunStream(response, streamState);
+  if (state.liveStreams.get(runId) === streamState) state.liveStreams.delete(runId);
+  if (!ended && state.liveRuns.has(runId)) await watchRun(runId, chatId);
 }
 
 async function sendMessage(event) {
   if (event) event.preventDefault();
-  if (state.streaming) return;
+  /* Занят именно этот диалог: в другом проекте задача может идти спокойно. */
+  if (currentLiveRun()) return;
   const input = $('#input');
   const text = input.value.trim();
   const ready = state.attachments.filter((att) => att.id && att.status !== 'error');
@@ -1241,21 +1491,25 @@ async function sendMessage(event) {
     const message = getStreamingMessage();
     if (message) {
       message.streaming = false;
-      if (!message.content) message.error = error.name === 'AbortError' ? 'Остановлено' : error.message;
+      if (!message.content) message.error = error.message;
     }
-    setStreaming(false);
+    setStreaming(Boolean(currentLiveRun()));
     renderThread();
   }
 }
 
-function stopGeneration() {
-  if (state.abort) {
-    try {
-      state.abort.abort();
-    } catch {
-      /* ignore */
-    }
+async function stopGeneration() {
+  const run = currentLiveRun();
+  if (!run) return;
+  /* Останавливает сервер: закрытие вкладки больше не считается отказом от
+     задачи, поэтому «Стоп» — единственный способ её прервать. */
+  try {
+    await api(`/api/runs/${run.id}/stop`, { method: 'POST' });
+  } catch (error) {
+    if (!error.unauthorized) toast(error.message || 'Не удалось остановить');
+    return;
   }
+  if (!state.liveStreams.has(run.id)) await watchRun(run.id, run.chatId);
 }
 
 /* ------------------------------ attachments ------------------------------ */
@@ -2829,6 +3083,17 @@ async function changePasswordModal() {
    пользователя свои проекты, история и файлы, поэтому после выхода в памяти
    страницы не должно остаться ничего от предыдущего человека. */
 function resetClientState() {
+  /* Потоки прежнего аккаунта закрываем: их задачи ему и принадлежат. */
+  for (const streamState of state.liveStreams.values()) {
+    try {
+      streamState.controller.abort();
+    } catch {
+      /* ignore */
+    }
+  }
+  state.liveStreams = new Map();
+  state.liveRuns = new Map();
+  state.streaming = false;
   state.user = null;
   state.projects = [];
   state.workflows = [];
@@ -4032,6 +4297,15 @@ function registerServiceWorker() {
   }
   syncSignupAvailability();
   registerServiceWorker();
+  /* Телефон вернулся из сна, вкладку открыли снова, сеть восстановилась —
+     догоняем задачи, которые всё это время шли на сервере. */
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) resumeLiveRuns();
+  });
+  window.addEventListener('online', resumeLiveRuns);
+  window.addEventListener('pageshow', (event) => {
+    if (event.persisted) resumeLiveRuns();
+  });
   /* Подсказку показываем, когда экран уже нарисован: иначе окно висит над пустой страницей. */
   setTimeout(offerHomeScreenOnce, 1200);
 })();
