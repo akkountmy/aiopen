@@ -153,12 +153,31 @@ function dataTable(table) {
   );
   const totalRow = table.totalRow === true;
 
+  /* Ширины колонок по содержимому: колонка «Содержание работ» должна быть шире
+     колонки «1,5», иначе шапка ломается на две строки вровень с цифрами.
+     Явные columnWidths из спецификации (в см) имеют приоритет. */
+  const contentWidthTwips = PAGE_A4.width - MARGIN.left - MARGIN.right;
+  const columnWeights = Array.from({ length: columns }, (_, index) => {
+    const samples = [headers[index], ...rows.map((row) => row[index])].filter((value) => value !== undefined && value !== null && value !== '');
+    if (!samples.length) return 1;
+    const average = samples.reduce((sum, value) => sum + String(value).length, 0) / samples.length;
+    /* Текстовая колонка не должна сжиматься до ширины числа, а числовая —
+       раздуваться: у них разные пределы. */
+    return numericColumns.has(index)
+      ? Math.min(1.35, Math.max(0.9, average / 12))
+      : Math.min(3, Math.max(1.6, average / 16));
+  });
+  const weightTotal = columnWeights.reduce((sum, value) => sum + value, 0) || 1;
+  const autoWidths = columnWeights.map((weight) => Math.round((contentWidthTwips * weight) / weightTotal));
+  const fixedWidths = table.columnWidths?.length === columns ? table.columnWidths.map((w) => Math.round(Number(w) * TWIP_PER_CM)) : autoWidths;
+
   const headerRow = headers.length
     ? new TableRow({
         tableHeader: true,
         children: headers.map(
           (text, index) =>
             new TableCell({
+              width: { size: fixedWidths[index], type: WidthType.DXA },
               shading: { type: ShadingType.CLEAR, color: 'auto', fill: COLORS.navy },
               margins: { top: 120, bottom: 120, left: 140, right: 140 },
               verticalAlign: VerticalAlign.CENTER,
@@ -182,6 +201,7 @@ function dataTable(table) {
       children: Array.from({ length: columns }, (_, index) => {
         const value = row[index] ?? '';
         return new TableCell({
+          width: { size: fixedWidths[index], type: WidthType.DXA },
           shading: isTotal ? { type: ShadingType.CLEAR, color: 'auto', fill: COLORS.soft } : undefined,
           margins: { top: 110, bottom: 110, left: 140, right: 140 },
           borders: cellBorders({ bottom: isTotal ? lineBorder(COLORS.navy, 8) : lineBorder(COLORS.hairline, 4) }),
@@ -201,7 +221,7 @@ function dataTable(table) {
   return [
     new Table({
       width: { size: 100, type: WidthType.PERCENTAGE },
-      columnWidths: table.columnWidths?.length === columns ? table.columnWidths.map((w) => Math.round(Number(w) * TWIP_PER_CM)) : undefined,
+      columnWidths: fixedWidths,
       borders: { top: { style: BorderStyle.NONE, size: 0, color: 'auto' }, bottom: { style: BorderStyle.NONE, size: 0, color: 'auto' }, left: { style: BorderStyle.NONE, size: 0, color: 'auto' }, right: { style: BorderStyle.NONE, size: 0, color: 'auto' }, insideHorizontal: { style: BorderStyle.NONE, size: 0, color: 'auto' }, insideVertical: { style: BorderStyle.NONE, size: 0, color: 'auto' } },
       rows: headerRow ? [headerRow, ...bodyRows] : bodyRows,
     }),
