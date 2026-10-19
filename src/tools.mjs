@@ -2,9 +2,13 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { DATA_DIR, LIMITS, MODEL } from './config.mjs';
+import { checkDocument, formatCheckReport } from './doccheck.mjs';
+import { memoryToolReply } from './memory.mjs';
+import { skillBody, skillIds } from './skills.mjs';
 import { detectKind, extractDocumentText } from './docparse.mjs';
 import { createDocumentPdf, createPresentationPdf } from './pdf.mjs';
 import { docEngines, docIssues, makePdf, makePresentation, makeWord, makeWorkbook } from './doc/index.mjs';
+import { imageInfo } from './doc/image-info.mjs';
 import { describeImage } from './vision.mjs';
 import { fetchUrl, webSearch } from './search.mjs';
 import { escapeHtml, formatBytes, safeName, truncate } from './util.mjs';
@@ -291,6 +295,42 @@ function runProcess(command, args, { cwd, timeoutMs, input }) {
 
 /* ------------------- нормализация аргументов документов ------------------- */
 
+/** Диаграмма Word: одна схема на все места, где она допустима. */
+const DOCX_CHART_SCHEMA = {
+  type: 'object',
+  description:
+    'Настоящая диаграмма Word (её можно править в Word через «Изменить данные», это не картинка). Ставь, когда в тексте есть цифры по периодам или сравнение категорий.',
+  properties: {
+    type: { type: 'string', enum: ['column', 'bar', 'line', 'pie', 'doughnut', 'area'], description: 'column — столбцы, bar — горизонтальные полосы, line — динамика, pie/doughnut — доли, area — площади.' },
+    title: { type: 'string', description: 'Заголовок диаграммы.' },
+    categories: { type: 'array', items: { type: 'string' }, description: 'Подписи по оси X: периоды или названия.' },
+    series: {
+      type: 'array',
+      description: 'Ряды данных. Значения — числа, а не строки.',
+      items: {
+        type: 'object',
+        properties: { name: { type: 'string', description: 'Название ряда для легенды.' }, values: { type: 'array', items: { type: 'number' } } },
+        required: ['name', 'values'],
+      },
+    },
+    width: { type: 'number', description: 'Ширина в пикселях, по умолчанию во всю ширину полей страницы.' },
+    height: { type: 'number', description: 'Высота в пикселях, по умолчанию половина ширины.' },
+  },
+  required: ['type', 'series'],
+};
+
+/** Картинка из файлов проекта. */
+const DOCX_IMAGE_SCHEMA = {
+  type: 'object',
+  description: 'Картинка из файлов проекта (PNG, JPEG, GIF, BMP). Путь — относительно корня проекта, как в list_files.',
+  properties: {
+    path: { type: 'string', description: 'Путь к файлу, например «assets/logo.png».' },
+    caption: { type: 'string', description: 'Подпись под картинкой, необязательно.' },
+    width: { type: 'number', description: 'Ширина в сантиметрах. По умолчанию — во всю ширину полей, но не больше натурального размера.' },
+  },
+  required: ['path'],
+};
+
 /** Список строк: принимаем массив, переводы строк и одиночную строку. */
 function listOf(value) {
   if (Array.isArray(value)) return value.map((item) => String(item)).filter((item) => item.trim() !== '');
@@ -320,6 +360,23 @@ function tableOf(value) {
   };
 }
 
+/** Картинка из аргументов: путь обязателен, остальное необязательно. */
+function imageOf(value) {
+  if (!value) return null;
+  const rel = String(value.path ?? '').trim();
+  if (!rel) return null;
+  return {
+    path: rel,
+    caption: value.caption ? String(value.caption) : undefined,
+    width: Number(value.width) > 0 ? Number(value.width) : undefined,
+  };
+}
+
+function imagesOf(value) {
+  if (!Array.isArray(value)) return [];
+  return value.map(imageOf).filter(Boolean);
+}
+
 /** Разделы документа → разделы про-спеки (с поддержкой простого режима). */
 function sectionsOf(value) {
   const sections = Array.isArray(value)
@@ -330,6 +387,10 @@ function sectionsOf(value) {
               paragraphs: listOf(sub.paragraphs),
               bullets: listOf(sub.bullets),
               table: tableOf(sub.table),
+              chart: chartOf(sub.chart),
+              charts: Array.isArray(sub.charts) ? sub.charts.map(chartOf).filter(Boolean) : [],
+              image: imageOf(sub.image),
+              images: imagesOf(sub.images),
             }))
           : [];
         return {
@@ -339,11 +400,65 @@ function sectionsOf(value) {
           kpi: kpiOf(section.kpi),
           subsections,
           table: tableOf(section.table),
+          chart: chartOf(section.chart),
+          charts: Array.isArray(section.charts) ? section.charts.map(chartOf).filter(Boolean) : [],
+          image: imageOf(section.image),
+          images: imagesOf(section.images),
           note: section.note,
         };
       })
     : [];
-  return sections.filter((section) => section.heading || section.paragraphs.length || section.bullets.length || section.table || section.kpi.length);
+  return sections.filter(
+    (section) =>
+      section.heading ||
+      section.paragraphs.length ||
+      section.bullets.length ||
+      section.table ||
+      section.kpi.length ||
+      section.chart ||
+      section.charts.length ||
+      section.image ||
+      section.images.length,
+  );
+}
+
+const MAX_IMAGE_BYTES = 12 * 1024 * 1024;
+const PX_PER_CM = 37.795;
+
+/** Прочитать картинку проекта в байты: Word вставляет её внутрь файла. */
+function loadImageBytes(item, root) {
+  const rel = item.path;
+  const full = assertInside(root, resolveSafe(root, rel));
+  if (!fs.existsSync(full) || !fs.statSync(full).isFile()) {
+    throw new Error(`Файл изображения не найден: ${rel}. Посмотри список файлов проекта через list_files.`);
+  }
+  const size = fs.statSync(full).size;
+  if (size > MAX_IMAGE_BYTES) throw new Error(`Картинка «${rel}» больше 12 МБ — уменьши её перед вставкой`);
+  const data = fs.readFileSync(full);
+  const info = imageInfo(data);
+  if (!info) throw new Error(`Файл «${rel}» не PNG, JPEG, GIF или BMP — Word такую картинку не покажет`);
+  return {
+    data,
+    type: info.type,
+    width: info.width,
+    height: info.height,
+    widthPx: item.width ? Math.round(Math.min(17, item.width) * PX_PER_CM) : undefined,
+    caption: item.caption,
+  };
+}
+
+/** Заменить пути картинок на их байты во всём документе (шапка, разделы, подразделы). */
+function attachImages(spec, root) {
+  const containers = [spec, ...spec.sections.flatMap((section) => [section, ...section.subsections])];
+  for (const container of containers) {
+    const list = [];
+    if (container.image) list.push(container.image);
+    if (Array.isArray(container.images)) list.push(...container.images);
+    if (!list.length) continue;
+    container.images = list.map((item) => loadImageBytes(item, root));
+    delete container.image;
+  }
+  return spec;
 }
 
 function wordSpecFromArgs(args) {
@@ -351,8 +466,10 @@ function wordSpecFromArgs(args) {
   const paragraphs = listOf(args.paragraphs);
   const bullets = listOf(args.bullets);
   const table = tableOf(args.table);
-  if (!sections.length && (paragraphs.length || bullets.length || table)) {
-    sections.push({ heading: '', paragraphs, bullets, kpi: [], subsections: [], table, note: '' });
+  const image = imageOf(args.image);
+  const images = imagesOf(args.images);
+  if (!sections.length && (paragraphs.length || bullets.length || table || image || images.length)) {
+    sections.push({ heading: '', paragraphs, bullets, kpi: [], subsections: [], table, note: '', image, images });
   }
   return {
     title: args.title,
@@ -365,6 +482,8 @@ function wordSpecFromArgs(args) {
     headerText: args.headerText,
     footerText: args.footerText,
     pageNumbers: args.pageNumbers !== false,
+    image,
+    images,
     sections,
   };
 }
@@ -380,6 +499,8 @@ function chartOf(value) {
     title: value.title,
     categories: listOf(value.categories),
     series,
+    width: Number(value.width) > 0 ? Number(value.width) : undefined,
+    height: Number(value.height) > 0 ? Number(value.height) : undefined,
   };
 }
 
@@ -737,7 +858,7 @@ export const TOOL_DEFS = [
     function: {
       name: 'create_word',
       description:
-        'Создать деловой документ Word (.docx): обложка, оглавление, разделы с подзаголовками, строка KPI, таблицы с повторяющейся шапкой, списки, колонтитулы с номерами страниц. Используй для «сделай вордовский файл / документ Word / отчёт / договор / коммерческое предложение».',
+        'Создать деловой документ Word (.docx): обложка, оглавление, разделы с подзаголовками, строка KPI, таблицы с повторяющейся шапкой, списки, настоящие диаграммы Word, картинки, колонтитулы с номерами страниц. Используй для «сделай вордовский файл / документ Word / отчёт / договор / коммерческое предложение».',
       parameters: {
         type: 'object',
         properties: {
@@ -783,9 +904,16 @@ export const TOOL_DEFS = [
                       paragraphs: { type: 'array', items: { type: 'string' } },
                       bullets: { type: 'array', items: { type: 'string' } },
                       table: { type: 'object', properties: { headers: { type: 'array', items: { type: 'string' } }, rows: { type: 'array', items: { type: 'array', items: { type: 'string' } } } } },
+                      chart: DOCX_CHART_SCHEMA,
+                      image: DOCX_IMAGE_SCHEMA,
+                      images: { type: 'array', items: DOCX_IMAGE_SCHEMA },
                     },
                   },
                 },
+                chart: DOCX_CHART_SCHEMA,
+                charts: { type: 'array', items: DOCX_CHART_SCHEMA, description: 'Несколько диаграмм подряд.' },
+                image: DOCX_IMAGE_SCHEMA,
+                images: { type: 'array', items: DOCX_IMAGE_SCHEMA, description: 'Несколько картинок подряд.' },
                 table: {
                   type: 'object',
                   description: 'Таблица раздела: шапка и строки.',
@@ -803,6 +931,8 @@ export const TOOL_DEFS = [
           },
           paragraphs: { type: 'array', items: { type: 'string' }, description: 'Простой режим: абзацы без разделов.' },
           bullets: { type: 'array', items: { type: 'string' }, description: 'Простой режим: список без разделов.' },
+          image: DOCX_IMAGE_SCHEMA,
+          images: { type: 'array', items: DOCX_IMAGE_SCHEMA, description: 'Картинки сразу под шапкой (например, логотип).' },
           table: { type: 'object', description: 'Простой режим: одна таблица без разделов.', properties: { headers: { type: 'array', items: { type: 'string' } }, rows: { type: 'array', items: { type: 'array', items: {} } } } },
         },
         required: ['path'],
@@ -951,6 +1081,51 @@ export const TOOL_DEFS = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'remember',
+      description:
+        'Запомнить устойчивое предпочтение или правило пользователя навсегда (между диалогами). Пиши одной короткой фразой, например: «документы называет коротко и с расширением». Не запоминай содержимое текущей задачи и то, что уже лежит в файлах проекта.',
+      parameters: {
+        type: 'object',
+        properties: {
+          text: { type: 'string', description: 'Факт или правило, одной фразой, до 400 символов.' },
+        },
+        required: ['text'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'use_skill',
+      description:
+        'Открыть полную инструкцию навыка по его id. Список навыков с описаниями есть в системном сообщении. Вызывай до начала работы над документом, таблицей, презентацией, PDF или сайтом.',
+      parameters: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'Идентификатор навыка, например office-xlsx.' },
+        },
+        required: ['id'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'check_document',
+      description:
+        'Проверить готовый .docx/.xlsx/.pptx/.pdf: целостность пакета, наличие текста, пустые ячейки, выход блоков за границы слайда. Возвращает отчёт. Используй, если файл правили вручную или нужно убедиться перед отдачей пользователю.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Путь файла внутри проекта.' },
+        },
+        required: ['path'],
+      },
+    },
+  },
 ];
 
 export const TOOL_LABELS = {
@@ -972,6 +1147,9 @@ export const TOOL_LABELS = {
   create_word: 'Создание Word',
   create_pptx: 'Создание презентации',
   create_pdf: 'Создание PDF',
+  remember: 'Память',
+  use_skill: 'Навык',
+  check_document: 'Проверка файла',
 };
 
 export function toolSummary(name, args) {
@@ -1285,9 +1463,10 @@ export async function executeTool(name, args, ctx) {
       const charts = sheets.filter((sheet) => sheet.chart).length;
       const parts = [`${sheets.length} лист(ов)`, `${rows} строк`];
       if (charts) parts.push(`диаграмм: ${charts}`);
+      const check = await checkDocument(full);
       return {
-        text: `Excel создан: ${rel} (${parts.join(', ')}, ${Math.max(1, Math.round(buf.length / 1024))} КБ)`,
-        meta: { path: rel, created: true, engine },
+        text: `Excel создан: ${rel} (${parts.length ? parts.join(', ') : 'пусто'}, ${Math.max(1, Math.round(buf.length / 1024))} КБ)\n${formatCheckReport(check)}`,
+        meta: { path: rel, created: true, engine, check: { ok: check.ok, errors: check.errors, warnings: check.warnings } },
       };
     }
     case 'create_word': {
@@ -1295,16 +1474,23 @@ export async function executeTool(name, args, ctx) {
       if (!rel.toLowerCase().endsWith('.docx')) throw new Error('Имя файла должно заканчиваться на .docx');
       ensureFreeSpace(LIMITS.minFreeBytes);
       const spec = wordSpecFromArgs(args);
+      attachImages(spec, root);
       const { buffer: buf, engine } = await makeWord(spec, buildDocx);
       const full = assertInside(root, resolveSafe(root, rel));
       ensureDirFor(full);
       fs.writeFileSync(full, buf);
+      const containers = [spec, ...spec.sections.flatMap((section) => [section, ...section.subsections])];
+      const images = containers.reduce((sum, item) => sum + (item.images?.length || 0), 0);
+      const charts = spec.sections.reduce((sum, section) => sum + (section.chart ? 1 : 0) + (section.charts?.length || 0), 0);
       const detail = [`разделов: ${spec.sections.length}`];
       if (spec.cover) detail.push('обложка');
       if (spec.toc) detail.push('оглавление');
+      if (charts) detail.push(`диаграмм: ${charts}`);
+      if (images) detail.push(`картинок: ${images}`);
+      const check = await checkDocument(full);
       return {
-        text: `Word создан: ${rel} (${detail.join(', ')}, ${Math.max(1, Math.round(buf.length / 1024))} КБ)`,
-        meta: { path: rel, created: true, engine },
+        text: `Word создан: ${rel} (${detail.join(', ')}, ${Math.max(1, Math.round(buf.length / 1024))} КБ)\n${formatCheckReport(check)}`,
+        meta: { path: rel, created: true, engine, check: { ok: check.ok, errors: check.errors, warnings: check.warnings } },
       };
     }
     case 'create_pptx': {
@@ -1318,9 +1504,10 @@ export async function executeTool(name, args, ctx) {
       ensureDirFor(full);
       fs.writeFileSync(full, buf);
       const total = spec.slides.length + (spec.cover && spec.title ? 1 : 0);
+      const check = await checkDocument(full);
       return {
-        text: `Презентация создана: ${rel} (слайдов: ${total}, ${Math.max(1, Math.round(buf.length / 1024))} КБ)`,
-        meta: { path: rel, created: true, engine, slides: total },
+        text: `Презентация создана: ${rel} (слайдов: ${total}, ${Math.max(1, Math.round(buf.length / 1024))} КБ)\n${formatCheckReport(check)}`,
+        meta: { path: rel, created: true, engine, slides: total, check: { ok: check.ok, errors: check.errors, warnings: check.warnings } },
       };
     }
     case 'create_pdf': {
@@ -1335,9 +1522,40 @@ export async function executeTool(name, args, ctx) {
       fs.writeFileSync(full, buf);
       const pages = (buf.toString('latin1').match(/\/Type \/Page(?!s)/g) || []).length;
       const kind = layout === 'slides' ? 'презентация' : 'документ A4';
+      const check = await checkDocument(full);
       return {
-        text: `PDF создан: ${rel} (${kind}, ${pages} стр., ${Math.max(1, Math.round(buf.length / 1024))} КБ)`,
-        meta: { path: rel, created: true, pages, engine, layout },
+        text: `PDF создан: ${rel} (${kind}, ${pages} стр., ${Math.max(1, Math.round(buf.length / 1024))} КБ)\n${formatCheckReport(check)}`,
+        meta: { path: rel, created: true, pages, engine, layout, check: { ok: check.ok, errors: check.errors, warnings: check.warnings } },
+      };
+    }
+    case 'remember': {
+      const text = String(args.text || '');
+      if (typeof ctx.remember !== 'function') {
+        return { text: 'Память сейчас недоступна: запись не сохранится.', meta: { stored: false } };
+      }
+      const outcome = ctx.remember(text);
+      return {
+        text: memoryToolReply(outcome),
+        meta: { stored: Boolean(outcome.added), total: outcome.total },
+      };
+    }
+    case 'use_skill': {
+      const id = String(args.id || '').trim();
+      const body = skillBody(id);
+      if (!body.ok) {
+        return { text: `${body.text}\nДоступные навыки: ${skillIds().join(', ')}.`, meta: { skill: id, found: false } };
+      }
+      return { text: body.text, meta: { skill: body.id, found: true } };
+    }
+    case 'check_document': {
+      const rel = String(args.path || '');
+      if (!rel) throw new Error('Нужен путь к файлу');
+      const full = assertInside(root, resolveSafe(root, rel));
+      if (!fs.existsSync(full)) throw new Error(`Файла ${rel} нет в проекте`);
+      const check = await checkDocument(full);
+      return {
+        text: `${rel}:\n${formatCheckReport(check)}`,
+        meta: { path: rel, ok: check.ok, errors: check.errors, warnings: check.warnings },
       };
     }
     default:

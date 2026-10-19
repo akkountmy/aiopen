@@ -10,8 +10,32 @@ import {
   WORKSPACES_DIR,
   deviceLimit,
 } from './config.mjs';
+import { MEMORY_LIMITS, normalizeFact } from './memory.mjs';
 import { hashPassword, sessionKind, verifyPassword } from './security.mjs';
 import { atomicWrite, nowIso, readJson, uid } from './util.mjs';
+
+/* Насколько перекрытие слов должно быть большим, чтобы новый факт считался
+   уточнением старого (тогда старый заменяется, а не добавляется рядом). */
+const REPLACE_OVERLAP = 0.6;
+
+function factWords(text) {
+  return new Set(
+    String(text || '')
+      .toLowerCase()
+      .replace(/[ё]/g, 'е')
+      .split(/[^a-zа-я0-9]+/i)
+      .filter((word) => word.length > 2),
+  );
+}
+
+function overlap(a, b) {
+  const left = factWords(a);
+  const right = factWords(b);
+  if (!left.size || !right.size) return 0;
+  let shared = 0;
+  for (const word of left) if (right.has(word)) shared++;
+  return shared / Math.min(left.size, right.size);
+}
 
 const SEED_FILE = path.join(DATA_DIR, 'admin-seed.json');
 
@@ -373,6 +397,62 @@ class Store {
     }
     this.save();
     return publicUser(user);
+  }
+
+  /* ---------------- постоянная память пользователя ---------------- */
+
+  /* Факты живут на записи пользователя: переживают диалоги и проекты, чистятся
+     только явным удалением. Это аналог pinned-предпочтений локального харнесса. */
+  memoryFacts(userId) {
+    const user = this.getUser(userId);
+    return Array.isArray(user?.facts) ? user.facts.map((fact) => ({ ...fact })) : [];
+  }
+
+  /**
+   * Запомнить факт. Возвращает, что произошло: добавлено, заменено или почему нет.
+   * @param {string} userId
+   * @param {string} text короткая фраза
+   */
+  addMemoryFact(userId, text) {
+    const user = this.getUser(userId);
+    if (!user) return { added: '', replaced: false, reason: 'пользователь не найден', total: 0 };
+    if (!Array.isArray(user.facts)) user.facts = [];
+
+    const fact = normalizeFact(text);
+    if (!fact) return { added: '', replaced: false, reason: 'пустая формулировка', total: user.facts.length };
+    if (user.facts.some((item) => normalizeFact(item.text).toLowerCase() === fact.toLowerCase())) {
+      return { added: '', replaced: false, reason: 'это уже записано', total: user.facts.length };
+    }
+
+    /* Уточнение старого факта: похожие слова — значит речь о том же правиле. */
+    let replaced = false;
+    const similar = user.facts.findIndex((item) => overlap(item.text, fact) >= REPLACE_OVERLAP);
+    if (similar >= 0) {
+      user.facts[similar] = { ...user.facts[similar], text: fact, updatedAt: nowIso() };
+      replaced = true;
+    } else {
+      user.facts.push({ id: uid('m_'), text: fact, createdAt: nowIso() });
+      while (user.facts.length > MEMORY_LIMITS.maxFacts) user.facts.shift();
+    }
+    this.save();
+    return { added: fact, replaced, total: user.facts.length };
+  }
+
+  removeMemoryFact(userId, id) {
+    const user = this.getUser(userId);
+    if (!user || !Array.isArray(user.facts)) return { removed: false, total: 0 };
+    const before = user.facts.length;
+    user.facts = user.facts.filter((fact) => fact.id !== id);
+    if (user.facts.length !== before) this.save();
+    return { removed: user.facts.length !== before, total: user.facts.length };
+  }
+
+  clearMemory(userId) {
+    const user = this.getUser(userId);
+    if (!user) return false;
+    user.facts = [];
+    this.save();
+    return true;
   }
 
   deleteUser(id) {

@@ -2844,6 +2844,25 @@ body.resizing {
   opacity: 0.75;
 }
 
+/* Память: это не запрос на одобрение, поэтому красный акцент не нужен,
+   а длинный факт переносится по словам целиком. */
+.memory-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.memory-list .approval {
+  border-color: var(--line);
+  background: transparent;
+}
+
+.memory-list .ap-title {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+}
+
 .approval .ap-main {
   flex: 1;
   min-width: 0;

@@ -47,6 +47,10 @@ test('описания инструментов содержат новые по
   for (const key of ['columns', 'chart', 'totalRow', 'conditional', 'numFmt']) assert.ok(excelProps[key] || excelProps.columns.items.properties[key], `нет поля ${key} в create_excel`);
   const wordSection = word.function.parameters.properties.sections.items.properties;
   for (const key of ['kpi', 'table', 'subsections', 'note']) assert.ok(wordSection[key], `нет поля ${key} в create_word`);
+  for (const key of ['chart', 'charts', 'image', 'images']) assert.ok(wordSection[key], `нет поля ${key} в create_word`);
+  assert.deepEqual(wordSection.chart.properties.type.enum, ['column', 'bar', 'line', 'pie', 'doughnut', 'area']);
+  assert.deepEqual(wordSection.image.properties.path.type, 'string');
+  assert.ok(word.function.parameters.properties.image, 'нет картинки верхнего уровня в create_word');
   const pdf = find('create_pdf');
   assert.ok(pdf.function.parameters.properties.slides.items.properties.chart, 'в create_pdf нет диаграмм');
   assert.ok(pptx.function.parameters.properties.slides.items.properties.chart, 'в create_pptx нет диаграмм');
@@ -92,6 +96,83 @@ test('Word: обложка, разделы, KPI, таблица, колонти�
   assert.match(xml, /TOC/, 'оглавление не добавлено');
   const footer = await zipText(buffer, 'word/footer1.xml');
   assert.match(footer, /PAGE/, 'в нижнем колонтитуле нет номера страницы');
+});
+
+test('Word: настоящая диаграмма и картинка', async () => {
+  fs.copyFileSync(new URL('../public/icons/icon-192.png', import.meta.url), path.join(ctx.workspace, 'logo.png'));
+  const result = await executeTool(
+    'create_word',
+    {
+      path: 'Медиа.docx',
+      title: 'Отчёт с диаграммой',
+      sections: [
+        {
+          heading: 'Динамика',
+          paragraphs: ['Выручка растёт третий квартал подряд.'],
+          chart: {
+            type: 'column',
+            title: 'Выручка по кварталам',
+            categories: ['Q1', 'Q2', 'Q3'],
+            series: [
+              { name: '2025', values: [10, 12, 14] },
+              { name: '2026', values: [12, 15, 18] },
+            ],
+          },
+        },
+        { heading: 'Схема', images: [{ path: 'logo.png', caption: 'Логотип проекта' }] },
+      ],
+    },
+    ctx,
+  );
+  assert.equal(result.meta.engine, 'docx-pro');
+  assert.equal(result.meta.check.ok, true, `проверка файла не прошла: ${result.text}`);
+  const buffer = read('Медиа.docx');
+  const parts = await zipNames(buffer);
+  assert.ok(parts.has('word/charts/chart1.xml'), 'нет части диаграммы');
+  assert.ok(parts.has('word/charts/_rels/chart1.xml.rels'), 'нет связей диаграммы');
+  assert.ok(parts.has('word/embeddings/chart1.xlsx'), 'нет книги данных диаграммы');
+  assert.ok([...parts].some((name) => /^word\/media\//.test(name)), 'нет файла картинки');
+
+  const xml = await zipText(buffer, 'word/document.xml');
+  assert.ok(!xml.includes('[[CHART:'), 'маркер диаграммы не заменён на объект');
+  assert.match(xml, /<c:chart\b/, 'в тексте нет объекта-диаграммы');
+  assert.match(xml, /<a:blip r:embed="rId\d+"/, 'в тексте нет картинки');
+  assert.match(xml, /Логотип проекта/, 'нет подписи под картинкой');
+
+  const chart = await zipText(buffer, 'word/charts/chart1.xml');
+  assert.match(chart, /^<\?xml/);
+  assert.match(chart, /c:externalData/, 'диаграмма без ссылки на книгу данных');
+  assert.match(chart, /<c:barChart>/, 'тип диаграммы не столбцы');
+
+  const types = await zipText(buffer, '[Content_Types].xml');
+  assert.match(types, /drawingml\.chart\+xml/, 'нет типа содержимого для диаграммы');
+  assert.match(types, /spreadsheetml\.sheet/, 'нет типа содержимого для книги данных');
+  const rels = await zipText(buffer, 'word/_rels/document.xml.rels');
+  assert.match(rels, /relationships\/chart/, 'нет связи документа с диаграммой');
+
+  assert.match(result.text, /диаграмм: 1/);
+  assert.match(result.text, /картинок: 1/);
+
+  /* Книга данных должна читаться офисным движком, иначе «Изменить данные» сломано. */
+  const ExcelJS = (await import('exceljs')).default;
+  const workbook = new ExcelJS.Workbook();
+  const embedded = await (await JSZip.loadAsync(buffer)).file('word/embeddings/chart1.xlsx').async('nodebuffer');
+  await workbook.xlsx.load(embedded);
+  const sheet = workbook.worksheets[0];
+  assert.equal(sheet.getRow(1).getCell(2).value, '2025');
+  assert.equal(sheet.getRow(4).getCell(3).value, 18);
+});
+
+test('Word: битая картинка даёт понятную ошибку, а не пустой файл', async () => {
+  await assert.rejects(
+    () => executeTool('create_word', { path: 'Нет.docx', sections: [{ heading: 'Раздел', image: { path: 'нет-такой.png' } }] }, ctx),
+    /не найден/,
+  );
+  fs.writeFileSync(path.join(ctx.workspace, 'note.txt'), 'это не картинка');
+  await assert.rejects(
+    () => executeTool('create_word', { path: 'Нет2.docx', sections: [{ heading: 'Раздел', image: { path: 'note.txt' } }] }, ctx),
+    /PNG, JPEG/,
+  );
 });
 
 test('Excel: шапка, форматы, формулы, итог, диаграмма', async () => {

@@ -1,6 +1,7 @@
 import { CONTEXT, MODEL, costUsd } from './config.mjs';
 import { getDeepSeekKey } from './keys.mjs';
 import { summaryPrompt, systemPrompt } from './prompt.mjs';
+import { skillsPromptText } from './skills.mjs';
 import { availableToolDefs, TOOL_LABELS, executeTool, toolSummary } from './tools.mjs';
 import { estimateTokens, sleep, truncate } from './util.mjs';
 
@@ -182,9 +183,24 @@ function buildUserContent(text, images) {
  * @param {Function} params.emit события для UI
  * @param {AbortSignal} params.signal
  */
-export async function runTurn({ workspace, chat, projectName, userName, userText, images = [], emit, signal, budget = null }) {
+export async function runTurn({
+  workspace,
+  chat,
+  projectName,
+  userName,
+  userText,
+  images = [],
+  emit,
+  signal,
+  budget = null,
+  /* Постоянная память пользователя: факты уже прочитаны из store вызывающей
+     стороной, remember — функция их записи. */
+  facts = [],
+  remember = null,
+}) {
   const usage = { tokensIn: 0, tokensOut: 0 };
   const toolsUsed = [];
+  const skillsText = skillsPromptText();
   const removed = trimHistory(chat, CONTEXT.historyTokens);
 
   if (removed.length) {
@@ -216,7 +232,7 @@ export async function runTurn({ workspace, chat, projectName, userName, userText
 
   while (steps < CONTEXT.maxSteps) {
     steps++;
-    const system = systemPrompt({ projectName, memory: chat.memory, userName, question: userText });
+    const system = systemPrompt({ projectName, memory: chat.memory, userName, question: userText, facts, skillsText });
     const messages = [{ role: 'system', content: system }, ...chat.history];
 
     let result;
@@ -332,7 +348,7 @@ export async function runTurn({ workspace, chat, projectName, userName, userText
         console.warn(`[tool] ${call.function.name}: аргументы обрезаны`);
       } else {
         try {
-          const executed = await executeTool(call.function.name, args, { workspace, signal });
+          const executed = await executeTool(call.function.name, args, { workspace, signal, remember });
           content = truncate(String(executed.text ?? ''), CONTEXT.toolResultChars);
           emit({
             type: 'tool',

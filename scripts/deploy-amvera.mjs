@@ -59,6 +59,7 @@ if (mode === 'status') {
           'README.md',
           ...walk('src', 'src'),
           ...walk('public', 'public'),
+          ...walk('skills', 'skills'),
           ...walk('assets', 'assets'),
         ].filter((rel) => fs.statSync(path.join(ROOT, rel)).isFile());
 

@@ -2682,6 +2682,11 @@ function openUserMenu(event) {
       icon: ICONS.key,
       action: () => changePasswordModal(),
     },
+    {
+      label: 'Что сервис помнит',
+      icon: ICONS.eye,
+      action: () => memoryModal(),
+    },
   ];
   if (isAdmin) {
     items.push(
@@ -3077,6 +3082,90 @@ async function changePasswordModal() {
     ],
   });
   setTimeout(() => current.focus(), 40);
+}
+
+/* Что сервис запомнил о человеке: список фактов, удаление по одному и сброс.
+   Память влияет на ответы, поэтому она должна быть видимой и управляемой. */
+async function memoryModal() {
+  const body = el('div', 'admin');
+  const list = el('div', 'memory-list');
+  const note = el('p', 'field-error');
+  body.append(
+    el(
+      'p',
+      'ap-sub',
+      'Это то, что сервис запомнил из прошлых разговоров и учитывает в новых. Удалите лишнее — модель перестанет это использовать.',
+    ),
+    list,
+    note,
+  );
+
+  const refresh = async () => {
+    note.textContent = '';
+    list.innerHTML = '';
+    let facts = [];
+    try {
+      facts = (await api('/api/memory')).facts || [];
+    } catch (error) {
+      note.textContent = error.message;
+      return;
+    }
+    if (!facts.length) {
+      list.appendChild(el('div', 'files-empty', 'Пока ничего не записано'));
+      return;
+    }
+    for (const fact of facts) {
+      const row = el('div', 'approval');
+      const main = el('div', 'ap-main');
+      main.appendChild(el('div', 'ap-title', fact.text));
+      const when = fact.createdAt
+        ? new Date(fact.createdAt).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+        : '';
+      main.appendChild(el('div', 'ap-sub', when ? `записано ${when}` : 'записано'));
+      row.appendChild(main);
+      const actions = el('div', 'ap-actions');
+      const remove = el('button', 'btn btn-quiet', 'Удалить');
+      remove.type = 'button';
+      remove.addEventListener('click', async () => {
+        remove.disabled = true;
+        try {
+          await api('/api/memory', { method: 'DELETE', body: { id: fact.id } });
+          await refresh();
+        } catch (error) {
+          note.textContent = error.message;
+          remove.disabled = false;
+        }
+      });
+      actions.appendChild(remove);
+      row.appendChild(actions);
+      list.appendChild(row);
+    }
+  };
+
+  list.innerHTML = '<div class="files-empty"><div class="spin-lg"></div></div>';
+  openModal({
+    title: 'Что сервис помнит',
+    body,
+    wide: true,
+    actions: [
+      {
+        label: 'Очистить всё',
+        kind: 'danger',
+        onClick: async () => {
+          try {
+            await api('/api/memory', { method: 'DELETE', body: {} });
+            toast('Память очищена', 'ok');
+            await refresh();
+          } catch (error) {
+            note.textContent = error.message;
+          }
+          return false;
+        },
+      },
+      { label: 'Закрыть', kind: 'quiet' },
+    ],
+  });
+  await refresh();
 }
 
 /* Полный сброс клиентского состояния при смене аккаунта: у каждого

@@ -1,3 +1,5 @@
+import { memoryPromptText } from './memory.mjs';
+
 function today() {
   const now = new Date();
   return now.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
@@ -24,6 +26,8 @@ const DOC_QUALITY = [
   '— Таблицы: шапка с единицами в заголовке колонки, числовые колонки вправо (numericColumns), последняя строка «Итого» (totalRow).',
   '— Абзацы 3–6 строк; списки — только для перечислений и условий, не для связного текста; подписи к таблицам в note.',
   '— Договор/КП: стороны, предмет, цена, сроки, порядок оплаты, ответственность, реквизиты — отдельными разделами.',
+  '— Динамика, сравнение категорий или доли — настоящая диаграмма Word (chart: type/categories/series) в разделе, где эти цифры обсуждаются; не вставляй диаграмму без подписанных категорий.',
+  '— Картинки — только из файлов проекта (image: path/caption/width). Сначала найди файл через list_files; не придумывай путь. Схема без подписи в отчёте бесполезна — добавляй caption.',
   'EXCEL (create_excel)',
   '— Один лист — одна мысль. title листа = название отчёта и период; шапка колонок с форматами (numFmt) и числовой направленностью.',
   '— Считай формулами («=SUM(...)», «=B2/C2»), а не готовыми числами: пользователь должен видеть расчёт.',
@@ -132,8 +136,9 @@ export function expertBlocks(question) {
   return matched.slice(0, 2).map((mode) => ({ id: mode.id, lines: mode.lines }));
 }
 
-export function systemPrompt({ projectName, memory, userName, question }) {
+export function systemPrompt({ projectName, memory, userName, question, facts = [], skillsText = '' }) {
   const experts = expertBlocks(question);
+  const memoryBlock = memoryPromptText(facts);
   const lines = [
     'Ты — AI-ассистент закрытого рабочего пространства. Пользователь общается с тобой в веб-интерфейсе и ждёт готовый результат, а не обсуждение процесса.',
     '',
@@ -161,10 +166,13 @@ export function systemPrompt({ projectName, memory, userName, question }) {
     `Проект: «${projectName}».`,
     userName ? `Пользователя зовут ${userName}.` : '',
     'В проекте есть файловая система. Все пути указывай относительно корня проекта.',
+    'После каждого create_word/create_excel/create_pptx/create_pdf читай строку «Проверка файла»: если там ОШИБКИ — не отдавай файл пользователю, исправь причину и пересоздай; если замечания — либо поправь, либо честно упомяни их одной фразой.',
   ];
+  if (memoryBlock) lines.push('', memoryBlock);
   if (memory) {
     lines.push('', 'Память предыдущих обсуждений (краткое содержание):', memory);
   }
+  if (skillsText) lines.push('', skillsText);
   return lines.filter(Boolean).join('\n');
 }
 

@@ -12,6 +12,7 @@ import {
   Footer,
   Header,
   HeadingLevel,
+  ImageRun,
   PageBreak,
   PageNumber,
   Packer,
@@ -25,12 +26,19 @@ import {
   VerticalAlign,
   WidthType,
 } from 'docx';
+import { injectWordCharts } from './docx-chart.mjs';
 import { COLORS, DOC_TYPE, FONTS, safeText, toList } from './theme.mjs';
 
 const TWIP_PER_CM = 567;
 const PAGE_A4 = { width: Math.round(21 * TWIP_PER_CM), height: Math.round(29.7 * TWIP_PER_CM) };
 const MARGIN = { top: 1247, bottom: 1247, left: 1361, right: 1134, header: 708, footer: 708 };
 const BODY_WIDTH = PAGE_A4.width - MARGIN.left - MARGIN.right; // twips внутри полей
+/* Ширина полосы набора: 1 пкс = 1/96 дюйма = 15 твипов. Картинка и диаграмма
+   шире этого поля вылезут за край листа, поэтому масштабируем заранее. */
+const BODY_WIDTH_PX = Math.round(BODY_WIDTH / 15);
+const MAX_IMAGE_HEIGHT_PX = 760;
+/** Маркер абзаца, который позже заменяется настоящей диаграммой Word. */
+const chartMarker = (index) => `[[CHART:${index}]]`;
 
 /** Ячейка вида «320 000 ₽», «7,8%», «1,5 мес.», «-3,4%» — числовая. */
 const NUMERIC_CELL =
@@ -229,7 +237,88 @@ function dataTable(table) {
   ];
 }
 
-function sectionBlock(section, index) {
+/* ------------------------------------------- диаграммы и картинки в разделе */
+
+/** Сырая диаграмма из спецификации → безопасный объект для генератора частей. */
+function chartSpec(value) {
+  if (!value || !Array.isArray(value.series)) return null;
+  const series = value.series
+    .filter((item) => item && Array.isArray(item.values) && item.values.length)
+    .map((item) => ({
+      name: safeText(item.name) || 'Ряд',
+      values: item.values.map((number) => Number(number) || 0),
+    }));
+  if (!series.length) return null;
+  const type = ['bar', 'column', 'line', 'pie', 'area', 'doughnut'].includes(value.type) ? value.type : 'column';
+  return {
+    type,
+    title: safeText(value.title),
+    categories: toList(value.categories),
+    series,
+    width: Number(value.width) || undefined,
+    height: Number(value.height) || undefined,
+  };
+}
+
+/** Абзацы-маркеры: их заменит настоящая диаграмма при сборке пакета. */
+function chartParagraphs(container, media) {
+  const list = [];
+  if (container.chart) list.push(container.chart);
+  if (Array.isArray(container.charts)) list.push(...container.charts);
+  const out = [];
+  for (const raw of list) {
+    const chart = chartSpec(raw);
+    if (!chart) continue;
+    const index = media.charts.push(chart) - 1;
+    out.push(para(chartMarker(index), { size: 9, color: COLORS.muted, after: 160 }));
+  }
+  return out;
+}
+
+/** Вставка картинки по центру, с подписью; размеры ограничены полем страницы. */
+function imageParagraphs(container) {
+  const list = [];
+  if (container.image) list.push(container.image);
+  if (Array.isArray(container.images)) list.push(...container.images);
+  const out = [];
+  for (const image of list) {
+    if (!image || !image.data) continue;
+    const type = image.type === 'jpeg' ? 'jpg' : image.type;
+    if (!['png', 'jpg', 'gif', 'bmp'].includes(type)) continue;
+    const naturalW = Number(image.width) || BODY_WIDTH_PX;
+    const naturalH = Number(image.height) || Math.round(naturalW * 0.6);
+    let width = Number(image.widthPx) || naturalW;
+    if (width > BODY_WIDTH_PX) width = BODY_WIDTH_PX;
+    let height = Number(image.heightPx) || Math.round((width * naturalH) / naturalW);
+    if (height > MAX_IMAGE_HEIGHT_PX) {
+      height = MAX_IMAGE_HEIGHT_PX;
+      width = Math.round((height * naturalW) / naturalH);
+    }
+    const caption = safeText(image.caption);
+    out.push(
+      new Paragraph({
+        children: [new ImageRun({ type, data: image.data, transformation: { width, height } })],
+        alignment: AlignmentType.CENTER,
+        spacing: { before: 140, after: caption ? 40 : 200 },
+        keepNext: Boolean(caption),
+      }),
+    );
+    if (caption) {
+      out.push(
+        para(caption, {
+          size: DOC_TYPE.caption,
+          color: COLORS.muted,
+          italics: true,
+          align: AlignmentType.CENTER,
+          after: 200,
+        }),
+      );
+    }
+  }
+  return out;
+}
+
+function sectionBlock(section, index, media) {
   const children = [];
   const heading = safeText(section.heading);
   if (heading) {
@@ -256,6 +345,8 @@ function sectionBlock(section, index) {
       }),
     );
   }
+  children.push(...imageParagraphs(section));
+  children.push(...chartParagraphs(section, media));
   const subheads = Array.isArray(section.subsections) ? section.subsections : [];
   for (const sub of subheads) {
     const subHeading = safeText(sub.heading);
@@ -273,6 +364,8 @@ function sectionBlock(section, index) {
     for (const item of toList(sub.bullets)) {
       children.push(new Paragraph({ children: [run(item)], bullet: { level: 0 }, spacing: { after: 80, line: 288 } }));
     }
+    children.push(...imageParagraphs(sub));
+    children.push(...chartParagraphs(sub, media));
     if (sub.table) children.push(...dataTable(sub.table));
   }
   children.push(...dataTable(section.table));
@@ -328,6 +421,7 @@ function footerLine({ footerText, pageNumbers }) {
 export async function buildDocxPro(spec = {}) {
   const sections = Array.isArray(spec.sections) ? spec.sections : [];
   const cover = spec.cover === true && Boolean(spec.title);
+  const media = { charts: [] };
   const children = [];
   children.push(...headerBlock({
     title: safeText(spec.title),
@@ -337,6 +431,9 @@ export async function buildDocxPro(spec = {}) {
     date: safeText(spec.date),
     cover,
   }));
+  /* Картинки верхнего уровня — логотип или схема сразу под шапкой. */
+  children.push(...imageParagraphs(spec));
+  children.push(...chartParagraphs(spec, media));
   const toc = spec.toc === true && !cover;
   if (spec.toc === true) {
     children.push(
@@ -351,7 +448,7 @@ export async function buildDocxPro(spec = {}) {
     );
   }
   sections.forEach((section, index) => {
-    children.push(...sectionBlock(section || {}, index));
+    children.push(...sectionBlock(section || {}, index, media));
   });
   if (!sections.length && !children.length) children.push(para('Документ пуст.', { color: COLORS.muted }));
 
@@ -384,5 +481,8 @@ export async function buildDocxPro(spec = {}) {
     ],
   });
 
-  return Packer.toBuffer(doc);
+  const buffer = await Packer.toBuffer(doc);
+  /* Библиотека `docx` не умеет диаграммы: дописываем части в готовый пакет. */
+  if (!media.charts.length) return buffer;
+  return injectWordCharts(buffer, media.charts, { widthPx: BODY_WIDTH_PX, heightPx: Math.round(BODY_WIDTH_PX * 0.5) });
 }

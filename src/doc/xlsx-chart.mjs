@@ -198,4 +198,4 @@ export async function injectCharts(buffer, charts = []) {
   return zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
 }
 
-export { rangeRef, parseAnchorCell, CHART_TYPES };
+export { rangeRef, parseAnchorCell, chartXml, CHART_TYPES };

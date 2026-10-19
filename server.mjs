@@ -47,6 +47,7 @@ import {
 } from './src/security.mjs';
 import { store } from './src/store.mjs';
 import { listTree, resolveSafe } from './src/tools.mjs';
+import { listSkills } from './src/skills.mjs';
 import { pipeZip } from './src/zip.mjs';
 import { nowIso, safeName, uid } from './src/util.mjs';
 import { describeImage } from './src/vision.mjs';
@@ -1171,6 +1172,10 @@ async function executeRun(run, job) {
       emit: stream.emit,
       signal: controller.signal,
       budget: user.role === 'admin' ? null : { limitUsd: projectLimit(project) },
+      /* Постоянная память пользователя: факты подмешиваются в системное
+         сообщение, remember пишет новые прямо в index.json. */
+      facts: store.memoryFacts(user.id),
+      remember: (fact) => store.addMemoryFact(user.id, fact),
     });
 
     assistantText = outcome.text || '';
@@ -1415,6 +1420,7 @@ async function route(req, res) {
         time: nowIso(),
         sessions: { desktop: deviceLimit('desktop'), mobile: deviceLimit('mobile'), app: deviceLimit('app') },
         docs: await docEngines(),
+        skills: listSkills().length,
       });
     }
 
@@ -1806,6 +1812,26 @@ async function route(req, res) {
       if (problem) return sendError(res, 400, problem);
       store.updateUser(user.id, { password: String(body.next) });
       return sendJson(res, 200, { ok: true });
+    }
+    if (pathname === '/api/memory' && method === 'GET') {
+      return sendJson(res, 200, { facts: store.memoryFacts(user.id) });
+    }
+    if (pathname === '/api/memory' && method === 'POST') {
+      const body = await readJsonBody(req);
+      const text = String(body.text || body.fact || '').trim();
+      if (!text) return sendError(res, 400, 'Пустая формулировка');
+      if (text.length > 400) return sendError(res, 400, 'Слишком длинно: до 400 символов');
+      const outcome = store.addMemoryFact(user.id, text);
+      return sendJson(res, 200, { ...outcome, facts: store.memoryFacts(user.id) });
+    }
+    if (pathname === '/api/memory' && method === 'DELETE') {
+      const body = await readJsonBody(req);
+      if (body.id) {
+        const outcome = store.removeMemoryFact(user.id, String(body.id));
+        return sendJson(res, 200, { ...outcome, facts: store.memoryFacts(user.id) });
+      }
+      store.clearMemory(user.id);
+      return sendJson(res, 200, { ok: true, facts: [] });
     }
     if (pathname === '/api/admin/stats' && method === 'GET') {
       const admin = requireAdmin(req, res);
