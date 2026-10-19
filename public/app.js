@@ -1463,9 +1463,10 @@ function renderFiles() {
     const isImage = /\.(png|jpe?g|webp|gif|bmp)$/i.test(item.name);
     row.innerHTML = `<span class="f-icon">${item.dir ? ICONS.folder : isImage ? ICONS.image : ICONS.file}</span>`;
     const name = el('span', 'f-name', item.name);
+    const officeApp = item.dir ? null : officeOpener(item.name);
     name.title = item.dir
       ? item.path
-      : `${item.path} — нажмите, чтобы скачать и открыть в программе по умолчанию; потяните мышью, чтобы сохранить`;
+      : `${item.path} — двойной щелчок: открыть${officeApp ? ` в ${officeApp.label}` : ''}; кнопка «Скачать» — сохранить файл`;
     row.appendChild(name);
     if (!item.dir) row.appendChild(el('span', 'f-size', fmtSize(item.size)));
     const actions = el('div', 'f-actions');
@@ -1526,9 +1527,23 @@ function renderFiles() {
     row.appendChild(actions);
     const activate = () => {
       if (item.dir) loadFiles(item.path);
-      else openFileViewer(item);
+      else openInOffice(item);
     };
-    row.addEventListener('click', activate);
+    row.addEventListener('click', () => {
+      if (item.dir) {
+        loadFiles(item.path);
+        return;
+      }
+      /* На телефоне кнопки строки появляются по тапу: одиночный тап скачивает.
+         На компьютере скачивание — только кнопкой «Скачать», а двойной щелчок
+         открывает документ в Word/Excel/PowerPoint. */
+      if (window.matchMedia('(pointer: coarse)').matches) openFileViewer(item);
+    });
+    row.addEventListener('dblclick', (event) => {
+      if (item.dir || window.matchMedia('(pointer: coarse)').matches) return;
+      event.preventDefault();
+      openInOffice(item);
+    });
     /* Строка — это кнопка: с клавиатуры она тоже открывает папку или файл. */
     row.setAttribute('role', 'button');
     row.tabIndex = 0;
@@ -1572,11 +1587,18 @@ function mimeOf(fileName) {
   return map[ext] || 'application/octet-stream';
 }
 
-/* Клик по файлу не открывает его внутри сайта: браузер скачивает оригинал, а
-   дальше файл открывает система — на компьютере или телефоне программой по
-   умолчанию. Так нет ни веб-просмотра, ни перехода в Office по ссылке, из-за
-   которого Word и Excel показывали предупреждение о файлах из интернета. */
+/* Клик по кнопке «Скачать» сохраняет оригинал: браузер отдаёт файл системе, и
+   дальше его открывает программа по умолчанию — на компьютере или телефоне.
+   Двойной щелчок по строке открывает документ сразу в Office по протоколу
+   ms-word/ms-excel/ms-powerpoint; для этого ему нужна короткая подписанная
+   ссылка, потому что у Word и Excel нет cookie браузера. */
 function openFileViewer(item) {
+  /* Двойной щелчок и случайный повторный тап не должны скачивать файл дважды. */
+  const key = `${state.activeProjectId}:${item.path}`;
+  const now = Date.now();
+  if (key === openFileViewer.lastKey && now - openFileViewer.lastAt < 600) return;
+  openFileViewer.lastKey = key;
+  openFileViewer.lastAt = now;
   const link = document.createElement('a');
   link.href = fileUrl(item.path, true);
   link.download = item.name;
@@ -1586,6 +1608,60 @@ function openFileViewer(item) {
   link.click();
   link.remove();
   toast(`«${item.name}» скачивается — откройте файл в программе по умолчанию.`, 'ok');
+}
+
+const OFFICE_OPENERS = [
+  {
+    test: /^(doc|docx|docm|dot|dotx|rtf|odt)$/i,
+    protocol: 'ms-word',
+    label: 'Word',
+  },
+  {
+    test: /^(xls|xlsx|xlsm|xlsb|csv|ods)$/i,
+    protocol: 'ms-excel',
+    label: 'Excel',
+  },
+  {
+    test: /^(ppt|pptx|pptm|pps|ppsx|odp)$/i,
+    protocol: 'ms-powerpoint',
+    label: 'PowerPoint',
+  },
+];
+
+function officeOpener(name) {
+  const ext = String(name || '').split('.').pop();
+  return OFFICE_OPENERS.find((opener) => opener.test.test(ext)) || null;
+}
+
+function launchProtocol(href) {
+  const link = document.createElement('a');
+  link.href = href;
+  link.rel = 'noopener';
+  link.style.display = 'none';
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+}
+
+async function openInOffice(item) {
+  const opener = officeOpener(item.name);
+  if (!opener) {
+    /* Не Office: PDF и картинки показываем в новой вкладке браузера, остальное
+       отдаём системе как обычное скачивание — один раз. */
+    if (/\.(pdf|png|jpe?g|webp|gif|bmp|svg|txt|md|html?)$/i.test(item.name)) {
+      window.open(fileUrl(item.path, false), '_blank', 'noopener');
+      return;
+    }
+    openFileViewer(item);
+    return;
+  }
+  try {
+    const data = await api(`/api/projects/${state.activeProjectId}/file-link?path=${encodeURIComponent(item.path)}`);
+    launchProtocol(`${opener.protocol}:ofe|u|${encodeURI(data.url)}`);
+    toast(`«${item.name}» открывается в ${opener.label}. Если окно не появилось, скачайте файл кнопкой «Скачать».`, 'ok');
+  } catch (error) {
+    toast(`${error.message}. Файл можно скачать кнопкой «Скачать».`);
+  }
 }
 
 /* Загрузка файлов в проект. dir — папка внутри проекта ('.' — корень):

@@ -375,26 +375,63 @@ try {
     await sleep(200);
   }
 
-  /* Нажатие на файл должно скачивать оригинал, а не открывать просмотр в вебе.
-     Перехватываем программный клик по ссылке скачивания и возвращаем её адрес. */
-  async function clickFileAndCapture(fileName) {
+  /* Клик по кнопке «Скачать» должен один раз отдать оригинал. Двойной щелчок
+     по документу Office открывает его протоколом ms-word/ms-excel, для этого
+     перехватываем программный клик по ссылке и не запускаем внешнюю программу. */
+  async function installLinkProbe() {
     return evaluate(`(() => {
-      window.__downloads = [];
-      if (!window.__downloadProbe) {
+      if (!window.__linkProbe) {
         const native = HTMLAnchorElement.prototype.click;
         HTMLAnchorElement.prototype.click = function () {
+          const href = this.getAttribute('href') || '';
           if (this.hasAttribute('download')) {
             window.__downloads.push({ href: this.href, name: this.download });
             return;
           }
+          if (href.startsWith('ms-')) {
+            window.__protocols.push(href);
+            return;
+          }
           return native.call(this);
         };
-        window.__downloadProbe = true;
+        window.__linkProbe = true;
       }
+      window.__downloads = [];
+      window.__protocols = [];
+      return true;
+    })()`);
+  }
+
+  async function clickDownloadAndCapture(fileName) {
+    await installLinkProbe();
+    return evaluate(`(() => {
+      const row = [...document.querySelectorAll('.file-row')].find(r => (r.querySelector('.f-name') || {}).textContent === ${JSON.stringify(fileName)});
+      if (!row) return null;
+      const button = row.querySelector('.f-actions button[aria-label^="Скачать"]');
+      if (!button) return { missing: true };
+      button.click();
+      return window.__downloads;
+    })()`);
+  }
+
+  async function clickFileName(fileName) {
+    await installLinkProbe();
+    return evaluate(`(() => {
       const row = [...document.querySelectorAll('.file-row')].find(r => (r.querySelector('.f-name') || {}).textContent === ${JSON.stringify(fileName)});
       if (!row) return null;
       row.querySelector('.f-name').click();
-      return window.__downloads;
+      return { downloads: window.__downloads, protocols: window.__protocols };
+    })()`);
+  }
+
+  async function doubleClickFileName(fileName) {
+    await installLinkProbe();
+    return evaluate(`(async () => {
+      const row = [...document.querySelectorAll('.file-row')].find(r => (r.querySelector('.f-name') || {}).textContent === ${JSON.stringify(fileName)});
+      if (!row) return null;
+      row.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true, view: window }));
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      return { downloads: window.__downloads, protocols: window.__protocols, href: location.href };
     })()`);
   }
   const filesPanelVisible = await evaluate(`!document.getElementById('filesPanel').classList.contains('hidden')`);
@@ -436,12 +473,17 @@ try {
         ? ok('у файлов нет глазка предпросмотра')
         : fail('глазок предпросмотра', 'кнопка ещё есть в строке файла');
 
-      const txtDownload = await clickFileAndCapture(FILE_NAME);
+      const txtDownload = await clickDownloadAndCapture(FILE_NAME);
       txtDownload && txtDownload.length === 1
         && txtDownload[0].name === FILE_NAME
         && txtDownload[0].href.includes('download=1')
-        ? ok('клик по файлу скачивает оригинал, без просмотра в вебе')
-        : fail('клик по файлу', txtDownload);
+        ? ok('кнопка «Скачать» один раз отдаёт оригинал, без просмотра в вебе')
+        : fail('кнопка «Скачать»', txtDownload);
+
+      const txtClick = await clickFileName(FILE_NAME);
+      txtClick && txtClick.downloads.length === 0 && txtClick.protocols.length === 0
+        ? ok('одиночный клик по строке файла не скачивает документ')
+        : fail('одиночный клик по файлу', txtClick);
 
       const hasFolder = await evaluate(`[...document.querySelectorAll('.file-row')].some(r => r.querySelector('.f-name') && r.querySelector('.f-name').textContent === 'folder')`);
       if (hasFolder) {
@@ -471,23 +513,25 @@ try {
         fail('удаление файла', 'подтверждение не открылось');
       }
 
-      /* Клик по документу Office не должен уводить в Word/Excel по протоколу
-         ms-word/ms-excel (именно этот переход показывал предупреждение о файлах
-         из интернета) и не должен открывать просмотр в вебе: скачиваем оригинал. */
+      /* Двойной щелчок по документу Office открывает его через протокол
+         ms-word/ms-excel, а кнопка «Скачать» по-прежнему просто сохраняет файл. */
       await setInputFile('#filesPanelInput', DOCX_NAME, 'проверка клика по документу');
       const docxUploaded = await waitFor(`[...document.querySelectorAll('.file-row .f-name')].some(n => n.textContent === ${JSON.stringify(DOCX_NAME)})`, 10000);
       if (docxUploaded) {
         const hrefBefore = await evaluate('location.href');
-        const docxDownload = await clickFileAndCapture(DOCX_NAME);
+        const docxClick = await clickFileName(DOCX_NAME);
+        const docxDouble = await doubleClickFileName(DOCX_NAME);
         const hrefAfter = await evaluate('location.href');
         const noPreview = await evaluate(`!document.querySelector('.preview-modal')`);
-        docxDownload && docxDownload.length === 1
-          && docxDownload[0].name === DOCX_NAME
-          && docxDownload[0].href.includes('download=1')
+        docxClick && docxClick.downloads.length === 0 && docxClick.protocols.length === 0
+          && docxDouble && docxDouble.downloads.length === 0
+          && docxDouble.protocols.length === 1
+          && docxDouble.protocols[0].startsWith('ms-word:ofe|u|')
+          && docxDouble.protocols[0].includes('/o/')
           && hrefAfter === hrefBefore
           && noPreview
-          ? ok('документ Office скачивается, без Office-перехода и веб-просмотра')
-          : fail('клик по документу Office', { docxDownload, before: hrefBefore, after: hrefAfter, noPreview });
+          ? ok('двойной щелчок открывает документ Office по протоколу ms-word')
+          : fail('двойной щелчок по документу Office', { docxClick, docxDouble, before: hrefBefore, after: hrefAfter, noPreview });
 
         /* «Файлы проекта» принадлежат выбранному проекту: после переключения
            в списке не должно остаться файлов прошлого проекта. */
