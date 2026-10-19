@@ -112,9 +112,18 @@ function buildSheet(workbook, sheet, index) {
   if (hasHeader) styleHeaderRow(worksheet.getRow(headerRowNumber), columnCount);
 
   const lastRow = worksheet.rowCount;
+  /* «Итого» модель часто пишет обычной строкой, не помечая её флагом. Узнаём
+     итог по подписи в первой колонке — иначе он попадает в диаграмму и
+     последний столбец вырастает в разы, ломая масштаб. */
+  const firstCell = worksheet.getRow(lastRow).getCell(1).value;
+  const lastRowLabel = typeof firstCell === 'string' ? firstCell.trim() : '';
+  const totalRowDetected = sheet.totalRow === true
+    /* `\b` в JS считается по ASCII, поэтому после кириллицы границы слова нет:
+       проверяем явно конец строки или разделитель. */
+    || /^(итог|итого|всего|total)(\s|$|[:.,—-])/i.test(lastRowLabel);
   for (let rowNumber = firstDataRow; rowNumber <= lastRow; rowNumber += 1) {
     const row = worksheet.getRow(rowNumber);
-    const isTotal = sheet.totalRow === true && rowNumber === lastRow;
+    const isTotal = totalRowDetected && rowNumber === lastRow;
     for (let columnIndex = 1; columnIndex <= columnCount; columnIndex += 1) {
       const cell = row.getCell(columnIndex);
       const column = columns[columnIndex - 1] || {};
@@ -160,10 +169,27 @@ function buildSheet(workbook, sheet, index) {
     const noteRow = worksheet.rowCount + 2;
     /* Сноска идёт через всю таблицу: в одной узкой колонке она рвётся по слогам. */
     if (columnCount > 1) worksheet.mergeCells(noteRow, 1, noteRow, columnCount);
+    /* Объединённую ячейку Excel по ширине не переносит — режем строку сами и
+       вставляем явные переводы строк, тогда текст виден и в книге, и в печати. */
+    const mergedWidth = columns.slice(0, columnCount).reduce((sum, column) => sum + (Number(column.width) || 12), 0);
+    const charsPerLine = Math.max(20, Math.round(mergedWidth * 1.05));
+    const words = String(sheet.note).split(/\s+/);
+    const lines = [];
+    let current = '';
+    for (const word of words) {
+      if (current && current.length + 1 + word.length > charsPerLine) {
+        lines.push(current);
+        current = word;
+      } else {
+        current = current ? `${current} ${word}` : word;
+      }
+    }
+    if (current) lines.push(current);
     const cell = worksheet.getCell(noteRow, 1);
-    cell.value = String(sheet.note);
+    cell.value = lines.join('\n');
     cell.font = { name: 'Segoe UI', size: 9, italic: true, color: { argb: argb(COLORS.muted) } };
-    cell.alignment = { vertical: 'top', horizontal: 'left', wrapText: false };
+    cell.alignment = { vertical: 'top', horizontal: 'left', wrapText: true };
+    worksheet.getRow(noteRow).height = 12 * lines.length + 4;
   }
 
   worksheet.headerFooter = {
@@ -171,7 +197,7 @@ function buildSheet(workbook, sheet, index) {
   };
   worksheet.pageSetup.printTitlesRow = hasHeader ? `${headerRowNumber}:${headerRowNumber}` : undefined;
 
-  return { worksheet, headerRowNumber, firstDataRow, lastRow, columnCount };
+  return { worksheet, headerRowNumber, firstDataRow, lastRow, columnCount, totalRow: totalRowDetected };
 }
 
 /** Диаграмма из листа: категории в колонке categoriesColumn, значения — в valueColumns. */
@@ -183,7 +209,7 @@ function chartSpecFor(sheet, built, sheetIndex) {
   const from = built.firstDataRow;
   /* Строка «Итого» в диаграмму не идёт: итог — не точка ряда, из-за него
      последний столбец вырастает в разы и ломает масштаб всего графика. */
-  const to = sheet.totalRow === true ? built.lastRow - 1 : built.lastRow;
+  const to = built.totalRow === true ? built.lastRow - 1 : built.lastRow;
   if (to < from) return null;
   const categories = [];
   for (let rowNumber = from; rowNumber <= to; rowNumber += 1) {

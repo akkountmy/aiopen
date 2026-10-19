@@ -146,12 +146,19 @@ async function main() {
   const login = await call('/api/login', { method: 'POST', body: { username: USERNAME, password: PASSWORD }, auth: false });
   console.log('вход:', login.user.username, `(${login.user.role})`);
 
-  const project = await call('/api/projects', {
-    method: 'POST',
-    body: { name: `Документы — проверка ${new Date().toISOString().slice(0, 16).replace('T', ' ')}` },
-  });
-  const projectId = project.project.id;
-  console.log('проект:', project.project.name);
+  const reuseProject = (process.env.DSHOW_PROJECT || '').trim();
+  let projectId;
+  if (reuseProject) {
+    projectId = reuseProject;
+    console.log('проект: переиспользуем', projectId);
+  } else {
+    const project = await call('/api/projects', {
+      method: 'POST',
+      body: { name: `Документы — проверка ${new Date().toISOString().slice(0, 16).replace('T', ' ')}` },
+    });
+    projectId = project.project.id;
+    console.log('проект:', project.project.name);
+  }
 
   const chat = await call(`/api/projects/${projectId}/chats`, { method: 'POST', body: {} });
   const chatId = chat.chat.id;
