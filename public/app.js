@@ -1463,7 +1463,9 @@ function renderFiles() {
     const isImage = /\.(png|jpe?g|webp|gif|bmp)$/i.test(item.name);
     row.innerHTML = `<span class="f-icon">${item.dir ? ICONS.folder : isImage ? ICONS.image : ICONS.file}</span>`;
     const name = el('span', 'f-name', item.name);
-    name.title = item.dir ? item.path : `${item.path} — нажмите, чтобы открыть; потяните мышью, чтобы сохранить`;
+    name.title = item.dir
+      ? item.path
+      : `${item.path} — нажмите, чтобы скачать и открыть в программе по умолчанию; потяните мышью, чтобы сохранить`;
     row.appendChild(name);
     if (!item.dir) row.appendChild(el('span', 'f-size', fmtSize(item.size)));
     const actions = el('div', 'f-actions');
@@ -1490,26 +1492,13 @@ function renderFiles() {
       const download = el('button', 'btn btn-ghost btn-icon');
       download.type = 'button';
       download.title = 'Скачать';
+      download.setAttribute('aria-label', `Скачать «${item.name}»`);
       download.innerHTML = ICONS.download;
-      download.addEventListener('click', async (event) => {
+      download.addEventListener('click', (event) => {
         event.stopPropagation();
-        window.open(fileUrl(item.path, true), '_blank');
+        openFileViewer(item);
       });
       actions.appendChild(download);
-      /* Документ можно прочитать здесь же — на телефоне это единственный
-         надёжный способ посмотреть docx/xlsx, если нет приложения Office. */
-      if (canPreview(item.name)) {
-        const preview = el('button', 'btn btn-ghost btn-icon file-preview-btn');
-        preview.type = 'button';
-        preview.title = 'Посмотреть';
-        preview.setAttribute('aria-label', `Посмотреть «${item.name}»`);
-        preview.innerHTML = ICONS.eye;
-        preview.addEventListener('click', (event) => {
-          event.stopPropagation();
-          openFilePreview(item);
-        });
-        actions.appendChild(preview);
-      }
     }
     const del = el('button', 'btn btn-ghost btn-icon');
     del.type = 'button';
@@ -1583,92 +1572,20 @@ function mimeOf(fileName) {
   return map[ext] || 'application/octet-stream';
 }
 
-/* Документы Word, Excel и PowerPoint читаем прямо в сервисе: сервер уже умеет
-   доставать из них текст. Так щелчок по файлу не уводит в Office по ссылке —
-   а именно этот переход и показывал предупреждение «Некоторые файлы содержат
-   вирусы…» с адресом файла. Скачать оригинал можно кнопкой «Скачать». */
-const OFFICE_DOCS = /^(docx?|xlsm?|xlsx?|rtf|pptx?|ppt)$/;
-
-/* Клик по файлу открывает его без предупреждений: документ — в окне просмотра,
-   PDF и картинки — в новой вкладке браузера, HTML — в изолированной вкладке,
-   архивы и двоичные файлы сразу сохраняются. */
+/* Клик по файлу не открывает его внутри сайта: браузер скачивает оригинал, а
+   дальше файл открывает система — на компьютере или телефоне программой по
+   умолчанию. Так нет ни веб-просмотра, ни перехода в Office по ссылке, из-за
+   которого Word и Excel показывали предупреждение о файлах из интернета. */
 function openFileViewer(item) {
-  const ext = String(item.name).split('.').pop().toLowerCase();
-  /* Архивы, видео и прочие двоичные файлы смотреть нечем — сразу сохраняем. */
-  if (/^(zip|rar|7z|tar|gz|tgz|bz2|xz|exe|msi|dll|so|dylib|bin|iso|dmg|apk|jar|mp4|webm|mov|avi|mkv|mp3|wav|flac|ogg|opus|ttf|otf|woff2?|eot|psd|ai|sketch|fig|sqlite|db)$/.test(ext)) {
-    window.open(fileUrl(item.path, true), '_blank');
-    return;
-  }
-  if (OFFICE_DOCS.test(ext)) {
-    openFilePreview(item);
-    return;
-  }
-  if (ext === 'html' || ext === 'htm') {
-    window.open(`/api/projects/${state.activeProjectId}/preview?path=${encodeURIComponent(item.path)}`, '_blank');
-    return;
-  }
-  /* PDF, изображения, тексты и таблицы открывает браузер — в новой вкладке. */
-  window.open(fileUrl(item.path, false), '_blank');
-}
-
-
-/* Документы, которые сервер умеет прочитать как текст: их можно посмотреть
-   прямо в сервисе, не открывая Word/Excel и не скачивая файл. */
-const PREVIEWABLE = /^(docx?|xlsx?|pptx?|pdf|txt|md|markdown|csv|tsv|json|log|ya?ml)$/;
-
-function canPreview(name) {
-  const ext = String(name).split('.').pop().toLowerCase();
-  return PREVIEWABLE.test(ext);
-}
-
-/* Просмотр документа на чтение: телефон не всегда умеет открывать docx, а файл
-   нужен сейчас. Сервер отдаёт уже извлечённый текст, здесь только показываем. */
-async function openFilePreview(item) {
-  const body = el('div', 'preview');
-  body.innerHTML = '<div class="preview-loading"><span class="spinner"></span> Читаем файл…</div>';
-  const ext = String(item.name).split('.').pop().toLowerCase();
-  const actions = [
-    { label: 'Скачать', onClick: () => window.open(fileUrl(item.path, true), '_blank') },
-  ];
-  /* У документов Office кнопки «Открыть» нет: она снова увела бы файл в Office
-     по ссылке, а вместе с ней вернулось бы предупреждение о безопасности. */
-  if (!OFFICE_DOCS.test(ext)) {
-    actions.push({
-      label: 'Открыть',
-      kind: 'primary',
-      onClick: () => setTimeout(() => openFileViewer(item), 0),
-    });
-  }
-  actions.push({ label: 'Закрыть' });
-  openModal({
-    title: item.name,
-    wide: true,
-    className: 'preview-modal',
-    body,
-    actions,
-    onMount: async (bodyNode) => {
-      try {
-        const data = await api(`/api/projects/${state.activeProjectId}/file-preview?path=${encodeURIComponent(item.path)}`);
-        bodyNode.innerHTML = '';
-        const meta = el('div', 'preview-meta');
-        meta.textContent = [data.kindLabel || 'Файл', fmtSize(data.size)].filter(Boolean).join(' · ');
-        bodyNode.appendChild(meta);
-        for (const warning of data.warnings || []) {
-          bodyNode.appendChild(el('p', 'preview-warn', warning));
-        }
-        if (String(data.text || '').trim()) {
-          const pre = el('pre', 'preview-text');
-          pre.textContent = data.text;
-          bodyNode.appendChild(pre);
-        } else if (!(data.warnings || []).length) {
-          bodyNode.appendChild(el('p', 'preview-empty', 'В файле нет текста для чтения — скачайте его кнопкой «Скачать».'));
-        }
-      } catch (error) {
-        bodyNode.innerHTML = '';
-        bodyNode.appendChild(el('p', 'preview-empty', error.message));
-      }
-    },
-  });
+  const link = document.createElement('a');
+  link.href = fileUrl(item.path, true);
+  link.download = item.name;
+  link.rel = 'noopener';
+  link.style.display = 'none';
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  toast(`«${item.name}» скачивается — откройте файл в программе по умолчанию.`, 'ok');
 }
 
 /* Загрузка файлов в проект. dir — папка внутри проекта ('.' — корень):

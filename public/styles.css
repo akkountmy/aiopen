@@ -2475,52 +2475,6 @@ body.resizing {
   height: 30px;
 }
 
-/* Просмотр документа: текст на чтение, без полей и кнопок редактора. */
-.preview-meta {
-  color: var(--text-4);
-  font-size: var(--fs-12);
-  line-height: var(--lh-18);
-  margin-bottom: 8px;
-}
-
-.preview-warn {
-  margin: 0 0 8px;
-  padding: 7px 9px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  background: var(--layer-2);
-  color: var(--text-3);
-  font-size: var(--fs-13);
-  line-height: var(--lh-20);
-}
-
-.preview-text {
-  margin: 0;
-  padding: 0;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  font-family: inherit;
-  font-size: var(--fs-14);
-  line-height: var(--lh-22);
-  color: var(--text-1);
-}
-
-.preview-empty,
-.preview-loading {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  padding: 22px 0;
-  color: var(--text-4);
-  font-size: var(--fs-13);
-  line-height: var(--lh-20);
-}
-
-.preview-modal .modal-body {
-  max-height: 60vh;
-}
-
 /* ------------------------------ popover ------------------------------ */
 
 /* --------------------------- карточки и меню ---------------------------

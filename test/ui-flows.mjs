@@ -374,6 +374,29 @@ try {
     await cdp.send('DOM.setFileInputFiles', { files: [filePath], nodeId });
     await sleep(200);
   }
+
+  /* Нажатие на файл должно скачивать оригинал, а не открывать просмотр в вебе.
+     Перехватываем программный клик по ссылке скачивания и возвращаем её адрес. */
+  async function clickFileAndCapture(fileName) {
+    return evaluate(`(() => {
+      window.__downloads = [];
+      if (!window.__downloadProbe) {
+        const native = HTMLAnchorElement.prototype.click;
+        HTMLAnchorElement.prototype.click = function () {
+          if (this.hasAttribute('download')) {
+            window.__downloads.push({ href: this.href, name: this.download });
+            return;
+          }
+          return native.call(this);
+        };
+        window.__downloadProbe = true;
+      }
+      const row = [...document.querySelectorAll('.file-row')].find(r => (r.querySelector('.f-name') || {}).textContent === ${JSON.stringify(fileName)});
+      if (!row) return null;
+      row.querySelector('.f-name').click();
+      return window.__downloads;
+    })()`);
+  }
   const filesPanelVisible = await evaluate(`!document.getElementById('filesPanel').classList.contains('hidden')`);
   if (filesPanelVisible) {
     // Готовим подпапку через API (в интерфейсе нет «создать папку»), затем
@@ -408,18 +431,17 @@ try {
     const uploaded = await waitFor(`[...document.querySelectorAll('.file-row .f-name')].some(n => n.textContent === ${JSON.stringify(FILE_NAME)})`, 10000);
     uploaded ? ok('файл загружен в проект') : fail('загрузка файла', await text('#filesList'));
     if (uploaded) {
-      // Просмотр документа на чтение: у текстового файла есть глазок, текст виден.
-      await evaluate(`(() => {
-        const row = [...document.querySelectorAll('.file-row')].find(r => (r.querySelector('.f-name') || {}).textContent === ${JSON.stringify(FILE_NAME)});
-        row.querySelector('.file-preview-btn').click();
-      })()`);
-      const previewShown = await waitFor(`!!document.querySelector('.preview-modal .preview-text')`);
-      const previewText = previewShown ? (await text('.preview-modal .preview-text')).trim() : '';
-      previewShown && previewText.includes('проверка файлов')
-        ? ok('документ читается прямо в сервисе', previewText.slice(0, 30))
-        : fail('просмотр документа', previewText || 'окно не открылось');
-      await evaluate(`document.querySelector('.modal-foot .btn-quiet')?.click()`);
-      await waitFor(`!document.querySelector('.preview-modal')`);
+      const eyeCount = await evaluate(`document.querySelectorAll('.file-preview-btn').length`);
+      eyeCount === 0
+        ? ok('у файлов нет глазка предпросмотра')
+        : fail('глазок предпросмотра', 'кнопка ещё есть в строке файла');
+
+      const txtDownload = await clickFileAndCapture(FILE_NAME);
+      txtDownload && txtDownload.length === 1
+        && txtDownload[0].name === FILE_NAME
+        && txtDownload[0].href.includes('download=1')
+        ? ok('клик по файлу скачивает оригинал, без просмотра в вебе')
+        : fail('клик по файлу', txtDownload);
 
       const hasFolder = await evaluate(`[...document.querySelectorAll('.file-row')].some(r => r.querySelector('.f-name') && r.querySelector('.f-name').textContent === 'folder')`);
       if (hasFolder) {
@@ -450,23 +472,22 @@ try {
       }
 
       /* Клик по документу Office не должен уводить в Word/Excel по протоколу
-         ms-word/ms-excel: именно этот переход показывал предупреждение
-         «Некоторые файлы содержат вирусы…». Ждём окно просмотра внутри сервиса. */
+         ms-word/ms-excel (именно этот переход показывал предупреждение о файлах
+         из интернета) и не должен открывать просмотр в вебе: скачиваем оригинал. */
       await setInputFile('#filesPanelInput', DOCX_NAME, 'проверка клика по документу');
       const docxUploaded = await waitFor(`[...document.querySelectorAll('.file-row .f-name')].some(n => n.textContent === ${JSON.stringify(DOCX_NAME)})`, 10000);
       if (docxUploaded) {
         const hrefBefore = await evaluate('location.href');
-        await evaluate(`(() => {
-          const row = [...document.querySelectorAll('.file-row')].find(r => (r.querySelector('.f-name') || {}).textContent === ${JSON.stringify(DOCX_NAME)});
-          row.querySelector('.f-name').click();
-        })()`);
-        const docxModal = await waitFor(`!!document.querySelector('.preview-modal')`, 8000);
+        const docxDownload = await clickFileAndCapture(DOCX_NAME);
         const hrefAfter = await evaluate('location.href');
-        docxModal && hrefAfter === hrefBefore
-          ? ok('клик по документу Office открывает просмотр без перехода в Office')
-          : fail('клик по документу Office', { docxModal, before: hrefBefore, after: hrefAfter });
-        await evaluate(`document.querySelector('.modal-foot .btn-quiet')?.click()`);
-        await waitFor(`!document.querySelector('.preview-modal')`);
+        const noPreview = await evaluate(`!document.querySelector('.preview-modal')`);
+        docxDownload && docxDownload.length === 1
+          && docxDownload[0].name === DOCX_NAME
+          && docxDownload[0].href.includes('download=1')
+          && hrefAfter === hrefBefore
+          && noPreview
+          ? ok('документ Office скачивается, без Office-перехода и веб-просмотра')
+          : fail('клик по документу Office', { docxDownload, before: hrefBefore, after: hrefAfter, noPreview });
 
         /* «Файлы проекта» принадлежат выбранному проекту: после переключения
            в списке не должно остаться файлов прошлого проекта. */
