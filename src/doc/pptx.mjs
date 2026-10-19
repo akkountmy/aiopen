@@ -437,20 +437,29 @@ function visualSlide(slide, spec, meta) {
 
 function quoteSlide(slide, spec, meta) {
   background(slide, COLORS.soft);
-  slide.addShape('rect', { x: M, y: 2.2, w: 0.08, h: 2.6, fill: { color: COLORS.accent }, line: { width: 0 } });
-  slide.addText(text(spec.title || spec.quote || '', { fontSize: 26, bold: false, color: COLORS.navy }), {
-    x: M + 0.4,
-    y: 2.2,
-    w: CONTENT_W - 0.8,
-    h: 2.0,
-    valign: 'top',
-  });
+  const line = String(spec.title || spec.quote || '');
+  const textW = CONTENT_W - 0.9;
+  const size = line.length > 120 ? 22 : 26;
+  /* Высота линии при одинарном интервале 1.2 и запас 10% — так полоска совпадает с текстом. */
+  const lineH = (size * 1.2 * 1.1) / 72;
+  const textH = Math.min(H - 2.4, countLines(line, textW, size, false) * lineH + 0.1);
   const meta2 = [spec.author, spec.subtitle].filter(Boolean).join(' · ');
+  const total = textH + (meta2 ? 0.55 : 0);
+  const top = Math.max(1.2, (H - total) / 2 - 0.15);
+  slide.addShape('rect', { x: M, y: top + 0.04, w: 0.08, h: Math.max(0.5, textH - 0.08), fill: { color: COLORS.accent }, line: { width: 0 } });
+  slide.addText(text(line, { fontSize: size, bold: false, color: COLORS.navy }), {
+    x: M + 0.45,
+    y: top,
+    w: textW,
+    h: textH,
+    valign: 'top',
+    lineSpacingMultiple: 1.2,
+  });
   if (meta2) {
     slide.addText(text(meta2, { fontSize: 12, color: COLORS.muted }), {
-      x: M + 0.4,
-      y: 4.3,
-      w: CONTENT_W - 0.8,
+      x: M + 0.45,
+      y: top + textH + 0.15,
+      w: textW,
       h: 0.4,
     });
   }
