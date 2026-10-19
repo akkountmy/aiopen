@@ -669,44 +669,6 @@ body.resizing {
   margin-bottom: 2px;
 }
 
-/* Строка «Новая папка» внизу списка проектов: пунктирная рамка отличает её от
-   проектов и папок, но размер и скругление те же — это тот же список. */
-.list-add {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  height: 36px;
-  margin-top: 8px;
-  padding: 0 8px;
-  border: 1px dashed var(--line);
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--text-3);
-  font-size: var(--fs-13);
-  font-weight: 500;
-  line-height: var(--lh-18);
-  cursor: pointer;
-  text-align: left;
-}
-
-.list-add:hover {
-  background: var(--layer-hover);
-  border-color: var(--line-strong);
-  color: var(--text-2);
-}
-
-.list-add-icon {
-  display: inline-flex;
-  flex: none;
-  color: var(--text-4);
-}
-
-.list-add-icon svg {
-  width: 17px;
-  height: 17px;
-}
-
 /* Строка проекта: выше, с крупными деталями и тем же скруглением, что у
    кнопок, — имя, счётчик диалогов, плюс и «три точки» читаются без прицела. */
 .project-row {

@@ -1123,7 +1123,9 @@ function serveStatic(req, res, urlPath, versioned = false) {
     Vary: 'Accept-Encoding',
     ...SECURITY_HEADERS,
   };
-  const compressible = /\.(html|css|js|svg|json|txt|md|map)$/.test(ext);
+  /* mjs — это те же текстовые js-файлы: без него просмотрщик PDF отдавал
+     1,7 МБ вместо 0,5 МБ (pdf.min.mjs 344 КБ и pdf.worker.min.mjs 1,3 МБ). */
+  const compressible = /\.(html|css|m?js|webmanifest|svg|json|txt|md|map)$/.test(ext);
   const wantsGzip = compressible && /\bgzip\b/.test(String(req.headers['accept-encoding'] || ''));
   if (wantsGzip) {
     const packed = body ? zlib.gzipSync(body, { level: 6 }) : gzipped(full, stat);

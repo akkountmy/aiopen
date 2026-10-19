@@ -321,27 +321,39 @@ try {
   await waitFor(`!document.querySelector('.popover')`);
 
   // 10. удаление файла — карточка в своей панели
-  const fileRow = await evaluate(`(() => {
-    const rows = [...document.querySelectorAll('#filesList .file-row')];
-    const row = rows.find((r) => r.innerText.includes(${JSON.stringify(FILE_NAME)}));
-    if (!row) return false;
-    const del = [...row.querySelectorAll('button')].find((b) => /Удалить/.test(b.title));
-    if (!del) return false;
-    del.click();
-    return true;
-  })()`);
+  /* Имя файла в строке разбито на основу и расширение (два элемента), поэтому
+     innerText отдаёт их с переводом строки — сверяем по textContent строки. */
+  const fileRowReady = await waitFor(
+    `[...document.querySelectorAll('#filesList .file-row')].some((r) => r.textContent.includes(${JSON.stringify(FILE_NAME)}))`,
+  );
+  const fileRow = fileRowReady
+    ? await evaluate(`(() => {
+        const rows = [...document.querySelectorAll('#filesList .file-row')];
+        const row = rows.find((r) => r.textContent.includes(${JSON.stringify(FILE_NAME)}));
+        if (!row) return false;
+        const del = [...row.querySelectorAll('button')].find((b) => /Удалить/.test(b.title));
+        if (!del) return false;
+        del.click();
+        return true;
+      })()`)
+    : false;
   const fileConfirm = fileRow && (await waitFor(`!!document.querySelector('.files-panel .popover')`))
     ? await evaluate(`(() => { ${MEASURE}
         return { card: card('.popover', '.files-panel'), buttons: buttons('.popover'), modal: !!document.querySelector('.modal'),
                  title: (document.querySelector('.popover-title') || {}).textContent };
       })()`)
-    : { card: null, buttons: [], modal: true };
+    : { card: null, buttons: [], modal: true, row: fileRowReady, rowClicked: fileRow };
   fileConfirm.card && !fileConfirm.modal && Math.abs(fileConfirm.card.left - fileConfirm.card.right) <= 2
     ? ok('удаление файла подтверждается карточкой в панели файлов', `слева ${fileConfirm.card.left}, справа ${fileConfirm.card.right}`)
     : fail('подтверждение удаления файла', JSON.stringify(fileConfirm));
+  fileConfirm.card && fileConfirm.buttons.length === 2 && /btn-danger/.test(fileConfirm.buttons[1].kind)
+    ? ok('у удаления файла две кнопки: отмена и удаление', fileConfirm.buttons.map((b) => b.text).join(' / '))
+    : fail('кнопки удаления файла', JSON.stringify(fileConfirm.buttons));
   await evaluate(`(() => { const b = [...document.querySelectorAll('.files-panel .popover .btn')].find((n) => /Удалить/.test(n.textContent)); if (b) b.click(); })()`);
-  const fileGone = await waitFor(`![...document.querySelectorAll('#filesList .file-row')].some((r) => r.innerText.includes(${JSON.stringify(FILE_NAME)}))`);
-  fileGone ? ok('файл удалён после подтверждения') : fail('удаление файла', 'строка осталась в списке');
+  const fileGone = await waitFor(
+    `![...document.querySelectorAll('#filesList .file-row')].some((r) => r.textContent.includes(${JSON.stringify(FILE_NAME)}))`,
+  );
+  fileGone && fileRowReady ? ok('файл удалён после подтверждения') : fail('удаление файла', fileRowReady ? 'строка осталась в списке' : 'строки файла не было в панели');
 
   // 11. правая панель повторяет ширину левой, пока её не тронули
   const dragSidebar = async (key) =>

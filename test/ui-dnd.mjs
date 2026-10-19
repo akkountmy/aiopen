@@ -181,8 +181,8 @@ try {
   const appReady = await waitFor(`!!document.getElementById('app') && !document.getElementById('app').classList.contains('hidden')`);
   appReady ? ok('рабочее окно загрузилось') : fail('окно', 'приложение не показалось');
 
-  // 3. шапка: кнопки создания папки в шапке нет (она внизу списка проектов),
-  // кнопка загрузки подписана словами
+  // 3. шапка: кнопки создания папки нет ни в шапке, ни в списке проектов
+  // (создание папок из интерфейса убрано), кнопка загрузки подписана словами
   const header = await evaluate(`({
      newWorkflowBtnInTopbar: !!document.querySelector('.topbar #newWorkflowBtn'),
      newWorkflowBtnInList: !!document.querySelector('#projectList #newWorkflowBtn'),
@@ -200,8 +200,7 @@ try {
     ? ok('кнопка загрузки подписана', uploadLabel.trim())
     : fail('подпись кнопки загрузки', JSON.stringify(uploadLabel));
 
-  // 3.5. окно «Новый проект» — только название; папки создаются отдельной
-  // строкой внизу списка проектов
+  // 3.5. окно «Новый проект» — только название, выбора папки внутри нет
   await evaluate(`document.getElementById('newProjectBtn').click()`);
   const popoverShown = await waitFor(`!!document.querySelector('.popover')`);
   const popoverShape = popoverShown
@@ -224,34 +223,20 @@ try {
   await evaluate(`document.getElementById('newProjectBtn').click()`);
   await waitFor(`!document.querySelector('.popover')`);
 
-  /* Создание папки — отдельной строкой внизу списка проектов: строка есть, в
-     шапке её нет, и по нажатию открывается карточка с названием папки. */
+  /* Создания папок из интерфейса нет: строки «Новая папка» внизу списка
+     проектов быть не должно (папка создаётся через API или остаётся от
+     прежних версий), поэтому проверяем именно отсутствие строки. */
   const folderControls = await evaluate(`(() => {
      const list = document.getElementById('projectList');
      const row = document.getElementById('newWorkflowBtn');
      return {
        inList: !!row && list.contains(row),
        inTopbar: !!document.querySelector('.topbar #newWorkflowBtn'),
-       label: row ? row.innerText.trim() : '',
-       last: !!row && list.lastElementChild === row,
      };
    })()`);
-  folderControls.inList && !folderControls.inTopbar && folderControls.last && /папк/i.test(folderControls.label)
-    ? ok('папка создаётся строкой внизу списка', folderControls.label)
+  !folderControls.inList && !folderControls.inTopbar
+    ? ok('строки создания папки в панели нет')
     : fail('создание папки', JSON.stringify(folderControls));
-  await evaluate(`document.getElementById('newWorkflowBtn').click()`);
-  const folderCard = await waitFor(`!!document.querySelector('.popover')`);
-  const folderCardShape = folderCard
-    ? await evaluate(`(() => {
-        const p = document.querySelector('.popover');
-        return { inputs: p.querySelectorAll('input').length, text: p.innerText.replace(/\\s+/g, ' ').trim() };
-      })()`)
-    : { inputs: -1, text: '' };
-  folderCardShape.inputs === 1 && /Новая папка/.test(folderCardShape.text)
-    ? ok('карточка новой папки открылась', folderCardShape.text.slice(0, 40))
-    : fail('карточка новой папки', JSON.stringify(folderCardShape));
-  await evaluate(`document.querySelector('.popover input') && document.querySelector('.popover input').dispatchEvent(new KeyboardEvent('keydown', {key:'Escape', bubbles:true}))`);
-  await waitFor(`!document.querySelector('.popover')`);
 
   // 4. перетаскивание файла в панель — подсветка и загрузка в проект
   const dragState = await evaluate(`(() => {
