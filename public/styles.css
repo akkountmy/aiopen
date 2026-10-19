@@ -3252,6 +3252,39 @@ body.resizing {
     display: inline-flex;
   }
 
+  /* -------------------------------- вход --------------------------------- */
+  /* Экран входа прокручивается: на невысоком телефоне форма должна целиком
+     доставаться пальцем, а клавиатура — не перекрывать поля. */
+  .auth {
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: max(14px, env(safe-area-inset-top, 0px)) 16px
+      calc(14px + env(safe-area-inset-bottom, 0px));
+  }
+  .auth-card {
+    margin: 0 auto;
+  }
+  /* Клавиатура открыта: карточка встаёт сверху видимой области, чтобы поле
+     пароля и кнопка «Войти» не оказались под клавиатурой или нижней панелью. */
+  html.kb-open .auth {
+    align-items: flex-start;
+    height: var(--app-h, 100dvh);
+    bottom: auto;
+    padding-top: 8px;
+    padding-bottom: calc(8px + env(safe-area-inset-bottom, 0px));
+  }
+  html.kb-open .auth-card {
+    padding: 14px 18px 12px;
+  }
+  html.kb-open .auth-mark {
+    width: 28px;
+    height: 28px;
+    margin-bottom: 10px;
+  }
+  html.kb-open .auth-card .field {
+    margin-bottom: 10px;
+  }
+
   /* -------------------------------- шапка -------------------------------- */
   /* Вырез и скруглённые углы телефона: шапка не должна уезжать под них. */
   .topbar {

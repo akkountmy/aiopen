@@ -3412,17 +3412,24 @@ function syncKeyboardViewport() {
   window.addEventListener('orientationchange', () => setTimeout(syncKeyboardViewport, 250));
 })();
 
-/* Поле внутри карточки или окна: после появления клавиатуры поднимаем его в
-   видимую часть экрана. Ждём конца анимации клавиатуры — на телефоне это
-   около 300 мс. */
+/* Поле внутри карточки, окна или экрана входа: после появления клавиатуры
+   поднимаем его в видимую часть экрана. Ждём конца анимации клавиатуры — на
+   телефоне это около 300 мс. */
 document.addEventListener('focusin', (event) => {
   if (!window.matchMedia('(max-width: 860px)').matches) return;
   const target = event.target;
   if (!(target instanceof HTMLElement)) return;
   if (!target.matches('input, textarea, select')) return;
-  if (!target.closest('.popover, .modal')) return;
+  const inAuth = !!target.closest('#auth');
+  if (!target.closest('.popover, .modal') && !inAuth) return;
   setTimeout(() => {
     syncKeyboardViewport();
+    /* Вход: карточка прокручивается внутри видимой области, поэтому поле
+       пароля и кнопка «Войти» остаются над клавиатурой и нижней панелью. */
+    if (inAuth) {
+      target.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      return;
+    }
     if (popoverNode && popoverHost) {
       placeInPanel(popoverNode, popoverAnchor, popoverHost);
     }
