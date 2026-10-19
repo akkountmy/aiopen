@@ -111,6 +111,24 @@ body {
   height: 100%;
 }
 
+/* iOS сам «надувает» текст при смене ориентации — вместе с ним гуляет масштаб
+   страницы. Фиксируем 100 %, чтобы зум появлялся только по желанию человека. */
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+/* Двойной тап по кнопке или полю на телефоне больше не приближает страницу:
+   такой зум не сбрасывается сам и «залипает» на увеличенном окне. Пинч
+   двумя пальцами по-прежнему работает. */
+button,
+input,
+textarea,
+select,
+a {
+  touch-action: manipulation;
+}
+
 body {
   margin: 0;
   background: var(--bg);
@@ -3470,10 +3488,20 @@ body.resizing {
   }
 
   /* Авто-увеличение Safari срабатывает на любом поле, где шрифт меньше 16 px:
-     поиск, название проекта, имя файла. Держим минимум во всех полях. */
+     поиск, название проекта, имя файла. Держим минимум во всех полях. Классы
+     (.popover-input, .popover-select, .field input) перебивают селектор по
+     тегу, поэтому перечисляем их явно — иначе поле «Название проекта»
+     оставалось 14 px, и Safari увеличивал из-за него всю страницу. */
   input,
   textarea,
-  select {
+  select,
+  .popover-input,
+  .popover-select,
+  .field input,
+  .field select,
+  .form-grid .field input,
+  .form-grid .field select,
+  .auth-card .field input {
     font-size: max(16px, var(--fs-14));
   }
 

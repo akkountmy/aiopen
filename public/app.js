@@ -1541,6 +1541,8 @@ function renderFiles() {
     });
     row.addEventListener('dblclick', (event) => {
       if (item.dir || window.matchMedia('(pointer: coarse)').matches) return;
+      /* Двойной щелчок по кнопке «Скачать» — это два скачивания, а не открытие. */
+      if (event.target.closest('.f-actions')) return;
       event.preventDefault();
       openInOffice(item);
     });
@@ -2359,6 +2361,10 @@ function createProjectModal({ workflowId = '', anchor = null } = {}) {
       renderThread();
       updateCrumbs();
       if (state.filesOpen) loadFiles('.');
+      /* Телефон: проект создаётся из ящика «Проекты», и ящик закрывается сам —
+         иначе новый диалог оставался под ним: поля ввода не видно, сообщение
+         отправить некуда. На широком экране эта строка ничего не меняет. */
+      closeSidebar();
       $('#input').focus();
       toast(`Проект «${project.name}» создан`, 'ok');
       return true;
@@ -3460,7 +3466,13 @@ function syncKeyboardViewport() {
      карточка оставалась по центру и поле пароля уходило под клавиатуру. */
   const authVisible = !document.getElementById('auth')?.classList.contains('hidden');
   const compactAuth = authVisible && vv.height < 560;
-  if (hidden > 120 || compactAuth) {
+  /* Масштаб больше 1 — это зум страницы (двойной тап, пинч, авто-увеличение
+     поля), а не клавиатура: видимая область у него тоже меньше окна. Раньше
+     такой зум принимался за клавиатуру, окно подстраивалось под урезанную
+     высоту и оставалось увеличенным, пока страницу не вернут руками. Теперь
+     при зуме вёрстка не трогается. */
+  const zoomed = Number(vv.scale) > 1.01;
+  if (!zoomed && (hidden > 120 || compactAuth)) {
     root.classList.add('kb-open');
     root.style.setProperty('--app-h', `${Math.round(vv.height)}px`);
     root.style.setProperty('--kb-offset', `${hidden}px`);
