@@ -206,6 +206,138 @@ async function ensureDiskRoom(res, incomingBytes = 0) {
   return true;
 }
 
+/**
+ * Занятое место в каталоге данных: общий размер и разбивка по верхним папкам.
+ * Читаем по одной записи, чтобы не держать в памяти дерево большого проекта.
+ */
+async function dataUsage() {
+  const parts = { workspaces: 0, uploads: 0, chats: 0, logs: 0, index: 0, other: 0 };
+  const buckets = new Set(['workspaces', 'uploads', 'chats', 'logs']);
+  const stack = [{ dir: DATA_DIR, bucket: null }];
+  let totalBytes = 0;
+  while (stack.length) {
+    const { dir, bucket } = stack.pop();
+    let entries = [];
+    try {
+      entries = await fs.promises.readdir(dir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        stack.push({ dir: full, bucket: bucket || (buckets.has(entry.name) ? entry.name : 'other') });
+        continue;
+      }
+      if (!entry.isFile()) continue;
+      let size = 0;
+      try {
+        size = (await fs.promises.stat(full)).size;
+      } catch {
+        size = 0;
+      }
+      totalBytes += size;
+      const key = bucket || (entry.name === 'index.json' ? 'index' : 'other');
+      parts[key] = (parts[key] || 0) + size;
+    }
+  }
+  return { totalBytes, parts };
+}
+
+/** Состояние диска сервиса: сколько дано тому, сколько занято, чем занято. */
+async function storageReport() {
+  const data = await dataUsage();
+  const limits = planLimits();
+  const cap = planDiskCap(limits.memoryBytes);
+  const report = {
+    at: nowIso(),
+    dataDir: DATA_DIR,
+    data: { totalBytes: data.totalBytes, parts: data.parts },
+    plan: {
+      memoryBytes: limits.memoryBytes,
+      cpuCores: limits.cpuCores,
+      capBytes: cap.bytes,
+      capSource: cap.source,
+    },
+    volume: null,
+    reserveBytes: LIMITS.minFreeBytes,
+    overview: store.overview(),
+  };
+  try {
+    const stats = await fs.promises.statfs(DATA_DIR);
+    const blockSize = Number(stats.bsize);
+    const totalBytes = Number(stats.blocks) * blockSize;
+    const freeBytes = Number(stats.bavail) * blockSize;
+    const usedBytes = Math.max(0, totalBytes - freeBytes);
+    report.volume = {
+      totalBytes,
+      freeBytes,
+      usedBytes,
+      usedPct: totalBytes > 0 ? Number(((usedBytes / totalBytes) * 100).toFixed(2)) : null,
+    };
+  } catch {
+    report.volume = null;
+  }
+  return report;
+}
+
+function readTextFile(file) {
+  try {
+    return fs.readFileSync(file, 'utf8').trim();
+  } catch {
+    return null;
+  }
+}
+
+/** Ресурсы, которые дал тариф: лимит памяти контейнера и квота ЦП (cgroup v2, затем v1). */
+function planLimits() {
+  const memoryRaw =
+    readTextFile('/sys/fs/cgroup/memory.max') || readTextFile('/sys/fs/cgroup/memory/memory.limit_in_bytes');
+  let memoryBytes = null;
+  if (memoryRaw && /^\d+$/.test(memoryRaw)) {
+    const value = Number(memoryRaw);
+    if (value > 0 && value < 1e12) memoryBytes = value;
+  }
+  const cpuMax = readTextFile('/sys/fs/cgroup/cpu.max');
+  let cpuCores = null;
+  if (cpuMax) {
+    const [quota, period] = cpuMax.split(/\s+/);
+    if (quota && quota !== 'max' && Number(quota) > 0) cpuCores = Number(quota) / Number(period || 100000);
+  } else {
+    const q = Number(readTextFile('/sys/fs/cgroup/cpu/cpu.cfs_quota_us'));
+    const p = Number(readTextFile('/sys/fs/cgroup/cpu/cpu.cfs_period_us'));
+    if (q > 0 && p > 0) cpuCores = q / p;
+  }
+  return { memoryBytes, cpuCores: cpuCores === null ? null : Number(cpuCores.toFixed(2)) };
+}
+
+const MB = 1024 * 1024;
+
+/**
+ * Потолок диска по тарифу Amvera. Отдельного запроса «сколько мне дали» у платформы
+ * нет, а statfs(/data) показывает диск всего узла (общий с другими проектами).
+ * Зато ОЗУ и SSD в тарифах идут парами, поэтому лимит памяти контейнера и есть
+ * ключ к тарифу. Переопределяется переменной DSHOW_STORAGE_CAP_MB.
+ */
+function planDiskCap(memoryBytes) {
+  const override = Number(process.env.DSHOW_STORAGE_CAP_MB || 0);
+  if (Number.isFinite(override) && override > 0) {
+    return { bytes: Math.round(override) * MB, source: 'DSHOW_STORAGE_CAP_MB' };
+  }
+  if (!memoryBytes) return { bytes: null, source: null };
+  const mib = memoryBytes / MB;
+  const table = [
+    [120, 2], // Пробный: 100 МБ ОЗУ, 2 ГБ SSD
+    [600, 5], // Начальный: 500 МБ ОЗУ, 5 ГБ SSD
+    [1200, 7], // Начальный Плюс: 1 ГБ ОЗУ, 7 ГБ SSD
+    [2800, 15], // Стандартный: 2,5 ГБ ОЗУ, 15 ГБ SSD
+    [6500, 25], // Ультра: 6 ГБ ОЗУ, 25 ГБ SSD
+    [Infinity, 35], // Ультра Плюс: 9 ГБ ОЗУ, 35 ГБ SSD
+  ];
+  const row = table.find(([max]) => mib <= max) || table[table.length - 1];
+  return { bytes: row[1] * 1024 * MB, source: `тариф по лимиту памяти ${Math.round(mib)} МБ` };
+}
+
 function clientIp(req) {
   if (TRUST_PROXY) {
     const forwarded = String(req.headers['x-forwarded-for'] || '')
@@ -1392,6 +1524,12 @@ async function route(req, res) {
       const admin = requireAdmin(req, res);
       if (!admin) return;
       return sendJson(res, 200, { overview: store.overview(), keys: keyStatus() });
+    }
+    /* Сколько места дано сервису и сколько занято: сторож места проверяет это раз в неделю. */
+    if (pathname === '/api/admin/storage' && method === 'GET') {
+      const admin = requireAdmin(req, res);
+      if (!admin) return;
+      return sendJson(res, 200, await storageReport());
     }
     if (pathname === '/api/admin/approvals' && method === 'GET') {
       const admin = requireAdmin(req, res);
