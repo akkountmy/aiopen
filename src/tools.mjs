@@ -4,6 +4,7 @@ import path from 'node:path';
 import { DATA_DIR, LIMITS, MODEL } from './config.mjs';
 import { detectKind, extractDocumentText } from './docparse.mjs';
 import { createDocumentPdf, createPresentationPdf } from './pdf.mjs';
+import { docEngines, docIssues, makePdf, makePresentation, makeWord, makeWorkbook } from './doc/index.mjs';
 import { describeImage } from './vision.mjs';
 import { fetchUrl, webSearch } from './search.mjs';
 import { escapeHtml, formatBytes, safeName, truncate } from './util.mjs';
@@ -288,6 +289,162 @@ function runProcess(command, args, { cwd, timeoutMs, input }) {
   });
 }
 
+/* ------------------- нормализация аргументов документов ------------------- */
+
+/** Список строк: принимаем массив, переводы строк и одиночную строку. */
+function listOf(value) {
+  if (Array.isArray(value)) return value.map((item) => String(item)).filter((item) => item.trim() !== '');
+  if (typeof value === 'string') return value.split('\n').map((item) => item.trim()).filter(Boolean);
+  return [];
+}
+
+function kpiOf(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((item) => item && item.value !== undefined && item.value !== null && String(item.value).trim() !== '')
+    .slice(0, 4)
+    .map((item) => ({ value: String(item.value), label: String(item.label ?? '').trim() }));
+}
+
+function tableOf(value) {
+  if (!value || !Array.isArray(value.rows) || !value.rows.length) return null;
+  const headers = Array.isArray(value.headers) ? value.headers.map((item) => String(item ?? '')) : [];
+  const rows = value.rows.filter((row) => Array.isArray(row) && row.length).map((row) => row.map((cell) => cell ?? ''));
+  if (!rows.length) return null;
+  return {
+    headers,
+    rows,
+    totalRow: value.totalRow === true,
+    numericColumns: Array.isArray(value.numericColumns) ? value.numericColumns.map(Number) : undefined,
+    columnWidths: Array.isArray(value.columnWidths) ? value.columnWidths.map(Number) : undefined,
+  };
+}
+
+/** Разделы документа → разделы про-спеки (с поддержкой простого режима). */
+function sectionsOf(value) {
+  const sections = Array.isArray(value)
+    ? value.filter(Boolean).map((section) => {
+        const subsections = Array.isArray(section.subsections)
+          ? section.subsections.filter(Boolean).map((sub) => ({
+              heading: sub.heading,
+              paragraphs: listOf(sub.paragraphs),
+              bullets: listOf(sub.bullets),
+              table: tableOf(sub.table),
+            }))
+          : [];
+        return {
+          heading: section.heading,
+          paragraphs: listOf(section.paragraphs),
+          bullets: listOf(section.bullets),
+          kpi: kpiOf(section.kpi),
+          subsections,
+          table: tableOf(section.table),
+          note: section.note,
+        };
+      })
+    : [];
+  return sections.filter((section) => section.heading || section.paragraphs.length || section.bullets.length || section.table || section.kpi.length);
+}
+
+function wordSpecFromArgs(args) {
+  const sections = sectionsOf(args.sections);
+  const paragraphs = listOf(args.paragraphs);
+  const bullets = listOf(args.bullets);
+  const table = tableOf(args.table);
+  if (!sections.length && (paragraphs.length || bullets.length || table)) {
+    sections.push({ heading: '', paragraphs, bullets, kpi: [], subsections: [], table, note: '' });
+  }
+  return {
+    title: args.title,
+    kicker: args.kicker,
+    subtitle: args.subtitle,
+    author: args.author,
+    date: args.date,
+    cover: args.cover === true,
+    toc: args.toc === true,
+    headerText: args.headerText,
+    footerText: args.footerText,
+    pageNumbers: args.pageNumbers !== false,
+    sections,
+  };
+}
+
+function chartOf(value) {
+  if (!value || !Array.isArray(value.series) || !value.series.length) return null;
+  const series = value.series
+    .filter((item) => item && Array.isArray(item.values) && item.values.length)
+    .map((item) => ({ name: String(item.name ?? 'Ряд'), values: item.values.map((number) => Number(number) || 0) }));
+  if (!series.length) return null;
+  return {
+    type: String(value.type || 'column'),
+    title: value.title,
+    categories: listOf(value.categories),
+    series,
+  };
+}
+
+function slidesOf(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter(Boolean)
+    .map((slide) => ({
+      layout: slide.layout ? String(slide.layout) : undefined,
+      kicker: slide.kicker,
+      title: slide.title,
+      subtitle: slide.subtitle,
+      paragraphs: listOf(slide.paragraphs),
+      bullets: listOf(slide.bullets),
+      kpi: kpiOf(slide.kpi),
+      chart: chartOf(slide.chart),
+      table: tableOf(slide.table),
+      note: slide.note ?? slide.notes,
+      footerText: slide.footerText,
+    }))
+    .filter((slide) => slide.title || slide.paragraphs.length || slide.bullets.length || slide.chart || slide.table || slide.kpi.length);
+}
+
+function pptxSpecFromArgs(args) {
+  return {
+    title: args.title,
+    subtitle: args.subtitle,
+    kicker: args.kicker,
+    author: args.author,
+    date: args.date,
+    company: args.company,
+    cover: args.cover !== false && Boolean(args.title),
+    footerText: args.footerText,
+    slides: slidesOf(args.slides),
+  };
+}
+
+function pdfSpecFromArgs(args) {
+  const layout = String(args.layout || '').toLowerCase() === 'slides' || (!Array.isArray(args.sections) && Array.isArray(args.slides)) ? 'slides' : 'document';
+  const sections = sectionsOf(args.sections);
+  const paragraphs = listOf(args.paragraphs);
+  const bullets = listOf(args.bullets);
+  if (layout === 'document' && !sections.length && (paragraphs.length || bullets.length || tableOf(args.table))) {
+    sections.push({ heading: '', paragraphs, bullets, kpi: [], subsections: [], table: tableOf(args.table), note: '' });
+  }
+  const spec = {
+    layout,
+    title: args.title,
+    kicker: args.kicker,
+    subtitle: args.subtitle,
+    subtitle2: args.subtitle2,
+    author: args.author,
+    date: args.date,
+    footerText: args.footerText,
+    /* обложка только по явному запросу: у короткого одностраничника она лишняя,
+       а длинный отчёт модель просит с cover: true (см. стандарты в prompt.mjs) */
+    cover: args.cover === true,
+    slides: slidesOf(args.slides),
+    sections,
+  };
+  if (layout === 'slides' && !spec.slides.length) throw new Error('Для PDF-презентации нужен хотя бы один слайд с заголовком или содержимым');
+  if (layout === 'document' && !spec.sections.length) throw new Error('Для PDF-документа нужен хотя бы один раздел или абзац');
+  return spec;
+}
+
 /* ------------------------------ инструменты ------------------------------ */
 
 export const TOOL_DEFS = [
@@ -501,7 +658,8 @@ export const TOOL_DEFS = [
     type: 'function',
     function: {
       name: 'create_excel',
-      description: 'Создать файл Excel (.xlsx) в проекте из таблиц: список листов с строками.',
+      description:
+        'Создать профессиональный файл Excel (.xlsx). Поддерживает: заголовок листа, шапку таблицы, форматы чисел (numFmt), живые формулы (значение строкой с «=» в начале: «=SUM(B2:B10)», «=B2/C2»), закреплённые колонки, автофильтр, итоговую строку, условное форматирование цветовой шкалой, сноску и настоящую диаграмму внутри листа. Один вызов собирает всю книгу. Используй для «сделай эксель / таблицу / смету / финмодель / выгрузку».',
       parameters: {
         type: 'object',
         properties: {
@@ -512,8 +670,59 @@ export const TOOL_DEFS = [
             items: {
               type: 'object',
               properties: {
-                name: { type: 'string' },
-                rows: { type: 'array', items: { type: 'array', items: {} } },
+                name: { type: 'string', description: 'Название листа, до 31 символа.' },
+                title: { type: 'string', description: 'Заголовок над таблицей (объединённая первая строка).' },
+                columns: {
+                  type: 'array',
+                  description: 'Описание колонок; header становится шапкой таблицы, numFmt — форматом чисел.',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      header: { type: 'string' },
+                      width: { type: 'number', description: 'Ширина в символах, по умолчанию 24 для первой и 16 для остальных.' },
+                      numFmt: { type: 'string', description: 'Формат Excel, например «#,##0.00», «0,0%», «dd.mm.yyyy».' },
+                      numeric: { type: 'boolean', description: 'Числовая колонка: выравнивание вправо.' },
+                      align: { type: 'string', enum: ['left', 'center', 'right'] },
+                      wrap: { type: 'boolean', description: 'Перенос текста, по умолчанию включён.' },
+                    },
+                  },
+                },
+                rows: {
+                  type: 'array',
+                  description: 'Строки данных. Числа передавай числами, формулы — строкой с «=» в начале.',
+                  items: { type: 'array', items: {} },
+                },
+                totalRow: { type: 'boolean', description: 'Оформить последнюю строку как «Итого».' },
+                freezeColumns: { type: 'integer', description: 'Сколько первых колонок закрепить.' },
+                autoFilter: { type: 'boolean', description: 'Автофильтр по шапке, по умолчанию включён.' },
+                note: { type: 'string', description: 'Сноска под таблицей.' },
+                conditional: {
+                  type: 'array',
+                  description: 'Цветовая шкала на диапазон (например, тепловая карта по выручке).',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      range: { type: 'string', description: 'Диапазон, например «E5:E12».' },
+                      from: { type: 'string', description: 'Цвет минимума, HEX без решётки.' },
+                      to: { type: 'string', description: 'Цвет максимума, HEX без решётки.' },
+                    },
+                    required: ['range'],
+                  },
+                },
+                chart: {
+                  type: 'object',
+                  description: 'Диаграмма, построенная по строкам листа.',
+                  properties: {
+                    type: { type: 'string', enum: ['column', 'bar', 'line', 'pie', 'doughnut', 'area'] },
+                    title: { type: 'string' },
+                    categoriesColumn: { type: 'integer', description: 'Номер колонки категорий, с 1.' },
+                    valueColumns: { type: 'array', items: { type: 'integer' }, description: 'Номера колонок значений, с 1.' },
+                    position: { type: 'string', description: 'Куда поставить диаграмму, например «G2».' },
+                    width: { type: 'number', description: 'Ширина в пикселях, по умолчанию 640.' },
+                    height: { type: 'number', description: 'Высота в пикселях, по умолчанию 320.' },
+                  },
+                  required: ['type'],
+                },
               },
               required: ['name', 'rows'],
             },
@@ -527,21 +736,74 @@ export const TOOL_DEFS = [
     type: 'function',
     function: {
       name: 'create_word',
-      description: 'Создать документ Word (.docx) в проекте: заголовок, абзацы, списки, таблица.',
+      description:
+        'Создать деловой документ Word (.docx): обложка, оглавление, разделы с подзаголовками, строка KPI, таблицы с повторяющейся шапкой, списки, колонтитулы с номерами страниц. Используй для «сделай вордовский файл / документ Word / отчёт / договор / коммерческое предложение».',
       parameters: {
         type: 'object',
         properties: {
           path: { type: 'string', description: 'Имя файла, например «Отчёт.docx».' },
-          title: { type: 'string' },
-          paragraphs: { type: 'array', items: { type: 'string' } },
-          bullets: { type: 'array', items: { type: 'string' } },
-          table: {
-            type: 'object',
-            properties: {
-              headers: { type: 'array', items: { type: 'string' } },
-              rows: { type: 'array', items: { type: 'array', items: { type: 'string' } } },
+          title: { type: 'string', description: 'Заголовок документа.' },
+          kicker: { type: 'string', description: 'Надзаголовок, 2–4 слова, капсом на обложке.' },
+          subtitle: { type: 'string', description: 'Подзаголовок: суть документа одной строкой.' },
+          author: { type: 'string', description: 'Автор или подразделение для обложки.' },
+          date: { type: 'string', description: 'Дата на обложке, например «12 октября 2026».' },
+          cover: { type: 'boolean', description: 'Сделать титульную страницу (только вместе с title).' },
+          toc: { type: 'boolean', description: 'Добавить поле оглавления (обновится в Word по F9).' },
+          headerText: { type: 'string', description: 'Текст верхнего колонтитула, по умолчанию заголовок.' },
+          footerText: { type: 'string', description: 'Текст нижнего колонтитула слева.' },
+          pageNumbers: { type: 'boolean', description: 'Показывать «стр. N из M», по умолчанию да.' },
+          sections: {
+            type: 'array',
+            description: 'Разделы документа по порядку.',
+            items: {
+              type: 'object',
+              properties: {
+                heading: { type: 'string', description: 'Заголовок раздела.' },
+                paragraphs: { type: 'array', items: { type: 'string' }, description: 'Абзацы по ширине страницы.' },
+                bullets: { type: 'array', items: { type: 'string' }, description: 'Пункты списка.' },
+                kpi: {
+                  type: 'array',
+                  description: 'Строка из 2–4 ключевых цифр под заголовком раздела.',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      value: { type: 'string', description: 'Крупное значение, например «184,6 млн ₽».' },
+                      label: { type: 'string', description: 'Подпись капсом, 1–3 слова.' },
+                    },
+                    required: ['value', 'label'],
+                  },
+                },
+                subsections: {
+                  type: 'array',
+                  description: 'Подразделы второго уровня.',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      heading: { type: 'string' },
+                      paragraphs: { type: 'array', items: { type: 'string' } },
+                      bullets: { type: 'array', items: { type: 'string' } },
+                      table: { type: 'object', properties: { headers: { type: 'array', items: { type: 'string' } }, rows: { type: 'array', items: { type: 'array', items: { type: 'string' } } } } },
+                    },
+                  },
+                },
+                table: {
+                  type: 'object',
+                  description: 'Таблица раздела: шапка и строки.',
+                  properties: {
+                    headers: { type: 'array', items: { type: 'string' } },
+                    rows: { type: 'array', items: { type: 'array', items: {} } },
+                    totalRow: { type: 'boolean', description: 'Последняя строка — «Итого», выделяется.' },
+                    numericColumns: { type: 'array', items: { type: 'integer' }, description: 'Индексы числовых колонок с 0 для выравнивания вправо.' },
+                    columnWidths: { type: 'array', items: { type: 'number' }, description: 'Ширины колонок в сантиметрах.' },
+                  },
+                },
+                note: { type: 'string', description: 'Сноска под разделом.' },
+              },
             },
           },
+          paragraphs: { type: 'array', items: { type: 'string' }, description: 'Простой режим: абзацы без разделов.' },
+          bullets: { type: 'array', items: { type: 'string' }, description: 'Простой режим: список без разделов.' },
+          table: { type: 'object', description: 'Простой режим: одна таблица без разделов.', properties: { headers: { type: 'array', items: { type: 'string' } }, rows: { type: 'array', items: { type: 'array', items: {} } } } },
         },
         required: ['path'],
       },
@@ -550,41 +812,137 @@ export const TOOL_DEFS = [
   {
     type: 'function',
     function: {
+      name: 'create_pptx',
+      description:
+        'Создать презентацию PowerPoint (.pptx) 16:9: обложка, разделители, слайды с тезисами, настоящие диаграммы PowerPoint, таблицы, KPI-строка и заметки докладчика. Используй для «сделай презентацию / слайды / питч-дек / pptx». Если просят именно PDF — используй create_pdf с layout «slides».',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Имя файла, например «Презентация.pptx».' },
+          title: { type: 'string', description: 'Заголовок презентации и обложки.' },
+          subtitle: { type: 'string', description: 'Подзаголовок обложки.' },
+          kicker: { type: 'string', description: 'Надзаголовок обложки, 2–4 слова.' },
+          author: { type: 'string', description: 'Автор для обложки и свойств файла.' },
+          date: { type: 'string', description: 'Дата на обложке.' },
+          cover: { type: 'boolean', description: 'Добавить обложку, по умолчанию да (если задан title).' },
+          footerText: { type: 'string', description: 'Подпись внизу каждого слайда.' },
+          slides: {
+            type: 'array',
+            description: 'Слайды по порядку.',
+            items: {
+              type: 'object',
+              properties: {
+                layout: { type: 'string', enum: ['cover', 'section', 'content', 'visual', 'quote'], description: 'cover — обложка, section — разделитель, content — тезисы, visual — крупная диаграмма/таблица, quote — цитата. По умолчанию выбирается по составу.' },
+                kicker: { type: 'string', description: 'Надзаголовок слайда.' },
+                title: { type: 'string', description: 'Заголовок слайда — утверждение, а не тема.' },
+                paragraphs: { type: 'array', items: { type: 'string' } },
+                bullets: { type: 'array', items: { type: 'string' }, description: 'Тезисы, 2–5 на слайд.' },
+                kpi: {
+                  type: 'array',
+                  description: 'Строка ключевых цифр под заголовком.',
+                  items: {
+                    type: 'object',
+                    properties: { value: { type: 'string' }, label: { type: 'string' } },
+                    required: ['value', 'label'],
+                  },
+                },
+                chart: {
+                  type: 'object',
+                  description: 'Диаграмма PowerPoint.',
+                  properties: {
+                    type: { type: 'string', enum: ['column', 'bar', 'line', 'pie', 'doughnut', 'area'] },
+                    title: { type: 'string' },
+                    categories: { type: 'array', items: { type: 'string' }, description: 'Подписи категорий.' },
+                    series: {
+                      type: 'array',
+                      items: {
+                        type: 'object',
+                        properties: { name: { type: 'string' }, values: { type: 'array', items: { type: 'number' } } },
+                        required: ['name', 'values'],
+                      },
+                    },
+                  },
+                  required: ['type', 'series'],
+                },
+                table: {
+                  type: 'object',
+                  properties: { headers: { type: 'array', items: { type: 'string' } }, rows: { type: 'array', items: { type: 'array', items: {} } } },
+                },
+                note: { type: 'string', description: 'Заметки докладчика.' },
+              },
+            },
+          },
+        },
+        required: ['path', 'slides'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'create_pdf',
       description:
-        'Создать настоящий PDF-файл (.pdf) в проекте. Презентация: layout «slides» — по странице на слайд 16:9 (обложка добавляется при cover: true). Документ: layout «document» — A4, разделы с абзацами и списками. Используй для любой просьбы «сделай в PDF».',
+        'Создать настоящий PDF (.pdf). Презентация: layout «slides» — страница на слайд 16:9, поддерживает KPI, диаграммы (столбцы/линии), таблицы и заметки. Документ: layout «document» — A4 с обложкой, заголовками, абзацами, списками, KPI и таблицами. Используй для любой просьбы «сделай PDF».',
       parameters: {
         type: 'object',
         properties: {
           path: { type: 'string', description: 'Имя файла, например «Презентация.pdf».' },
           layout: { type: 'string', enum: ['slides', 'document'], description: 'slides — презентация, document — документ A4.' },
-          title: { type: 'string', description: 'Заголовок презентации или документа.' },
-          subtitle: { type: 'string', description: 'Подзаголовок: для обложки или под заголовком документа.' },
+          title: { type: 'string', description: 'Заголовок документа или обложки.' },
+          subtitle: { type: 'string', description: 'Подзаголовок.' },
           kicker: { type: 'string', description: 'Надзаголовок обложки, 2–4 слова.' },
-          cover: { type: 'boolean', description: 'Добавить титульную страницу к презентации.' },
+          author: { type: 'string', description: 'Автор или подразделение на обложке.' },
+          date: { type: 'string', description: 'Дата на обложке.' },
+          cover: { type: 'boolean', description: 'Титульная страница (для document по умолчанию да, если задан title).' },
+          footerText: { type: 'string', description: 'Подпись внизу страниц и слайдов.' },
           slides: {
             type: 'array',
             description: 'Слайды презентации.',
             items: {
               type: 'object',
               properties: {
+                layout: { type: 'string', enum: ['cover', 'section', 'content', 'visual', 'quote'] },
+                kicker: { type: 'string' },
                 title: { type: 'string' },
                 paragraphs: { type: 'array', items: { type: 'string' } },
                 bullets: { type: 'array', items: { type: 'string' } },
+                kpi: { type: 'array', items: { type: 'object', properties: { value: { type: 'string' }, label: { type: 'string' } }, required: ['value', 'label'] } },
+                chart: {
+                  type: 'object',
+                  properties: {
+                    type: { type: 'string', enum: ['column', 'bar', 'line'] },
+                    title: { type: 'string' },
+                    categories: { type: 'array', items: { type: 'string' } },
+                    series: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, values: { type: 'array', items: { type: 'number' } } }, required: ['name', 'values'] } },
+                  },
+                  required: ['type', 'series'],
+                },
+                table: { type: 'object', properties: { headers: { type: 'array', items: { type: 'string' } }, rows: { type: 'array', items: { type: 'array', items: {} } } } },
                 note: { type: 'string', description: 'Короткая подпись внизу слайда.' },
               },
-              required: ['title'],
             },
           },
           sections: {
             type: 'array',
-            description: 'Разделы документа.',
+            description: 'Разделы документа A4.',
             items: {
               type: 'object',
               properties: {
                 heading: { type: 'string' },
                 paragraphs: { type: 'array', items: { type: 'string' } },
                 bullets: { type: 'array', items: { type: 'string' } },
+                kpi: { type: 'array', items: { type: 'object', properties: { value: { type: 'string' }, label: { type: 'string' } }, required: ['value', 'label'] } },
+                table: { type: 'object', properties: { headers: { type: 'array', items: { type: 'string' } }, rows: { type: 'array', items: { type: 'array', items: {} } } } },
+                chart: {
+                  type: 'object',
+                  properties: {
+                    type: { type: 'string', enum: ['column', 'bar', 'line'] },
+                    title: { type: 'string' },
+                    categories: { type: 'array', items: { type: 'string' } },
+                    series: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, values: { type: 'array', items: { type: 'number' } } }, required: ['name', 'values'] } },
+                  },
+                  required: ['type', 'series'],
+                },
               },
             },
           },
@@ -612,6 +970,7 @@ export const TOOL_LABELS = {
   run_python: 'Расчёты',
   create_excel: 'Создание Excel',
   create_word: 'Создание Word',
+  create_pptx: 'Создание презентации',
   create_pdf: 'Создание PDF',
 };
 
@@ -626,6 +985,7 @@ export function toolSummary(name, args) {
     case 'write_file':
     case 'create_excel':
     case 'create_word':
+    case 'create_pptx':
     case 'create_pdf':
       return args.path || '';
     case 'move_path':
@@ -914,71 +1274,70 @@ export async function executeTool(name, args, ctx) {
     case 'create_excel': {
       const rel = String(args.path || 'report.xlsx');
       if (!rel.toLowerCase().endsWith('.xlsx')) throw new Error('Имя файла должно заканчиваться на .xlsx');
-      const sheets = Array.isArray(args.sheets) ? args.sheets : [];
-      if (!sheets.length) throw new Error('Нужен хотя бы один лист');
-      const buf = buildXlsx(sheets);
+      const sheets = Array.isArray(args.sheets) ? args.sheets.filter((sheet) => sheet && Array.isArray(sheet.rows)) : [];
+      if (!sheets.length) throw new Error('Нужен хотя бы один лист с строками rows');
+      const { buffer: buf, engine } = await makeWorkbook(sheets, buildXlsx);
       ensureFreeSpace(buf.length);
       const full = assertInside(root, resolveSafe(root, rel));
       ensureDirFor(full);
       fs.writeFileSync(full, buf);
-      const rows = sheets.reduce((sum, s) => sum + (s.rows?.length || 0), 0);
-      return { text: `Excel создан: ${rel} (${sheets.length} лист(ов), ${rows} строк)`, meta: { path: rel, created: true } };
+      const rows = sheets.reduce((sum, sheet) => sum + sheet.rows.length, 0);
+      const charts = sheets.filter((sheet) => sheet.chart).length;
+      const parts = [`${sheets.length} лист(ов)`, `${rows} строк`];
+      if (charts) parts.push(`диаграмм: ${charts}`);
+      return {
+        text: `Excel создан: ${rel} (${parts.join(', ')}, ${Math.max(1, Math.round(buf.length / 1024))} КБ)`,
+        meta: { path: rel, created: true, engine },
+      };
     }
     case 'create_word': {
       const rel = String(args.path || 'document.docx');
       if (!rel.toLowerCase().endsWith('.docx')) throw new Error('Имя файла должно заканчиваться на .docx');
       ensureFreeSpace(LIMITS.minFreeBytes);
-      const buf = buildDocx({
-        title: args.title,
-        paragraphs: Array.isArray(args.paragraphs) ? args.paragraphs : [],
-        bullets: Array.isArray(args.bullets) ? args.bullets : [],
-        table: args.table,
-      });
+      const spec = wordSpecFromArgs(args);
+      const { buffer: buf, engine } = await makeWord(spec, buildDocx);
       const full = assertInside(root, resolveSafe(root, rel));
       ensureDirFor(full);
       fs.writeFileSync(full, buf);
-      return { text: `Word создан: ${rel}`, meta: { path: rel, created: true } };
+      const detail = [`разделов: ${spec.sections.length}`];
+      if (spec.cover) detail.push('обложка');
+      if (spec.toc) detail.push('оглавление');
+      return {
+        text: `Word создан: ${rel} (${detail.join(', ')}, ${Math.max(1, Math.round(buf.length / 1024))} КБ)`,
+        meta: { path: rel, created: true, engine },
+      };
+    }
+    case 'create_pptx': {
+      const rel = String(args.path || 'presentation.pptx');
+      if (!rel.toLowerCase().endsWith('.pptx')) throw new Error('Имя файла должно заканчиваться на .pptx');
+      ensureFreeSpace(LIMITS.minFreeBytes);
+      const spec = pptxSpecFromArgs(args);
+      if (!spec.slides.length) throw new Error('Нужен хотя бы один слайд с заголовком или содержимым');
+      const { buffer: buf, engine } = await makePresentation(spec);
+      const full = assertInside(root, resolveSafe(root, rel));
+      ensureDirFor(full);
+      fs.writeFileSync(full, buf);
+      const total = spec.slides.length + (spec.cover && spec.title ? 1 : 0);
+      return {
+        text: `Презентация создана: ${rel} (слайдов: ${total}, ${Math.max(1, Math.round(buf.length / 1024))} КБ)`,
+        meta: { path: rel, created: true, engine, slides: total },
+      };
     }
     case 'create_pdf': {
       const rel = String(args.path || 'document.pdf');
       if (!rel.toLowerCase().endsWith('.pdf')) throw new Error('Имя файла должно заканчиваться на .pdf');
       ensureFreeSpace(LIMITS.minFreeBytes);
-      /* модель иногда присылает список строкой — принимаем и такое */
-      const toList = (value) =>
-        Array.isArray(value) ? value.map((item) => String(item)) : typeof value === 'string' ? value.split('\n') : [];
-      const slides = Array.isArray(args.slides) ? args.slides : [];
-      const sections = Array.isArray(args.sections) ? args.sections : [];
-      const asSlides = String(args.layout || '').toLowerCase() === 'slides' || (!sections.length && slides.length > 0);
-      const buf = asSlides
-        ? createPresentationPdf({
-            title: args.title,
-            subtitle: args.subtitle,
-            kicker: args.kicker,
-            cover: args.cover === true,
-            slides: slides.map((slide) => ({
-              title: slide?.title,
-              paragraphs: toList(slide?.paragraphs),
-              bullets: toList(slide?.bullets),
-              note: slide?.note,
-            })),
-          })
-        : createDocumentPdf({
-            title: args.title,
-            subtitle: args.subtitle,
-            sections: sections.map((section) => ({
-              heading: section?.heading,
-              paragraphs: toList(section?.paragraphs),
-              bullets: toList(section?.bullets),
-            })),
-          });
-      if (!buf.length) throw new Error('Не удалось собрать PDF: нет текста');
+      const spec = pdfSpecFromArgs(args);
+      const { buffer: buf, engine, layout } = await makePdf(spec, { document: createDocumentPdf, slides: createPresentationPdf });
+      if (!buf.length) throw new Error('Не удалось собрать PDF: нет содержимого');
       const full = assertInside(root, resolveSafe(root, rel));
       ensureDirFor(full);
       fs.writeFileSync(full, buf);
       const pages = (buf.toString('latin1').match(/\/Type \/Page(?!s)/g) || []).length;
+      const kind = layout === 'slides' ? 'презентация' : 'документ A4';
       return {
-        text: `PDF создан: ${rel} (${pages} стр., ${Math.max(1, Math.round(buf.length / 1024))} КБ)`,
-        meta: { path: rel, created: true, pages },
+        text: `PDF создан: ${rel} (${kind}, ${pages} стр., ${Math.max(1, Math.round(buf.length / 1024))} КБ)`,
+        meta: { path: rel, created: true, pages, engine, layout },
       };
     }
     default:

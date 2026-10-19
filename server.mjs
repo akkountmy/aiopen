@@ -24,6 +24,7 @@ import {
 import { describeFailure, generateTitle, runTurn } from './src/agent.mjs';
 import { transcribeAudio } from './src/asr.mjs';
 import { detectKind, extractDocumentText, kindLabel } from './src/docparse.mjs';
+import { docEngines } from './src/doc/index.mjs';
 import { approvalMessage, notifyAdmin, suspicionMessage } from './src/notify.mjs';
 import { issueOpenLink, resolveOpenLink, asciiFileName, OPEN_PREFIX } from './src/openlink.mjs';
 import { proofreadText } from './src/proofread.mjs';
@@ -1151,6 +1152,7 @@ async function route(req, res) {
         ok: true,
         time: nowIso(),
         sessions: { desktop: deviceLimit('desktop'), mobile: deviceLimit('mobile') },
+        docs: await docEngines(),
       });
     }
 

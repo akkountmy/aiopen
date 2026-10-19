@@ -21,6 +21,17 @@ function creds() {
 
 const mode = process.argv[2] || 'status';
 
+/** Все файлы каталога рекурсивно — в src есть подпапки (src/doc). */
+function walk(dir, prefix) {
+  const out = [];
+  for (const entry of fs.readdirSync(path.join(ROOT, dir), { withFileTypes: true })) {
+    const rel = `${prefix}/${entry.name}`;
+    if (entry.isDirectory()) out.push(...walk(`${dir}/${entry.name}`, rel));
+    else out.push(rel);
+  }
+  return out;
+}
+
 if (mode === 'status') {
   for (const [title, tool, args] of [
     ['Проект', 'getProject', { slug: SLUG }],
@@ -46,9 +57,9 @@ if (mode === 'status') {
           'amvera.yaml',
           'package.json',
           'README.md',
-          ...fs.readdirSync(path.join(ROOT, 'src')).map((f) => `src/${f}`),
-          ...fs.readdirSync(path.join(ROOT, 'public')).map((f) => `public/${f}`),
-          ...fs.readdirSync(path.join(ROOT, 'assets', 'fonts')).map((f) => `assets/fonts/${f}`),
+          ...walk('src', 'src'),
+          ...walk('public', 'public'),
+          ...walk('assets', 'assets'),
         ].filter((rel) => fs.statSync(path.join(ROOT, rel)).isFile());
 
   for (const raw of files) {
