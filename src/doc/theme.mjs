@@ -92,6 +92,20 @@ export function todayRu() {
   return new Date().toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
 }
 
+/**
+ * Неразрывные пробелы там, где перенос читается плохо: «1,48 млн ₽» не должно
+ * разрываться, оставляя знак валюты или единицу на отдельной строке.
+ */
+export function glueUnits(text) {
+  return String(text ?? '')
+    .replace(/(\d)\s+(₽|\$|€|руб\.?|р\.)/g, '$1\u00A0$2')
+    .replace(/(\d)\s+(млн|млрд|тыс\.?|трлн|%)(?=[\s.,;:!?)]|$)/g, '$1\u00A0$2')
+    /* «10 недель», «30 дней»: число не должно отрываться от единицы.
+       `\w` в JS не знает кириллицу — берём `\p{L}` с флагом u. */
+    .replace(/(\d)\s+(недел|дн|мес|год|лет|час|мин|сек|шт|чел|строк|кл|польз)\p{L}*(?=[\s.,;:!?)]|$)/gu, (match, digit, unit) => `${digit}\u00A0${match.slice(digit.length + 1)}`)
+    .replace(/\s+(₽|\$|€)(?=[\s.,;:!?)]|$)/g, '\u00A0$1');
+}
+
 export function safeText(value, limit = 4000) {
-  return normalise(value).slice(0, limit);
+  return glueUnits(normalise(value)).slice(0, limit);
 }

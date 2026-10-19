@@ -86,10 +86,12 @@ function measureTable(doc, table, width) {
   return { headers, rows, columns, numeric, widths };
 }
 
-function tableRowHeight(doc, cells, widths, fontSize, padding) {
+function tableRowHeight(doc, cells, widths, fontSize, padding, bold = false) {
   let height = 0;
   cells.forEach((cell, index) => {
-    setFont(doc, false, fontSize);
+    /* Жирный шрифт шире обычного: измеряем тем же начертанием, каким рисуем,
+       иначе шапка переносится на строку больше и налезает на ячейки ниже. */
+    setFont(doc, bold, fontSize);
     const inner = Math.max(10, widths[index] - padding * 2);
     height = Math.max(height, doc.heightOfString(String(cell ?? ''), { width: inner, lineGap: 1 }));
   });
@@ -108,7 +110,7 @@ function drawTable(doc, table, { width, fontSize = 9.5, padding = 5, x } = {}) {
   };
 
   if (headers.length) {
-    const height = tableRowHeight(doc, headers, widths, fontSize, padding);
+    const height = tableRowHeight(doc, headers, widths, fontSize, padding, true);
     ensureSpace(height);
     let x = x0;
     doc.save().rect(x0, y, width, height).fill(hex(COLORS.navy)).restore();

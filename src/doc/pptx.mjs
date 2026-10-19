@@ -5,7 +5,7 @@
  * тезисы, диаграммы, таблицы, KPI-полоса, заметки докладчика на каждом слайде.
  */
 import PptxGenJS from 'pptxgenjs';
-import { COLORS, SLIDE, SLIDE_TYPE, toList } from './theme.mjs';
+import { COLORS, SLIDE, SLIDE_TYPE, glueUnits, toList } from './theme.mjs';
 
 const W = SLIDE.width;
 const H = SLIDE.height;
@@ -15,7 +15,8 @@ const PALETTE = ['D4564A', '10233F', '8A8C96', 'E0B04A', '4A7FB5', '7A9E5B'];
 
 const font = 'Segoe UI';
 const text = (value, options = {}) => ({
-  text: String(value ?? ''),
+  /* glueUnits: «1,48 млн ₽» и «10 недель» переносятся целиком. */
+  text: glueUnits(String(value ?? '')),
   options: {
     fontFace: font,
     fontSize: options.fontSize ?? SLIDE_TYPE.body,
