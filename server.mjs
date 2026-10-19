@@ -8,6 +8,7 @@ import {
   BUDGET,
   DATA_DIR,
   DEVICE,
+  DEVICE_KINDS,
   HOST,
   LIMITS,
   PORT,
@@ -34,6 +35,7 @@ import {
   deviceCookie,
   deviceKind,
   issueSession,
+  isInstalledApp,
   newDeviceId,
   parseCookies,
   passwordProblem,
@@ -361,7 +363,7 @@ function sessionsReport() {
   });
   const kicked = Object.entries(store.state.kicked || {}).map(([key, mark]) => ({
     id: key.slice(0, 10),
-    kind: mark.kind === 'mobile' ? 'mobile' : 'desktop',
+    kind: DEVICE_KINDS.includes(String(mark.kind)) ? String(mark.kind) : 'desktop',
     at: Number(mark.at) ? new Date(Number(mark.at)).toISOString() : null,
     byIp: mark.byIp || '',
     byUa: mark.byUa || '',
@@ -372,7 +374,11 @@ function sessionsReport() {
   }));
   return {
     at: nowIso(),
-    limits: { desktop: deviceLimit('desktop'), mobile: deviceLimit('mobile') },
+    limits: {
+      desktop: deviceLimit('desktop'),
+      mobile: deviceLimit('mobile'),
+      app: deviceLimit('app'),
+    },
     sessions,
     kicked,
     audit,
@@ -567,8 +573,11 @@ function isServiceClient(req) {
 
 /* Класс устройства этого входа. Берём User-Agent и, если браузер прислал,
    Client Hint Sec-CH-UA-Mobile — так планшет с «настольным» User-Agent тоже
-   попадает в телефонную полку и не выбивает ноутбук. */
+   попадает в телефонную полку и не выбивает ноутбук.
+   Ярлык, открытый как приложение, — отдельная полка: на iPhone он держит cookie
+   отдельно от Safari, и без этого вход из ярлыка закрывал вкладку телефона. */
 function deviceKindOf(req) {
+  if (isInstalledApp(req.headers['x-dshow-display'])) return 'app';
   return deviceKind(req.headers['user-agent'], { mobileHint: req.headers['sec-ch-ua-mobile'] });
 }
 
@@ -1197,11 +1206,11 @@ async function route(req, res) {
     }
     if (pathname === '/api/health' && method === 'GET') {
       /* сколько сеансов каждого класса устройства разрешено — видно, что
-         под одним аккаунтом компьютер и телефон работают одновременно */
+         под одним аккаунтом компьютер, телефон и его ярлык работают одновременно */
       return sendJson(res, 200, {
         ok: true,
         time: nowIso(),
-        sessions: { desktop: deviceLimit('desktop'), mobile: deviceLimit('mobile') },
+        sessions: { desktop: deviceLimit('desktop'), mobile: deviceLimit('mobile'), app: deviceLimit('app') },
         docs: await docEngines(),
       });
     }

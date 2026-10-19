@@ -307,6 +307,10 @@ function renderMarkdown(raw) {
 async function api(path, options = {}) {
   const { method = 'GET', body, raw, headers = {}, signal, anonymous = false } = options;
   const init = { method, credentials: 'same-origin', headers: { ...headers }, signal };
+  /* Если страница открыта не во вкладке, а как приложение (ярлык на домашнем
+     экране), сообщаем об этом серверу: у такого входа своя полка сеансов и он
+     не выбивает обычную вкладку телефона. */
+  if (openedAsApp()) init.headers['X-Dshow-Display'] = 'standalone';
   if (body !== undefined && !raw) {
     init.headers['Content-Type'] = 'application/json';
     init.body = JSON.stringify(body);

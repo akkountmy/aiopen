@@ -5,6 +5,8 @@
 
    Что проверяем:
    - вход с ноутбука и вход с телефона живут одновременно;
+   - ярлык-приложение на телефоне — отдельная полка: компьютер, вкладка
+     телефона и ярлык работают одновременно, не выбивая друг друга;
    - второй вход с того же класса устройства закрывает прежний сеанс этого
      класса, но не трогает сеанс другого класса;
    - планшет с настольным User-Agent (iPadOS) попадает в телефонную полку
@@ -151,9 +153,9 @@ try {
   const health = await call('/api/health');
   const slots = health.data.sessions || {};
   check(
-    'разрешено по одному сеансу на компьютер и телефон',
-    slots.desktop === 1 && slots.mobile === 1,
-    `desktop=${slots.desktop}, mobile=${slots.mobile}`,
+    'разрешено по одному сеансу на компьютер, телефон и ярлык',
+    slots.desktop === 1 && slots.mobile === 1 && slots.app === 1,
+    `desktop=${slots.desktop}, mobile=${slots.mobile}, app=${slots.app}`,
   );
 
   /* --- компьютер и телефон одновременно --- */
@@ -205,10 +207,35 @@ try {
   const deskAfterTablet = await call('/api/me', { cookie: asCookie(desktop2.session) });
   check('компьютер пережил вход с планшета', deskAfterTablet.status === 200, `HTTP ${deskAfterTablet.status}`);
 
+  /* --- ярлык-приложение на телефоне: третья полка --- */
+  const shortcut = await login(IPHONE, '', { 'x-dshow-display': 'standalone' });
+  check('вход из ярлыка-приложения успешен', shortcut.status === 200, `HTTP ${shortcut.status}`);
+  check('ярлык получил отдельный сеанс', Boolean(shortcut.session) && shortcut.session !== tablet.session);
+  const kindsNow = sessionsInState().map((item) => item.kind).sort().join(',');
+  check('три полки: компьютер, телефон, ярлык', kindsNow === 'app,desktop,mobile', kindsNow);
+  const tabletAfterApp = await call('/api/me', { cookie: asCookie(tablet.session) });
+  check('вход из ярлыка не выбивает вкладку телефона', tabletAfterApp.status === 200, `HTTP ${tabletAfterApp.status}`);
+  const deskAfterApp = await call('/api/me', { cookie: asCookie(desktop2.session) });
+  check('вход из ярлыка не выбивает компьютер', deskAfterApp.status === 200, `HTTP ${deskAfterApp.status}`);
+  const appMe = await call('/api/me', { cookie: asCookie(shortcut.session) });
+  check('сеанс ярлыка работает', appMe.status === 200, `HTTP ${appMe.status}`);
+
+  /* --- второй ярлык закрывает только ярлык --- */
+  const shortcut2 = await login(IPHONE, '', { 'x-dshow-display': 'standalone' });
+  check('второй вход из ярлыка успешен', shortcut2.status === 200, `HTTP ${shortcut2.status}`);
+  const shortcutOld = await call('/api/me', { cookie: asCookie(shortcut.session) });
+  check('прежний сеанс ярлыка закрыт вторым ярлыком', shortcutOld.status === 401, `HTTP ${shortcutOld.status}`);
+  const tabletAlive = await call('/api/me', { cookie: asCookie(tablet.session) });
+  check('второй ярлык не тронул вкладку телефона', tabletAlive.status === 200, `HTTP ${tabletAlive.status}`);
+  const deskAlive2 = await call('/api/me', { cookie: asCookie(desktop2.session) });
+  check('второй ярлык не тронул компьютер', deskAlive2.status === 200, `HTTP ${deskAlive2.status}`);
+  const finalKinds = sessionsInState().map((item) => item.kind).sort().join(',');
+  check('после второго ярлыка снова три сеанса', finalKinds === 'app,desktop,mobile', finalKinds);
+
   /* --- история входов и предупреждение администратору --- */
   const events = auditEvents();
   check('история входов записана', events.length >= 5, `событий: ${events.length}`);
-  check('видны оба класса устройств', new Set(events.map((item) => item.kind)).size === 2);
+  check('видны все три класса устройств', new Set(events.map((item) => item.kind)).size === 3);
   check('разные метки устройств сохранены', new Set(events.map((item) => item.device)).size >= 4);
   check('зафиксировано выбивание сеансов', events.some((item) => item.displaced >= 1));
   check('сработало предупреждение администратору', /\[guard\] подозрение/.test(log));

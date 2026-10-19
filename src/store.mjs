@@ -5,6 +5,7 @@ import {
   CHATS_DIR,
   DATA_DIR,
   DEVICE,
+  DEVICE_KINDS,
   INDEX_FILE,
   WORKSPACES_DIR,
   deviceLimit,
@@ -501,7 +502,7 @@ class Store {
       ip: String(entry.ip || '').slice(0, 60),
       ua: String(entry.ua || '').slice(0, 160),
       device: String(entry.device || '').slice(0, 80),
-      kind: entry.kind === 'mobile' ? 'mobile' : 'desktop',
+      kind: DEVICE_KINDS.includes(String(entry.kind)) ? String(entry.kind) : 'desktop',
       displaced: Number(entry.displaced || 0),
     });
     const keepFrom = now - DEVICE.keepMs;

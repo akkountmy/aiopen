@@ -113,8 +113,18 @@ export function sessionKind(session) {
   return DEVICE_KINDS.includes(kind) ? kind : 'desktop';
 }
 
+/* Ярлык, открытый как приложение, представляется этим заголовком: в браузере
+   его нет. Такой вход считаем отдельным классом «приложение» — на iPhone у
+   ярлыка своё хранилище cookie, и иначе он выбивал бы вкладку телефона. */
+export function isInstalledApp(value) {
+  const text = String(value || '').trim().toLowerCase();
+  return text === 'standalone' || text === '1' || text === 'app';
+}
+
 export function deviceKindLabel(kind) {
-  return kind === 'mobile' ? 'телефон' : 'компьютер';
+  if (kind === 'mobile') return 'телефон';
+  if (kind === 'app') return 'телефон · ярлык';
+  return 'компьютер';
 }
 
 export function passwordProblem(password) {
@@ -184,9 +194,10 @@ export function timingSafeEqualString(a, b) {
 }
 
 /* Выдаёт новый сеанс. Сеансы того же класса устройства закрываются лишние
-   (по умолчанию — один компьютер и один телефон), поэтому работа с ноутбука и
-   телефона идёт параллельно. Возвращает метку нового сеанса, его класс и список
-   выбитых — по нему видно, не пользуются ли аккаунтом вдвоём. */
+   (по умолчанию — один компьютер, один телефон и один ярлык-приложение), поэтому
+   работа с ноутбука, из браузера телефона и из ярлыка идёт параллельно.
+   Возвращает метку нового сеанса, его класс и список выбитых — по нему видно,
+   не пользуются ли аккаунтом вдвоём. */
 export function issueSession(store, userId, meta) {
   const token = newSessionToken();
   const key = sessionKey(token);
