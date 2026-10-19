@@ -650,32 +650,21 @@ try {
   /* Телефон и открытая клавиатура: экран входа прокручивается, а поле пароля
      остаётся в видимой области, а не под клавиатурой или нижней панелью. */
   await cdp.send('Emulation.setDeviceMetricsOverride', {
-    width: 390, height: 640, deviceScaleFactor: 2, mobile: true, screenWidth: 390, screenHeight: 640,
+    width: 390, height: 494, deviceScaleFactor: 2, mobile: true, screenWidth: 390, screenHeight: 844,
   });
   await evaluate(`document.getElementById('loginPass').focus()`);
-  await sleep(450);
-  await evaluate(`(() => {
-    document.documentElement.classList.add('kb-open');
-    document.documentElement.style.setProperty('--app-h', '340px');
-    document.getElementById('loginPass').scrollIntoView({ block: 'center' });
-    return true;
-  })()`);
-  await sleep(250);
+  await sleep(900);
   const authGeom = await evaluate(`(() => {
     const pass = document.getElementById('loginPass').getBoundingClientRect();
     const card = document.querySelector('.auth-card').getBoundingClientRect();
     const auth = document.querySelector('.auth');
     return { passTop: pass.top, passBottom: pass.bottom, cardTop: card.top,
+      vvHeight: visualViewport.height, kbOpen: document.documentElement.classList.contains('kb-open'),
       authClient: auth.clientHeight, authScroll: auth.scrollHeight };
   })()`);
-  authGeom.passTop >= 0 && authGeom.passBottom <= 340 && authGeom.cardTop >= 0
-    ? ok('на телефоне клавиатура не перекрывает поле пароля', `${Math.round(authGeom.passBottom)}px из 340`)
+  authGeom.kbOpen && authGeom.passTop >= 0 && authGeom.passBottom <= authGeom.vvHeight && authGeom.cardTop >= 0
+    ? ok('на телефоне клавиатура не перекрывает поле пароля', `${Math.round(authGeom.passBottom)}px из ${Math.round(authGeom.vvHeight)}`)
     : fail('поле пароля под клавиатурой', authGeom);
-  await evaluate(`(() => {
-    document.documentElement.classList.remove('kb-open');
-    document.documentElement.style.removeProperty('--app-h');
-    return true;
-  })()`);
   await cdp.send('Emulation.clearDeviceMetricsOverride');
 
   // Вход с новым паролем.

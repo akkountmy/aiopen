@@ -3379,7 +3379,12 @@ function syncKeyboardViewport() {
      Возвращаем страницу на место — поле и так видно: высоту мы считаем. */
   if (vv.offsetTop) window.scrollTo(0, 0);
   const hidden = Math.round(window.innerHeight - vv.height - (vv.offsetTop || 0));
-  if (hidden > 120) {
+  /* На экране входа клавиатуру считаем открытой и тогда, когда Safari не
+     уменьшает innerHeight: ориентируемся на низкую видимую область. Иначе
+     карточка оставалась по центру и поле пароля уходило под клавиатуру. */
+  const authVisible = !document.getElementById('auth')?.classList.contains('hidden');
+  const compactAuth = authVisible && vv.height < 560;
+  if (hidden > 120 || compactAuth) {
     root.classList.add('kb-open');
     root.style.setProperty('--app-h', `${Math.round(vv.height)}px`);
     root.style.setProperty('--kb-offset', `${hidden}px`);
