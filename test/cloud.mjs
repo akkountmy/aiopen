@@ -25,10 +25,18 @@ async function api(path, { method = 'GET', body, headers = {}, raw } = {}) {
   }
   if (cookie) init.headers.Cookie = cookie;
   const res = await fetch(BASE + path, init);
+  /* Печенек несколько (сеанс и метка устройства), поэтому складываем их в
+     список, а не оставляем последнюю. */
   const setCookie = res.headers.getSetCookie?.() || [];
   for (const c of setCookie) {
     const pair = c.split(';')[0];
-    if (pair.includes('=')) cookie = pair;
+    if (!pair.includes('=')) continue;
+    const name = pair.slice(0, pair.indexOf('='));
+    const kept = cookie
+      .split('; ')
+      .filter((item) => item && item.slice(0, item.indexOf('=')) !== name);
+    kept.push(pair);
+    cookie = kept.join('; ');
   }
   const type = res.headers.get('content-type') || '';
   const data = type.includes('json') ? await res.json().catch(() => null) : await res.text();
@@ -203,8 +211,13 @@ let tempUser = '';
     else {
       ok('новый пользователь вошёл');
       const { data: boot } = await api('/api/bootstrap');
-      const sees = boot?.projects?.length || 0;
-      sees === 0 ? ok('новый пользователь не видит чужие проекты') : fail('изоляция', `видит ${sees}`);
+      /* Своё личное пространство новому человеку заводят при первом входе
+         («Мой проект»). Чужого тестового проекта среди них быть не должно. */
+      const seen = boot?.projects || [];
+      const foreignSeen = seen.some((item) => item.id === projectId);
+      seen.length === 1 && seen[0].name === 'Мой проект' && !foreignSeen
+        ? ok('новый пользователь не видит чужие проекты')
+        : fail('изоляция', `видит ${seen.length}: ${seen.map((item) => item.name).join(', ')}`);
       const foreign = await api(`/api/projects/${projectId}`);
       foreign.res.status === 404 ? ok('чужой проект недоступен') : fail('чужой проект', foreign.res.status);
     }
