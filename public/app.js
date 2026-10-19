@@ -1480,9 +1480,13 @@ function renderFiles() {
     row.innerHTML = `<span class="f-icon">${item.dir ? ICONS.folder : isImage ? ICONS.image : ICONS.file}</span>`;
     const name = fileNameEl(item.name, 'f-name');
     const officeApp = item.dir ? null : officeOpener(item.name);
+    /* Подсказка про управление: на телефоне — тап, на компьютере — двойной щелчок. */
+    const touch = window.matchMedia('(pointer: coarse)').matches;
     name.title = item.dir
       ? item.path
-      : `${item.path} — двойной щелчок: открыть${officeApp ? ` в ${officeApp.label}` : ''}; кнопка «Скачать» — сохранить файл`;
+      : touch
+        ? `${item.path} — нажмите, чтобы открыть в приложении; кнопка «Скачать» — сохранить файл`
+        : `${item.path} — двойной щелчок: открыть${officeApp ? ` в ${officeApp.label}` : ''}; кнопка «Скачать» — сохранить файл`;
     row.appendChild(name);
     if (!item.dir) row.appendChild(el('span', 'f-size', fmtSize(item.size)));
     const actions = el('div', 'f-actions');
@@ -1550,10 +1554,10 @@ function renderFiles() {
         loadFiles(item.path);
         return;
       }
-      /* На телефоне кнопки строки появляются по тапу: одиночный тап скачивает.
-         На компьютере скачивание — только кнопкой «Скачать», а двойной щелчок
-         открывает документ в Word/Excel/PowerPoint. */
-      if (window.matchMedia('(pointer: coarse)').matches) openFileViewer(item);
+      /* На телефоне кнопки строки появляются по тапу: одиночный тап открывает
+         файл в своём окне (скачивание — только кнопкой «Скачать»).
+         На компьютере двойной щелчок открывает документ в Word/Excel/PowerPoint. */
+      if (window.matchMedia('(pointer: coarse)').matches) openFilePreview(item);
     });
     row.addEventListener('dblclick', (event) => {
       if (item.dir || window.matchMedia('(pointer: coarse)').matches) return;
@@ -1662,6 +1666,12 @@ function launchProtocol(href) {
 }
 
 async function openInOffice(item) {
+  /* На телефоне документ открываем у себя: системная страница «Открыть в…»
+     уводит из приложения, и вернуться из неё нечем — ни кнопки, ни жеста. */
+  if (window.matchMedia('(pointer: coarse)').matches) {
+    openFilePreview(item);
+    return;
+  }
   const opener = officeOpener(item.name);
   if (!opener) {
     /* Не Office: PDF и картинки показываем в новой вкладке браузера, остальное
@@ -1681,6 +1691,227 @@ async function openInOffice(item) {
     toast(`${error.message}. Файл можно скачать кнопкой «Скачать».`);
   }
 }
+
+/* -------------------- просмотр файла внутри приложения -------------------- */
+
+/* Раньше тап по файлу на телефоне сразу скачивал его: iOS открывал чужую
+   программу (или страницу «Открыть в WeChat»), из которой не было выхода.
+   Теперь файл открывается в своём окне с кнопкой «Закрыть»: PDF, картинки и
+   текст показываем здесь же, а для Word/Excel/PowerPoint подсказываем
+   бесплатные приложения и оставляем явную кнопку «Скачать». */
+
+const PREVIEW_IMAGE = /\.(png|jpe?g|webp|gif|bmp|avif|svg)$/i;
+const PREVIEW_TEXT = /\.(txt|md|markdown|csv|tsv|json|log|ya?ml|xml|ini|conf|srt)$/i;
+
+/* pdf.js лежит рядом с приложением (/vendor/pdfjs) и грузится только при
+   первом открытии PDF — остальные экраны он не задерживает. */
+let pdfjsPromise = null;
+
+function loadPdfjs() {
+  if (!pdfjsPromise) {
+    pdfjsPromise = import('/vendor/pdfjs/pdf.min.mjs')
+      .then((mod) => {
+        const lib = mod.default || mod;
+        lib.GlobalWorkerOptions.workerSrc = '/vendor/pdfjs/pdf.worker.min.mjs';
+        return lib;
+      })
+      .catch((error) => {
+        pdfjsPromise = null;
+        throw error;
+      });
+  }
+  return pdfjsPromise;
+}
+
+/* Бесплатные программы, которые читают Word, Excel и презентации на телефоне.
+   Список показываем вместо перехода в чужое приложение по системной ссылке. */
+const PREVIEW_APPS = [
+  ['Word, Excel, PowerPoint', 'приложения Microsoft, бесплатны для чтения и правки этих форматов.'],
+  ['Google Документы, Таблицы, Презентации', 'приложения Google, открывают те же файлы Office.'],
+  ['WPS Office', 'один бесплатный редактор на все три формата и PDF.'],
+  ['LibreOffice Viewer', 'бесплатный просмотрщик для Android.'],
+];
+
+/* Подсказка для форматов, которые телефон сам не рисует: что поставить, чтобы
+   открыть файл, — вместо ссылки «открыть в чужом мессенджере». */
+function officeHintBody() {
+  const wrap = el('div', 'file-hint');
+  wrap.appendChild(
+    el('p', '', 'Телефон не открывает файлы Word, Excel и PowerPoint сам. Бесплатные приложения, которые их читают:'),
+  );
+  const apps = el('ul', 'file-hint-apps');
+  for (const [name, note] of PREVIEW_APPS) {
+    const item = el('li', '');
+    item.appendChild(el('b', '', name));
+    item.appendChild(document.createTextNode(' — ' + note));
+    apps.appendChild(item);
+  }
+  wrap.appendChild(apps);
+  wrap.appendChild(el('p', '', 'Кнопка «Скачать» сохранит файл в «Файлы», после чего его можно открыть в любом из них.'));
+  return wrap;
+}
+
+async function mountPdfPreview(container, url) {
+  const status = el('div', 'preview-status', 'Открываем PDF…');
+  container.appendChild(status);
+  try {
+    const response = await fetch(url, { credentials: 'same-origin' });
+    if (!response.ok) throw new Error('файл не отдался');
+    const pdfjs = await loadPdfjs();
+    const data = new Uint8Array(await response.arrayBuffer());
+    /* isEvalSupported: false — иначе часть PDF не отрисуется: политика
+       безопасности сайта запрещает eval. */
+    const doc = await pdfjs.getDocument({ data, isEvalSupported: false }).promise;
+    status.remove();
+
+    const canvas = el('canvas', 'pdf-canvas');
+    const holder = el('div', 'pdf-holder');
+    holder.appendChild(canvas);
+    const pager = el('div', 'pdf-pager');
+    const prev = el('button', 'btn btn-quiet', '‹');
+    const next = el('button', 'btn btn-quiet', '›');
+    const label = el('span', 'pdf-page', '');
+    prev.type = 'button';
+    next.type = 'button';
+    pager.append(prev, label, next);
+    container.append(holder, pager);
+
+    let pageNo = 1;
+    const draw = async () => {
+      const page = await doc.getPage(pageNo);
+      const base = page.getViewport({ scale: 1 });
+      const width = Math.max(240, holder.clientWidth || 320);
+      const scale = width / base.width;
+      const viewport = page.getViewport({ scale });
+      const ratio = Math.min(window.devicePixelRatio || 1, 2);
+      canvas.width = Math.floor(viewport.width * ratio);
+      canvas.height = Math.floor(viewport.height * ratio);
+      canvas.style.width = Math.floor(viewport.width) + 'px';
+      canvas.style.height = Math.floor(viewport.height) + 'px';
+      const context = canvas.getContext('2d');
+      await page.render({ canvasContext: context, viewport, transform: ratio === 1 ? null : [ratio, 0, 0, ratio, 0, 0] }).promise;
+      label.textContent = `${pageNo} / ${doc.numPages}`;
+      prev.disabled = pageNo <= 1;
+      next.disabled = pageNo >= doc.numPages;
+    };
+    const go = (delta) => {
+      const target = pageNo + delta;
+      if (target < 1 || target > doc.numPages) return;
+      pageNo = target;
+      draw().catch(() => {});
+    };
+    prev.addEventListener('click', () => go(-1));
+    next.addEventListener('click', () => go(1));
+    /* Свайп влево-вправо листает страницы: на телефоне это привычнее кнопок. */
+    let touchX = 0;
+    holder.addEventListener('touchstart', (event) => {
+      touchX = event.touches[0]?.clientX || 0;
+    }, { passive: true });
+    holder.addEventListener('touchend', (event) => {
+      const dx = (event.changedTouches[0]?.clientX || 0) - touchX;
+      if (Math.abs(dx) > 50) go(dx < 0 ? 1 : -1);
+    });
+    if (doc.numPages === 1) pager.classList.add('hidden');
+    /* Телефон повернули — страница должна занять новую ширину. Слушатель снимает
+       себя сам, когда окно просмотра закрыли. */
+    const onResize = () => {
+      if (!document.body.contains(holder)) {
+        window.removeEventListener('resize', onResize);
+        return;
+      }
+      draw().catch(() => {});
+    };
+    window.addEventListener('resize', onResize);
+    await draw();
+  } catch (error) {
+    status.textContent = 'Не удалось показать PDF. Скачайте файл — он откроется в приложении для PDF.';
+    status.classList.add('preview-status-error');
+  }
+}
+
+async function mountTextPreview(container, url) {
+  const status = el('div', 'preview-status', 'Открываем файл…');
+  container.appendChild(status);
+  try {
+    const response = await fetch(url, { credentials: 'same-origin' });
+    if (!response.ok) throw new Error('файл не отдался');
+    const text = await response.text();
+    status.remove();
+    const pre = el('pre', 'preview-text', text.slice(0, 200000));
+    container.appendChild(pre);
+    if (text.length > 200000) container.appendChild(el('p', 'preview-more', 'Показаны первые 200 000 символов.'));
+  } catch {
+    status.textContent = 'Не удалось показать файл. Скачайте его кнопкой ниже.';
+  }
+}
+
+/* Word, Excel, презентации и остальные «офисные» файлы телефон сам не рисует.
+   Текст документа вытаскивает сервер — файл можно прочитать прямо здесь, а
+   рядом подсказка, какими бесплатными приложениями его открыть целиком. */
+async function mountDocPreview(container, item) {
+  const status = el('div', 'preview-status', 'Читаем документ…');
+  container.appendChild(status);
+  try {
+    const data = await api(`/api/projects/${state.activeProjectId}/file-preview?path=${encodeURIComponent(item.path)}`);
+    status.remove();
+    const text = String(data.text || '').trim();
+    if (text) {
+      container.appendChild(el('pre', 'preview-text', text.slice(0, 200000)));
+      if (text.length > 200000) container.appendChild(el('p', 'preview-more', 'Показаны первые 200 000 символов.'));
+    } else {
+      container.appendChild(el('p', 'preview-more', 'Из этого файла текст не извлекается — скачайте его, чтобы открыть в приложении.'));
+    }
+    container.appendChild(officeHintBody());
+  } catch (error) {
+    status.remove();
+    container.appendChild(el('p', 'preview-more', `${error.message}. Скачайте файл — он откроется в приложении.`));
+    container.appendChild(officeHintBody());
+  }
+}
+
+function openFilePreview(item) {
+  /* Та же защита от двойного тапа, что и у скачивания. */
+  const key = `${state.activeProjectId}:${item.path}`;
+  const now = Date.now();
+  if (key === openFilePreview.lastKey && now - openFilePreview.lastAt < 600) return;
+  openFilePreview.lastKey = key;
+  openFilePreview.lastAt = now;
+
+  const url = fileUrl(item.path, false);
+  const body = el('div', 'file-preview');
+
+  if (PREVIEW_IMAGE.test(item.name)) {
+    const img = el('img', 'preview-img');
+    img.src = url;
+    img.alt = item.name;
+    body.appendChild(img);
+  } else if (/\.pdf$/i.test(item.name)) {
+    const holder = el('div', 'pdf-box');
+    body.appendChild(holder);
+    mountPdfPreview(holder, url);
+  } else if (PREVIEW_TEXT.test(item.name)) {
+    mountTextPreview(body, url);
+  } else {
+    mountDocPreview(body, item);
+  }
+
+  openModal({
+    title: item.name,
+    body,
+    wide: true,
+    className: 'file-preview-modal',
+    actions: [
+      {
+        label: 'Скачать',
+        onClick: () => {
+          openFileViewer(item);
+        },
+      },
+      { label: 'Закрыть', kind: 'primary' },
+    ],
+  });
+}
+
 
 /* Загрузка файлов в проект. dir — папка внутри проекта ('.' — корень):
    файл попадает туда, где пользователь сейчас находится в «Файлах проекта». */

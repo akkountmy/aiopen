@@ -3895,3 +3895,152 @@ body.resizing {
   }
 }
 
+/* --------------------- просмотр файла в приложении --------------------- */
+
+/* Окно просмотра высокое, но не во весь экран: документ должен читаться, а
+   кнопка «Закрыть» — всегда быть на месте. */
+.modal.file-preview-modal {
+  height: min(84vh, 760px);
+}
+
+.modal.file-preview-modal .modal-body {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+.file-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 12px 14px;
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.file-preview .preview-img {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+  margin: 0 auto;
+  object-fit: contain;
+}
+
+.pdf-box {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  gap: 8px;
+}
+
+.pdf-holder {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  justify-content: center;
+  background: #0f0f10;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+/* PDF рисуем на canvas: встроенный просмотрщик iOS показывает только первую
+   страницу и не листается. */
+.pdf-canvas {
+  display: block;
+  height: auto;
+  margin: 0 auto;
+}
+
+.pdf-pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  flex: none;
+}
+
+.pdf-pager .btn {
+  min-width: 38px;
+  height: 32px;
+  font-size: var(--fs-16);
+  line-height: 1;
+}
+
+.pdf-page {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-2);
+  font-size: var(--fs-14);
+}
+
+.preview-status {
+  padding: 18px 4px;
+  text-align: center;
+  color: var(--text-2);
+}
+
+.preview-text {
+  margin: 0;
+  padding: 10px 12px;
+  background: var(--layer-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: var(--fs-13, 13px);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text);
+}
+
+.preview-more {
+  margin: 0;
+  color: var(--text-3);
+  font-size: var(--fs-13, 13px);
+}
+
+/* Формат, который телефон сам не рисует: вместо «открыть в чужой программе» —
+   список бесплатных приложений и явная кнопка «Скачать». */
+.file-hint {
+  display: grid;
+  gap: 10px;
+}
+
+.file-hint p {
+  margin: 0;
+}
+
+.file-hint-apps {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 7px;
+  color: var(--text-2);
+}
+
+.file-hint-apps li b {
+  color: var(--text);
+  font-weight: 600;
+}
+
+@media (max-width: 560px) {
+  .modal.file-preview-modal {
+    height: 100%;
+    max-height: 100%;
+  }
+  .file-preview {
+    padding: 10px 12px;
+  }
+  /* На телефоне кнопки окна крупные: их жмут пальцем. */
+  .modal.file-preview-modal .modal-foot .btn {
+    flex: 1 1 auto;
+  }
+}
+
+
