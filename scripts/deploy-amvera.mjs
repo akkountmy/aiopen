@@ -121,7 +121,14 @@ if (mode === 'status') {
   const now = new Date();
   const since = new Date(now.getTime() - 2 * 60 * 60 * 1000);
   for (const [title, tool, args] of [
-    ['Сборка', 'getBuildLogs', { slug: SLUG }],
+    /* схема журнала сборки совпадает с журналом запуска — платформа требует все поля */
+    ['Сборка', 'getBuildLogs', {
+      serviceName: SLUG,
+      query: '*',
+      start: since.toISOString(),
+      end: now.toISOString(),
+      limit: 200,
+    }],
     /* У журнала запуска обязательны все поля схемы, иначе платформа отвечает
        ошибкой проверки — передаём окно времени и лимит явно. */
     ['Запуск', 'getRunLogs', {
