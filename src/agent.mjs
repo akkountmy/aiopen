@@ -216,7 +216,7 @@ export async function runTurn({ workspace, chat, projectName, userName, userText
 
   while (steps < CONTEXT.maxSteps) {
     steps++;
-    const system = systemPrompt({ projectName, memory: chat.memory, userName });
+    const system = systemPrompt({ projectName, memory: chat.memory, userName, question: userText });
     const messages = [{ role: 'system', content: system }, ...chat.history];
 
     let result;

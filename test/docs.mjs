@@ -209,6 +209,25 @@ test('ошибки: неверное расширение и выход из п�
   await assert.rejects(() => executeTool('create_pdf', { path: 'пусто.pdf', sections: [] }, ctx), /раздел|абзац/);
 });
 
+test('стандарты подключаются к просьбе: финансы, продукт, дизайн, схемы', async () => {
+  const { expertBlocks, systemPrompt } = await import('../src/prompt.mjs');
+  const ids = (question) => expertBlocks(question).map((block) => block.id);
+  assert.deepEqual(ids('обычный вопрос про погоду'), [], 'для нейтрального вопроса экспертные блоки не нужны');
+  assert.deepEqual(ids('построй финмодель на 3 года'), ['finance']);
+  assert.deepEqual(ids('напиши PRD для мобильного приложения'), ['product']);
+  assert.deepEqual(ids('сделай лендинг для студии дизайна'), ['design']);
+  assert.deepEqual(ids('нарисуй блок-схему процесса согласования'), ['diagram']);
+  assert.ok(ids('финмодель и бэклог продукта').length <= 2, 'не больше двух экспертных блоков');
+
+  const plain = systemPrompt({ projectName: 'П', memory: '', userName: '', question: 'привет' });
+  assert.match(plain, /Стандарты деловых документов/);
+  assert.doesNotMatch(plain, /ФИНАНСОВЫЙ АНАЛИЗ/);
+  const finance = systemPrompt({ projectName: 'П', memory: '', userName: '', question: 'посчитай юнит-экономику' });
+  assert.match(finance, /ЛИСТ «Допущения»|лист «Допущения»/i);
+  assert.ok(finance.length < 12000, `промпт слишком большой: ${finance.length}`);
+  assert.ok(finance.length > plain.length);
+});
+
 test('откат на прежние сборщики без про-библиотек', async () => {
   process.env.DSH_DOC_LEGACY_ONLY = '1';
   const { makePdf, makeWord } = await import(`../src/doc/index.mjs?legacy=${Date.now()}`);
