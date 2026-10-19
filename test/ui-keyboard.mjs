@@ -181,12 +181,15 @@ try {
      const composer = document.querySelector('.composer');
      const wrap = document.querySelector('.composer-wrap');
      const input = document.querySelector('#input');
+     const pan = Math.round((window.visualViewport && window.visualViewport.offsetTop) || 0);
      const box = app.getBoundingClientRect();
      const cbox = composer.getBoundingClientRect();
      const wbox = wrap.getBoundingClientRect();
      return {
        vw: window.innerWidth,
+       pan,
        appH: Math.round(box.height),
+       appTop: Math.round(box.top),
        appBottom: Math.round(box.bottom),
        composerRight: Math.round(cbox.right),
        composerBottom: Math.round(cbox.bottom),
@@ -199,6 +202,7 @@ try {
        kbOpen: document.documentElement.classList.contains('kb-open'),
        appVar: getComputedStyle(document.documentElement).getPropertyValue('--app-h').trim(),
        kbVar: getComputedStyle(document.documentElement).getPropertyValue('--kb-offset').trim(),
+       panVar: getComputedStyle(document.documentElement).getPropertyValue('--kb-pan').trim(),
      };
    })()`;
 
@@ -274,6 +278,33 @@ try {
       const shot = await cdp.send('Page.captureScreenshot', { format: 'png' });
       fs.writeFileSync(process.env.DSHOW_KB_SHOT.replace('.png', `-${width}.png`), Buffer.from(shot.data, 'base64'));
     }
+
+    /* Телефон подтянул страницу к полю ввода: видимая область сдвинулась вниз
+       на 96 px. Подвал должен остаться у верхнего края клавиатуры, а не уехать
+       вместе со сдвигом (раньше он накрывал поле ввода). */
+    const pan = 96;
+    await evaluate(`window.__kb(${height - keyboard}, ${pan})`);
+    await sleep(350);
+    const panned = await evaluate(MEASURE);
+    Math.abs(panned.panVar.replace('px', '') - pan) <= 1
+      ? ok(`сдвиг видимой области на ${pan}px учтён (${width}px)`)
+      : fail(`сдвиг видимой области ${width}px`, `--kb-pan = «${panned.panVar}»`);
+    Math.abs(panned.appBottom - panned.pan - (height - keyboard)) <= 1.5
+      ? ok(`окно со сдвигом кончается у клавиатуры (${width}px)`, `низ ${panned.appBottom - panned.pan}`)
+      : fail(`окно при сдвиге ${width}px`, `${panned.appBottom - panned.pan} вместо ${height - keyboard}`);
+    panned.composerBottom - panned.pan <= height - keyboard + 1
+      ? ok(`подвал не ниже клавиатуры и со сдвигом (${width}px)`, `низ ${panned.composerBottom - panned.pan}`)
+      : fail(`подвал при сдвиге ${width}px`, `${panned.composerBottom - panned.pan} > ${height - keyboard}`);
+    panned.appTop >= pan - 1
+      ? ok(`шапка окна не ушла за верхний край (${width}px)`, `верх ${panned.appTop}`)
+      : fail(`шапка окна при сдвиге ${width}px`, `${panned.appTop} < ${pan}`);
+
+    if (process.env.DSHOW_KB_SHOT) {
+      const shot = await cdp.send('Page.captureScreenshot', { format: 'png' });
+      fs.writeFileSync(process.env.DSHOW_KB_SHOT.replace('.png', `-${width}-pan.png`), Buffer.from(shot.data, 'base64'));
+    }
+    await evaluate(`window.__kb(${height - keyboard}, 0)`);
+    await sleep(250);
 
     // Клавиатура закрылась — высота вернулась.
     await evaluate(`window.__kb(null)`);

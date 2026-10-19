@@ -2048,7 +2048,7 @@ function openContextMenu(anchor, items) {
     const rightEdge = anchorBlockRight(anchor) ?? rect.right;
     let left = rightEdge - menuRect.width;
     let top = rect.bottom + 6;
-    if (top + menuRect.height > window.innerHeight - 8) top = rect.top - menuRect.height - 6;
+    if (top + menuRect.height > viewportBottom() - 8) top = rect.top - menuRect.height - 6;
     left = Math.max(8, Math.min(left, window.innerWidth - menuRect.width - 8));
     menu.style.left = `${left}px`;
     menu.style.top = `${Math.max(8, top)}px`;
@@ -2159,9 +2159,9 @@ function placePopover(node, anchor, { align = 'anchor' } = {}) {
   let top = rect.bottom + 8;
   if (left + width > window.innerWidth - 10) left = window.innerWidth - width - 10;
   left = Math.max(10, left);
-  if (top + height > window.innerHeight - 10) {
+  if (top + height > viewportBottom() - 10) {
     const above = rect.top - height - 8;
-    top = above > 10 ? above : Math.max(10, window.innerHeight - height - 10);
+    top = above > 10 ? above : Math.max(10, viewportBottom() - height - 10);
   }
   node.style.left = `${left}px`;
   node.style.top = `${top}px`;
@@ -3703,11 +3703,17 @@ function syncKeyboardViewport() {
   const vv = window.visualViewport;
   if (!vv) return;
   const root = document.documentElement;
-  /* Safari подкручивает страницу, чтобы показать поле над клавиатурой. От
-     этого правый край уезжал за экран, а внизу оставалась полоса с адресом.
-     Возвращаем страницу на место — поле и так видно: высоту мы считаем. */
-  if (vv.offsetTop) window.scrollTo(0, 0);
-  const hidden = Math.round(window.innerHeight - vv.height - (vv.offsetTop || 0));
+  /* Safari и Chrome подкручивают страницу, чтобы показать поле над
+     клавиатурой. От этого правый край уезжал за экран, а внизу оставалась
+     полоса с адресом. Возвращаем саму страницу на место (окно прокрутки, а не
+     видимую область) — поле и так видно: высоту мы считаем сами. */
+  if (window.scrollY || document.documentElement.scrollTop) window.scrollTo(0, 0);
+  /* Сдвиг видимой области вниз: телефон подтянул страницу к полю ввода. Этот
+     сдвиг не уменьшает клавиатуру — высоту клавиатуры считаем отдельно, а
+     сдвиг компенсируем отступом сверху (--kb-pan), иначе подвал уезжает выше
+     клавиатуры и накрывает поле ввода, а экран «скачет». */
+  const pan = Math.max(0, Math.round(vv.offsetTop || 0));
+  const hidden = Math.round(window.innerHeight - vv.height);
   /* На экране входа клавиатуру считаем открытой и тогда, когда Safari не
      уменьшает innerHeight: ориентируемся на низкую видимую область. Иначе
      карточка оставалась по центру и поле пароля уходило под клавиатуру. */
@@ -3719,14 +3725,21 @@ function syncKeyboardViewport() {
      высоту и оставалось увеличенным, пока страницу не вернут руками. Теперь
      при зуме вёрстка не трогается. */
   const zoomed = Number(vv.scale) > 1.01;
-  if (!zoomed && (hidden > 120 || compactAuth)) {
+  /* Порог с запасом в обе стороны: пока клавиатура выезжает, видимая область
+     дёргается на десяток пикселей, и от жёсткого порога подвал «подпрыгивал».
+     Открываем от 140 px, закрываем ниже 70 px — между ними состояние стоит. */
+  const wasOpen = root.classList.contains('kb-open');
+  const shouldOpen = !zoomed && (hidden > (wasOpen ? 70 : 140) || compactAuth);
+  if (shouldOpen) {
     root.classList.add('kb-open');
     root.style.setProperty('--app-h', `${Math.round(vv.height)}px`);
-    root.style.setProperty('--kb-offset', `${hidden}px`);
+    root.style.setProperty('--kb-offset', `${Math.max(0, hidden)}px`);
+    root.style.setProperty('--kb-pan', `${pan}px`);
   } else {
     root.classList.remove('kb-open');
     root.style.removeProperty('--app-h');
     root.style.removeProperty('--kb-offset');
+    root.style.removeProperty('--kb-pan');
   }
   /* Карточка в панели проектов/файлов не должна прятаться за клавиатурой:
      пересчитываем её положение по новой видимой высоте. */
@@ -3752,6 +3765,14 @@ function syncKeyboardViewport() {
   window.addEventListener('orientationchange', () => setTimeout(syncKeyboardViewport, 250));
 })();
 
+/* Клавиатура выезжает с анимацией 250–350 мс, на медленных телефонах дольше.
+   Один замер через 300 мс иногда попадал в середину движения, и подвал вставал
+   по промежуточной высоте — поле уезжало под клавиатуру, а потом всё прыгало на
+   место. Поэтому пересчитываем несколько раз подряд. */
+function settleKeyboardViewport() {
+  [60, 160, 320, 520, 800].forEach((delay) => setTimeout(syncKeyboardViewport, delay));
+}
+
 /* Поле внутри карточки, окна или экрана входа: после появления клавиатуры
    поднимаем его в видимую часть экрана. Ждём конца анимации клавиатуры — на
    телефоне это около 300 мс. */
@@ -3762,6 +3783,7 @@ document.addEventListener('focusin', (event) => {
   if (!target.matches('input, textarea, select')) return;
   const inAuth = !!target.closest('#auth');
   if (!target.closest('.popover, .modal') && !inAuth) return;
+  settleKeyboardViewport();
   setTimeout(() => {
     syncKeyboardViewport();
     /* Вход: карточка прокручивается внутри видимой области, поэтому поле
@@ -3781,11 +3803,15 @@ document.addEventListener('focusin', (event) => {
 // остаться у последнего сообщения, а не показывать середину переписки.
 $('#input').addEventListener('focus', () => {
   if (!window.matchMedia('(max-width: 860px)').matches) return;
-  setTimeout(() => {
-    syncKeyboardViewport();
+  settleKeyboardViewport();
+  const toBottom = () => {
     const scroll = $('#scroll');
     if (scroll) scroll.scrollTop = scroll.scrollHeight;
-  }, 300);
+  };
+  /* Ленту подтягиваем к последнему сообщению дважды: сразу и после того, как
+     клавиатура доехала — иначе лента оставалась на середине переписки. */
+  setTimeout(toBottom, 120);
+  setTimeout(toBottom, 420);
 });
 $('#input').addEventListener('keydown', (event) => {
   if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {

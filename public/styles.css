@@ -3228,6 +3228,9 @@ body.resizing {
   body {
     overflow-x: hidden;
     max-width: 100%;
+    /* «Резинка» и подтягивание страницы к полю ввода на телефоне больше не
+       сдвигают окно: высоту задаём мы, а прокрутка живёт внутри ленты. */
+    overscroll-behavior: none;
   }
   .app,
   .main,
@@ -3254,6 +3257,12 @@ body.resizing {
     grid-template-columns: minmax(0, 1fr);
     /* Высота видимой области: при открытой клавиатуре окно не уезжает вниз. */
     height: var(--app-h, 100dvh);
+  }
+  /* Телефон подтянул страницу к полю ввода: видимая область сдвинулась вниз на
+     --kb-pan. Сдвигаем окно на столько же — иначе подвал оказывается выше
+     клавиатуры и накрывает поле ввода, а низ экрана остаётся пустым. */
+  html.kb-open .app {
+    margin-top: var(--kb-pan, 0px);
   }
   /* Ящик навигации: выезд сдвигом + затемнение, как у панели файлов. */
   .sidebar {
@@ -3286,6 +3295,14 @@ body.resizing {
   .app.files-open .backdrop {
     z-index: 58;
   }
+  /* Ящики проектов и файлов при открытой клавиатуре тоже живут в видимой
+     области: поле поиска не должно оказаться под клавиатурой, а низ ящика —
+     за краем экрана. */
+  html.kb-open .sidebar,
+  html.kb-open .files-panel {
+    top: var(--kb-pan, 0px);
+    bottom: var(--kb-offset, 0px);
+  }
   .mobile-only {
     display: inline-flex;
   }
@@ -3308,6 +3325,7 @@ body.resizing {
     align-items: flex-start;
     height: var(--app-h, 100dvh);
     bottom: auto;
+    top: var(--kb-pan, 0px);
     padding-top: 8px;
     padding-bottom: calc(8px + env(safe-area-inset-bottom, 0px));
   }
@@ -3620,6 +3638,7 @@ body.resizing {
      неё. Поле ввода остаётся на виду, кнопки — над клавиатурой. */
   html.kb-open .modal-root {
     bottom: var(--kb-offset, 0px);
+    top: var(--kb-pan, 0px);
     align-items: flex-start;
     padding-top: 8px;
     padding-bottom: 8px;
