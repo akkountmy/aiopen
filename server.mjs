@@ -40,6 +40,7 @@ import {
   RateLimiter,
   sessionCookie,
   sessionKey,
+  sessionKind,
   usernameProblem,
 } from './src/security.mjs';
 import { store } from './src/store.mjs';
@@ -339,6 +340,43 @@ function planDiskCap(memoryBytes) {
   return { bytes: row[1] * 1024 * MB, source: `тариф по лимиту памяти ${Math.round(mib)} МБ` };
 }
 
+/** Живые сеансы и история входов: видно, с какого класса устройства вошли и кого это выбило. */
+function sessionsReport() {
+  const now = Date.now();
+  const sessions = Object.entries(store.state.sessions || {}).map(([key, session]) => {
+    const user = store.getUser(session.userId);
+    return {
+      id: key.slice(0, 10),
+      user: user ? user.username : '—',
+      kind: sessionKind(session),
+      service: Boolean(session.service),
+      device: String(session.device || '').slice(0, 8),
+      ua: String(session.ua || ''),
+      ip: String(session.ip || ''),
+      createdAt: session.createdAt || null,
+      expiresInHours: Math.max(0, Math.round((Number(session.exp) - now) / 3600000)),
+    };
+  });
+  const kicked = Object.entries(store.state.kicked || {}).map(([key, mark]) => ({
+    id: key.slice(0, 10),
+    kind: mark.kind === 'mobile' ? 'mobile' : 'desktop',
+    at: Number(mark.at) ? new Date(Number(mark.at)).toISOString() : null,
+    byIp: mark.byIp || '',
+    byUa: mark.byUa || '',
+  }));
+  const audit = store.users().map((user) => ({
+    user: user.username,
+    events: (store.loginAuditFor(user.id).events || []).slice(-12),
+  }));
+  return {
+    at: nowIso(),
+    limits: { desktop: deviceLimit('desktop'), mobile: deviceLimit('mobile') },
+    sessions,
+    kicked,
+    audit,
+  };
+}
+
 function clientIp(req) {
   if (TRUST_PROXY) {
     const forwarded = String(req.headers['x-forwarded-for'] || '')
@@ -517,6 +555,14 @@ function deviceIdOf(req) {
   return { id: newDeviceId(), fresh: true };
 }
 
+/* Служебные клиенты (сторож места, дежурные скрипты) представляются своим
+   User-Agent. Их входы не занимают «полку» человека и никого не выбивают:
+   иначе автоматика под той же учётной записью тушит живой браузер. */
+function isServiceClient(req) {
+  const ua = String(req.headers['user-agent'] || '');
+  return /^DSH-OPEN-WEB-/i.test(ua) || req.headers['x-dshow-service'] === '1';
+}
+
 /* Класс устройства этого входа. Берём User-Agent и, если браузер прислал,
    Client Hint Sec-CH-UA-Mobile — так планшет с «настольным» User-Agent тоже
    попадает в телефонную полку и не выбивает ноутбук. */
@@ -578,14 +624,16 @@ async function handleLogin(req, res) {
   loginUserHits.reset(username.toLowerCase());
   loginIpHits.reset(ip);
   const device = deviceIdOf(req);
+  const service = isServiceClient(req);
   const { token, displaced } = issueSession(store, user.id, {
     ip,
     ua: req.headers['user-agent'],
     device: device.id,
     kind: deviceKindOf(req),
+    service,
   });
   store.touchLogin(user.id);
-  registerLogin(user, req, { ip, deviceId: device.id, displaced });
+  if (!service) registerLogin(user, req, { ip, deviceId: device.id, displaced });
   const cookies = [sessionCookie(token, SESSION.ttlMs, TRUST_PROXY)];
   if (device.fresh) cookies.push(deviceCookie(device.id, DEVICE.cookieMs, TRUST_PROXY));
   sendJson(res, 200, bootstrapPayload(user), { 'Set-Cookie': cookies });
@@ -1528,6 +1576,11 @@ async function route(req, res) {
       return sendJson(res, 200, { overview: store.overview(), keys: keyStatus() });
     }
     /* Сколько места дано сервису и сколько занято: сторож места проверяет это раз в неделю. */
+    if (pathname === '/api/admin/sessions' && method === 'GET') {
+      const admin = requireAdmin(req, res);
+      if (!admin) return;
+      return sendJson(res, 200, sessionsReport());
+    }
     if (pathname === '/api/admin/storage' && method === 'GET') {
       const admin = requireAdmin(req, res);
       if (!admin) return;

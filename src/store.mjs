@@ -451,7 +451,10 @@ class Store {
     if (!this.state.kicked) this.state.kicked = {};
     /* Свежие сеансы того же класса остаются, старые — закрываем. */
     const sameKind = Object.entries(this.state.sessions)
-      .filter(([key, session]) => session && session.userId === userId && key !== keepKey && sessionKind(session) === kind)
+      .filter(
+        ([key, session]) =>
+          session && !session.service && session.userId === userId && key !== keepKey && sessionKind(session) === kind,
+      )
       .sort((a, b) => String(b[1].createdAt || '').localeCompare(String(a[1].createdAt || '')));
     for (const [key, session] of sameKind.slice(Math.max(0, limit - 1))) {
       dropped.push({

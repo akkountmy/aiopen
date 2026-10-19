@@ -21,9 +21,11 @@ try {
   if (-not (Test-Path $node)) { throw "не найден node.exe: $node" }
   if (-not (Test-Path $script)) { throw "не найден сторож: $script" }
 
-  $env:DSHOW_USER = 'DSHOPENWEB'
-  $env:DSHOW_PASS = (& $vault get dshow-admin -Field password)
-  if (-not $env:DSHOW_PASS) { throw 'хранилище не отдало пароль dshow-admin' }
+  # Технический администратор DSHOWMON, а не человеческая учётка: у каждого свои
+  # сеансы, поэтому еженедельная проверка не выбивает живой вход из браузера.
+  $env:DSHOW_USER = 'DSHOWMON'
+  $env:DSHOW_PASS = (& $vault get dshow-monitor -Field password)
+  if (-not $env:DSHOW_PASS) { throw 'хранилище не отдало пароль dshow-monitor' }
 
   $env:DSHOW_STORAGE_ALERT_PCT = '70'
   $env:DSHOW_BASE = 'https://dshopen-vladimir00177.msk1.amvera.tech'

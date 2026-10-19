@@ -17,7 +17,7 @@ const THRESHOLD_PCT = Number(process.env.DSHOW_STORAGE_ALERT_PCT || 70);
 const REMIND_DAYS = Number(process.env.DSHOW_STORAGE_REMIND_DAYS || 28);
 const FORCE_ALERT = process.env.DSHOW_STORAGE_FORCE_ALERT === '1';
 const TIMEOUT_MS = 30000;
-const USER = process.env.DSHOW_USER || 'DSHOPENWEB';
+const USER = process.env.DSHOW_USER || 'DSHOWMON';
 const PASS = process.env.DSHOW_PASS || '';
 
 const GB = 1024 ** 3;

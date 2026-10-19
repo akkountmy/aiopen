@@ -192,7 +192,10 @@ export function issueSession(store, userId, meta) {
   const key = sessionKey(token);
   const now = nowIso();
   const kind = DEVICE_KINDS.includes(meta?.kind) ? meta.kind : 'desktop';
-  const displaced = store.dropOtherSessions(userId, key, { ip: meta?.ip, ua: meta?.ua, kind });
+  /* Служебный вход (сторож, скрипт) не занимает полку человека: иначе
+     автоматика выбивала бы живой браузер из той же учётной записи. */
+  const service = Boolean(meta?.service);
+  const displaced = service ? [] : store.dropOtherSessions(userId, key, { ip: meta?.ip, ua: meta?.ua, kind });
   store.state.sessions[key] = {
     userId,
     createdAt: now,
@@ -201,6 +204,7 @@ export function issueSession(store, userId, meta) {
     ua: (meta?.ua || '').slice(0, 200),
     device: (meta?.device || '').slice(0, 80),
     kind,
+    service,
   };
   store.pruneSessions();
   store.save();
