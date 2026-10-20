@@ -424,6 +424,7 @@ node scripts/check-p1-live.mjs # живая проверка этих трёх �
 node scripts/check-word-media-live.mjs # живой Word с диаграммой и картинкой: пакет OOXML скачанного файла (тратит токены)
 node test/docparse.mjs         # чтение документов: PDF разбирается линейно и не вешает сервер
 node test/docpreview.mjs       # окно просмотра: блоки Word, листы Excel, слайды, таблицы CSV, обрезка длинного
+node scripts/check-preview-live.mjs # живая проверка окна просмотра на боевом сервисе: Word, Excel и HTML (без модели)
 node test/file-brief.mjs       # принесённые файлы сразу в контексте: свежие пересказаны, старые — только в списке
 node test/landing.mjs          # живой сценарий «лендинг» (нужна работающая модель)
 node test/ui-panels.mjs        # боковые панели одной ширины, карточки и меню внутри своего блока
