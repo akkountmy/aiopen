@@ -404,6 +404,54 @@ try {
     ? ok('после сброса правая панель снова ходит за левой', `проекты ${follows.sidebar}, файлы ${follows.files}`)
     : fail('правая панель не повторяет левую', JSON.stringify(follows));
 
+  /* 12.5. Шапки панелей и ширина разговора на компьютере.
+     «Новый проект» и «Файлы проекта» стоят по центру своих блоков; кнопки
+     выгрузки проекта архивом больше нет; лента и поле ввода занимают всю
+     ширину между панелями — по 16 px поля с каждой стороны. */
+  const heads = await evaluate(`(() => {
+    const btn = document.querySelector('.btn-new');
+    const title = document.querySelector('.files-title');
+    const head = document.querySelector('.files-head');
+    const centerOf = (element) => {
+      const box = element.getBoundingClientRect();
+      const range = document.createRange();
+      range.selectNodeContents(element);
+      const text = range.getBoundingClientRect();
+      const textCenter = (text.left + text.right) / 2;
+      const boxCenter = (box.left + box.right) / 2;
+      return { offset: Math.round(textCenter - boxCenter), boxWidth: Math.round(box.width) };
+    };
+    return {
+      newCenter: centerOf(btn),
+      titleCenter: centerOf(title),
+      hasArchive: [...head.querySelectorAll('button')].some((b) => /архив/i.test(b.getAttribute('aria-label') || b.title || '')),
+    };
+  })()`);
+  Math.abs(heads.newCenter.offset) <= 2 && Math.abs(heads.titleCenter.offset) <= 2
+    ? ok('подписи «Новый проект» и «Файлы проекта» по центру блоков', `${heads.newCenter.offset} / ${heads.titleCenter.offset} px`)
+    : fail('подписи не по центру', JSON.stringify(heads));
+  !heads.hasArchive
+    ? ok('кнопки «Скачать проект архивом» в шапке нет')
+    : fail('кнопка выгрузки архива', 'всё ещё в шапке файлов');
+
+  const wide = await evaluate(`(() => {
+    const main = document.querySelector('.main');
+    const thread = document.querySelector('.thread');
+    const composer = document.querySelector('.composer');
+    const style = getComputedStyle(thread);
+    const box = (element) => Math.round(element.getBoundingClientRect().width);
+    return {
+      main: box(main),
+      thread: box(thread),
+      threadPad: Math.round(Number.parseFloat(style.paddingLeft)) + Math.round(Number.parseFloat(style.paddingRight)),
+      composer: box(composer),
+      desktop: window.innerWidth >= 1101,
+    };
+  })()`);
+  wide.desktop && wide.thread === wide.main && wide.threadPad === 32 && wide.composer === wide.main - 32
+    ? ok('на компьютере лента и поле ввода занимают всю ширину, поля по 16 px', `лента ${wide.thread}, ввод ${wide.composer}`)
+    : fail('ширина разговора на компьютере', JSON.stringify(wide));
+
   // 13. меню учётной записи — у правой границы шапки, а не под кнопкой
   await evaluate(`document.getElementById('userChip').click()`);
   const userMenuShown = await waitFor(`!!document.querySelector('.menu')`);
