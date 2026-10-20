@@ -928,8 +928,14 @@ body.resizing {
 }
 
 /* Кнопки строки — 28×28 во всех ширинах: на телефоне палец попадает в ту же
-   цель, что и мышью на ноутбуке (раньше было 26 px, а ниже 860 px — 28). */
+   цель, что и мышью на ноутбуке (раньше было 26 px, а ниже 860 px — 28).
+   Заливка под курсором — не на все 28 px, а плашкой 20×20 с радиусом 6: ровно
+   того же размера, что счётчик диалогов (.p-count) и счётчик проектов
+   (.w-count). Иначе подсветка кнопки выглядела крупнее соседнего квадрата,
+   хотя в строке обе детали должны читаться как одна плашка. Цель нажатия при
+   этом остаётся 28×28 — уменьшается только видимая заливка. */
 .row-menu {
+  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -943,12 +949,26 @@ body.resizing {
   flex: none;
 }
 
+.row-menu::after {
+  content: '';
+  position: absolute;
+  inset: 4px;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  pointer-events: none;
+}
+
 .row-menu:hover {
-  background: var(--layer-3);
   color: var(--text);
 }
 
+.row-menu:hover::after {
+  background: var(--layer-3);
+}
+
 .row-menu svg {
+  position: relative;
+  z-index: 1;
   width: 15px;
   height: 15px;
 }
@@ -1118,8 +1138,10 @@ body.resizing {
 }
 
 /* Плюс «новый диалог» — размером с «три точки»: обе кнопки действия в строке
-   проекта одинаковые и всегда на виду (см. прозрачность в .project-row). */
+   проекта одинаковые и всегда на виду (см. прозрачность в .project-row).
+   Подсветка — та же плашка 20×20, что у .row-menu и счётчика диалогов. */
 .row-plus {
+  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1127,11 +1149,20 @@ body.resizing {
   height: 28px;
   border: none;
   background: transparent;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-xs);
   color: var(--text-3);
   cursor: pointer;
   flex: none;
   opacity: 0.6;
+}
+
+.row-plus::after {
+  content: '';
+  position: absolute;
+  inset: 4px;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  pointer-events: none;
 }
 
 .project-row:hover .row-plus {
@@ -1139,11 +1170,16 @@ body.resizing {
 }
 
 .row-plus:hover {
-  background: var(--layer-3);
   color: var(--text);
 }
 
+.row-plus:hover::after {
+  background: var(--layer-3);
+}
+
 .row-plus svg {
+  position: relative;
+  z-index: 1;
   width: 15px;
   height: 15px;
 }
@@ -3758,6 +3794,12 @@ body.resizing {
   .row-plus:hover {
     color: var(--text-3);
   }
+  /* Плашку под курсором у этих кнопок рисует ::after — его тоже гасим, иначе
+     на телефоне заливка «залипает» после нажатия. */
+  .row-menu:hover::after,
+  .row-plus:hover::after {
+    background: transparent;
+  }
   .project-row:hover,
   .workflow-row:hover {
     color: var(--text-2);
@@ -3774,10 +3816,17 @@ body.resizing {
   }
   .btn-ghost:active:not(:disabled),
   .user-chip-top:active,
-  .row-menu:active,
-  .row-plus:active,
   .project-row:active,
   .chat-row:active {
+    background: var(--layer-hover);
+  }
+  /* У кнопок строки отклик на нажатие — такой же плашкой 20×20, как hover. */
+  .row-menu:active,
+  .row-plus:active {
+    background: transparent;
+  }
+  .row-menu:active::after,
+  .row-plus:active::after {
     background: var(--layer-hover);
   }
 }
