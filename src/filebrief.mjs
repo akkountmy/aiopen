@@ -262,8 +262,11 @@ export function projectFilesBrief(workspace, options = {}) {
     : `Файлы проекта: всего ${all.length}, показаны ${listed.length} самых свежих. Свежих файлов сейчас нет.`;
   const tail =
     all.length > listed.length ? `\n…и ещё ${all.length - listed.length} файлов старее — их видно через list_files.` : '';
+  const hint = freshCount
+    ? '\nЕсли конкретной задачи в сообщении нет — коротко скажи, что это за файл, и предложи три варианта работы с ним.'
+    : '';
   return {
-    text: `${header}\n${lines.join('\n')}${tail}`,
+    text: `${header}\n${lines.join('\n')}${tail}${hint}`,
     files: all.length,
     fresh: freshCount,
     freshPaths,
