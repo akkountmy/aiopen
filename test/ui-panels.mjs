@@ -1,8 +1,7 @@
 // Проверка раскладки панелей и всплывающих карточек в настоящем Chrome через
 // DevTools-протокол (без зависимостей):
 //   - панель «Проекты» и панель «Файлы проекта» одинаковой ширины;
-//   - в шапке ярлык проекта и название диалога, «проект /» текстом убран;
-//   - в заголовке панели файлов — имя проекта, чьи файлы показаны;
+//   - в шапке только название диалога, «проект /» убран;
 //   - все карточки и меню, вызванные из панели, открываются внутри своей панели
 //     и стоят с равными отступами от левой и правой границ блока;
 //   - «Новый проект» оформлен как подтверждение удаления: «Отмена» + главная кнопка;
@@ -225,27 +224,19 @@ try {
     ? ok('переменные раскладки совпадают', panels.vars)
     : fail('--files / --sidebar', panels.vars);
 
-  // 4. в шапке проект и название диалога (без «проект /» текстом)
+  // 4. в шапке только название диалога
   const crumbs = await evaluate(`({
-    project: (document.querySelector('#crumbProject') || {}).textContent || '',
+    project: !!document.querySelector('.crumb-project'),
     sep: !!document.querySelector('.crumb-sep'),
     chat: (document.querySelector('#crumbChat') || {}).textContent || '',
     text: (document.querySelector('.crumbs') || {}).textContent || '',
   })`);
-  crumbs.project.trim() && !crumbs.sep
-    ? ok('в шапке ярлык проекта', JSON.stringify(crumbs.project.trim()))
-    : fail('ярлык проекта в шапке', JSON.stringify(crumbs));
-  crumbs.chat.trim() && !/\/|проект\s*$/i.test(crumbs.chat.trim())
+  !crumbs.project && !crumbs.sep
+    ? ok('в шапке нет «проект /»', JSON.stringify(crumbs.chat.trim()))
+    : fail('шапка', JSON.stringify(crumbs));
+  crumbs.chat.trim() && !/\/|проект\s*$/i.test(crumbs.text.trim())
     ? ok('в шапке название диалога')
     : fail('название в шапке', JSON.stringify(crumbs));
-
-  // 4б. панель файлов подписана тем же проектом, что выбран в шапке
-  const filesProject = await evaluate(
-    `(document.getElementById('filesProjectName') || {}).textContent || ''`,
-  );
-  filesProject.trim() === crumbs.project.trim()
-    ? ok('панель файлов подписана выбранным проектом', JSON.stringify(filesProject.trim()))
-    : fail('проект в панели файлов', JSON.stringify({ filesProject, crumb: crumbs.project }));
 
   // 5. в корне проекта нет строки «/ проект»
   const filesCrumb = await evaluate(`(() => {

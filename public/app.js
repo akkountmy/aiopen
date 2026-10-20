@@ -712,25 +712,12 @@ function renderSidebar() {
 
 function updateCrumbs() {
   const project = activeProject();
-  /* В шапке — проект и название диалога. Проект стоит первым и виден всегда:
-     документы из ответа попадают в его папку, и человек должен видеть, куда
-     именно, даже когда боковая панель на телефоне свёрнута. */
   const projectName = project?.name || '';
   const chatTitle = state.chat?.title || '';
-  const chip = $('#crumbProject');
-  chip.textContent = projectName;
-  chip.title = projectName ? `Проект «${projectName}» — сюда попадут документы` : '';
-  chip.classList.toggle('hidden', !projectName);
   const crumb = $('#crumbChat');
   crumb.textContent = chatTitle;
   crumb.title = chatTitle;
   crumb.classList.toggle('hidden', !chatTitle);
-  /* Та же подпись над списком файлов: панель всегда показывает только файлы
-     выбранного проекта, и её заголовок это подтверждает. */
-  const filesName = $('#filesProjectName');
-  filesName.textContent = projectName;
-  filesName.title = projectName;
-  filesName.classList.toggle('hidden', !projectName);
   document.title = chatTitle ? `${chatTitle} — DSH Open` : projectName ? `${projectName} — DSH Open` : 'DSH Open';
 }
 
@@ -3942,14 +3929,6 @@ $('#sidebarToggle').addEventListener('click', () => {
   const willOpen = !app.classList.contains('sidebar-open');
   app.classList.toggle('sidebar-open', willOpen);
   if (willOpen) closeFilesDrawer();
-});
-/* Ярлык проекта в шапке — это ещё и кнопка «выбрать проект»: на телефоне она
-   открывает тот же список слева, что и кнопка меню. */
-$('#crumbProject').addEventListener('click', () => {
-  const toggle = $('#sidebarToggle');
-  if (!toggle || getComputedStyle(toggle).display === 'none') return;
-  $('#app').classList.add('sidebar-open');
-  closeFilesDrawer();
 });
 $('#backdrop').addEventListener('click', () => {
   $('#app').classList.remove('sidebar-open');
