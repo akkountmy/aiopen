@@ -54,7 +54,7 @@ export function decodeText(buf) {
   }
 }
 
-function decodeEntities(text) {
+export function decodeEntities(text) {
   return String(text)
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>')

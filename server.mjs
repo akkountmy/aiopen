@@ -25,6 +25,7 @@ import {
 import { describeFailure, generateTitle, runTurn } from './src/agent.mjs';
 import { transcribeAudio } from './src/asr.mjs';
 import { detectKind, extractDocumentText, kindLabel } from './src/docparse.mjs';
+import { previewDocument } from './src/docpreview.mjs';
 import { projectFilesBrief } from './src/filebrief.mjs';
 import { docEngines } from './src/doc/index.mjs';
 import { approvalMessage, notifyAdmin, suspicionMessage } from './src/notify.mjs';
@@ -249,6 +250,7 @@ function recoverStaleRuns(user) {
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
+  '.htm': 'text/html; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
   '.mjs': 'text/javascript; charset=utf-8',
@@ -272,6 +274,12 @@ const MIME = {
   '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
   '.zip': 'application/zip',
 };
+
+/* Страница из файла пользователя показывается в рамке и без доступа к сервису:
+   sandbox в заголовке делает её происхождение «чужим» — cookie и API недоступны,
+   при этом сама страница остаётся полноценной. */
+const PAGE_SANDBOX_CSP =
+  "sandbox allow-scripts allow-popups allow-forms allow-modals; frame-ancestors 'self'; base-uri 'none'";
 
 const SECURITY_HEADERS = {
   'X-Content-Type-Options': 'nosniff',
@@ -1379,6 +1387,29 @@ function sendFile(res, full, { download = false, name, head = false } = {}) {
   fs.createReadStream(full).pipe(res);
 }
 
+/* Файл по короткой ссылке. Отличается от sendFile тем, что HTML-страницу можно
+   показать в рамке внутри приложения: без X-Frame-Options и с «песочницей» в
+   заголовке — чужие скрипты из загруженного файла не достанут до сервиса. */
+function sendSharedFile(res, full, { name, head = false } = {}) {
+  const stat = fs.statSync(full);
+  if (!stat.isFile()) return sendError(res, 404, 'Не найдено');
+  const ext = path.extname(full).toLowerCase();
+  const page = ext === '.html' || ext === '.htm';
+  const fileName = name || path.basename(full);
+  const headers = {
+    'Content-Type': MIME[ext] || 'application/octet-stream',
+    'Content-Length': stat.size,
+    'Content-Disposition': `${page ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(fileName)}`,
+    'Cache-Control': 'no-store',
+    'X-Content-Type-Options': 'nosniff',
+    'Referrer-Policy': 'no-referrer',
+  };
+  if (page) headers['Content-Security-Policy'] = PAGE_SANDBOX_CSP;
+  res.writeHead(200, headers);
+  if (head) return res.end();
+  fs.createReadStream(full).pipe(res);
+}
+
 async function route(req, res) {
   const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
   const pathname = decodeURIComponent(url.pathname);
@@ -1396,8 +1427,7 @@ async function route(req, res) {
     try {
       const full = resolveSafe(store.workspaceDir(project.id), link.relPath);
       if (!fs.existsSync(full) || !fs.statSync(full).isFile()) return sendError(res, 404, 'Файл не найден');
-      return sendFile(res, full, {
-        download: true,
+      return sendSharedFile(res, full, {
         name: asciiFileName(path.basename(full)),
         head: method === 'HEAD',
       });
@@ -1591,42 +1621,97 @@ async function route(req, res) {
           return sendError(res, 400, error.message);
         }
       }
-      if (parts[3] === 'file-link' && method === 'GET') {
-        /* Подписанная ссылка на файл для Word/Excel/PowerPoint. Живёт 10 минут
-           и открывает только этот файл; сессия и постоянный адрес не нужны. */
-        const rel = url.searchParams.get('path') || '';
-        try {
-          const full = resolveSafe(workspace, rel);
-          if (!fs.existsSync(full) || !fs.statSync(full).isFile()) return sendError(res, 404, 'Файл не найден');
-          const id = issueOpenLink({ projectId: project.id, relPath: rel });
-          const fileName = path.basename(full);
-          /* Адрес держим коротким: Excel не открывает файл, если путь длиннее 218 знаков. */
-          return sendJson(res, 200, {
-            url: `${publicOrigin(req)}/o/${id}/${asciiFileName(fileName)}`,
-            name: fileName,
-          });
-        } catch (error) {
-          return sendError(res, 400, error.message);
-        }
-      }
       if (parts[3] === 'file-preview' && method === 'GET') {
-        // Просмотр файла прямо в приложении: текст документа извлекаем на сервере,
-        // чтобы Word/Excel/презентации открывались для чтения, а не скачивались.
+        /* Просмотр файла прямо в приложении. Сервер отдаёт не «плоский текст»,
+           а структуру документа (заголовки, абзацы с выделением, таблицы,
+           листы, слайды) — её и рисует окно просмотра. Поле text оставлено для
+           совместимости и для тех файлов, которые разобрать не удалось. */
         const rel = url.searchParams.get('path') || '';
         try {
           const full = resolveSafe(workspace, rel);
           if (!fs.existsSync(full) || !fs.statSync(full).isFile()) return sendError(res, 404, 'Файл не найден');
           const name = path.basename(full);
           const stat = fs.statSync(full);
-          const base = { name, path: rel, size: stat.size, kind: detectKind(name), kindLabel: kindLabel(detectKind(name)) };
+          const kind = detectKind(name);
+          const base = { name, path: rel, size: stat.size, kind, kindLabel: kindLabel(kind) };
           if (stat.size > 25 * 1024 * 1024) {
-            return sendJson(res, 200, { ...base, text: '', warnings: ['Файл больше 25 МБ — предпросмотр недоступен, скачайте его.'] });
+            return sendJson(res, 200, {
+              ...base,
+              format: 'other',
+              text: '',
+              warnings: ['Файл больше 25 МБ — просмотр недоступен, скачайте его.'],
+            });
           }
-          const { kind, text, warnings } = extractDocumentText(fs.readFileSync(full), name, '', {
-            maxRows: 500,
-            maxChars: 200000,
+          const buf = fs.readFileSync(full);
+          const preview = previewDocument(buf, name, { maxRows: 400, maxChars: 200000 });
+          if (preview) return sendJson(res, 200, { ...base, ...preview, name, path: rel, size: stat.size });
+          /* Незнакомый формат: пробуем вытащить хотя бы текст. */
+          const { text, warnings } = extractDocumentText(buf, name, '', { maxRows: 500, maxChars: 200000 });
+          return sendJson(res, 200, {
+            ...base,
+            format: 'other',
+            text,
+            warnings: warnings || [],
           });
-          return sendJson(res, 200, { ...base, kind, kindLabel: kindLabel(kind), text, warnings });
+        } catch (error) {
+          return sendError(res, 400, error.message);
+        }
+      }
+      if (parts[3] === 'file-page' && method === 'GET') {
+        /* HTML открываем как настоящую страницу в рамке. Ссылки на соседние
+           файлы проекта заменяем короткими адресами: страница живёт в песочнице
+           без доступа к сессии, поэтому по обычным путям её ресурсы не открылись
+           бы. */
+        const rel = url.searchParams.get('path') || '';
+        try {
+          const full = resolveSafe(workspace, rel);
+          const ext = path.extname(full).toLowerCase();
+          if (ext !== '.html' && ext !== '.htm') return sendError(res, 400, 'Это не HTML-страница');
+          if (!fs.existsSync(full) || !fs.statSync(full).isFile()) return sendError(res, 404, 'Файл не найден');
+          const stat = fs.statSync(full);
+          if (stat.size > 6 * 1024 * 1024) return sendError(res, 413, 'Страница больше 6 МБ — откройте её скачиванием');
+          const source = fs.readFileSync(full, 'utf8');
+          const origin = publicOrigin(req);
+          const dir = path.posix.dirname(rel.replace(/\\/g, '/'));
+          let issued = 0;
+          const rewrite = (raw) => {
+            const ref = String(raw || '').trim();
+            if (!ref || issued > 40) return raw;
+            if (/^(?:[a-z][a-z0-9+.-]*:|\/\/|#)/i.test(ref)) return raw;
+            const cut = ref.search(/[?#]/);
+            const clean = cut >= 0 ? ref.slice(0, cut) : ref;
+            const tail = cut >= 0 ? ref.slice(cut) : '';
+            if (!clean) return raw;
+            const target = clean.startsWith('/')
+              ? clean.replace(/^\/+/, '')
+              : path.posix.normalize(path.posix.join(dir === '.' ? '' : dir, clean));
+            if (!target || target.startsWith('..')) return raw;
+            try {
+              const asset = resolveSafe(workspace, target);
+              if (!fs.existsSync(asset) || !fs.statSync(asset).isFile()) return raw;
+              issued += 1;
+              const id = issueOpenLink({ projectId: project.id, relPath: target });
+              return `${origin}/o/${id}/${asciiFileName(path.basename(asset))}${tail}`;
+            } catch {
+              return raw;
+            }
+          };
+          const body = source.replace(/\b(src|href|poster)\s*=\s*("([^"]*)"|'([^']*)')/gi, (whole, attr, quoted, dq, sq) => {
+            const value = dq !== undefined ? dq : sq;
+            const next = rewrite(value);
+            if (next === value) return whole;
+            return `${attr}="${next.replace(/"/g, '&quot;')}"`;
+          });
+          const buf = Buffer.from(body, 'utf8');
+          res.writeHead(200, {
+            'Content-Type': 'text/html; charset=utf-8',
+            'Content-Length': buf.length,
+            'Cache-Control': 'no-store',
+            'X-Content-Type-Options': 'nosniff',
+            'Referrer-Policy': 'no-referrer',
+            'Content-Security-Policy': PAGE_SANDBOX_CSP,
+          });
+          return res.end(buf);
         } catch (error) {
           return sendError(res, 400, error.message);
         }

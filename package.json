@@ -12,6 +12,7 @@
     "start": "node server.mjs",
     "smoke": "node test/smoke.mjs",
     "test:docs": "node test/docs.mjs",
+    "test:docpreview": "node --test test/docpreview.mjs",
     "test:runs": "node test/runs.mjs",
     "test:ui-runs": "node test/ui-runs.mjs",
     "test:ui-version": "node test/ui-version.mjs"

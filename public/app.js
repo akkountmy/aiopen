@@ -135,10 +135,18 @@ function updateBalance(value) {
   renderBalance();
 }
 
+/* Уведомление о состоянии — плашкой под шапкой, а не подсказкой внизу экрана.
+   Раньше плашка вставала внизу по центру: она перекрывала поле ввода и закрывала
+   текст, который человек в этот момент печатал. Теперь она сверху, живёт 5 секунд
+   и закрывается щелчком. */
 function toast(message, type = 'error') {
   const root = $('#toastRoot');
+  if (!root) return;
   const node = el('div', `toast ${type}`, message);
+  node.addEventListener('click', () => node.remove());
   root.appendChild(node);
+  /* Больше трёх плашек не держим: старое убираем, чтобы экран не застило. */
+  while (root.childElementCount > 3) root.firstElementChild.remove();
   setTimeout(() => {
     node.style.opacity = '0';
     node.style.transition = 'opacity .2s ease';
@@ -484,6 +492,9 @@ function switchAuthForm(mode) {
 /* ------------------------------ app init ------------------------------ */
 
 async function startApp(payload) {
+  /* Панель файлов, открытую до перезагрузки, запоминаем до сброса состояния:
+     resetClientState затирает память вкладки. */
+  const savedUi = readFilesUi();
   /* Чистим всё, что могло остаться от предыдущего аккаунта в этой же вкладке. */
   resetClientState();
   state.user = payload.user;
@@ -507,6 +518,13 @@ async function startApp(payload) {
     state.expanded.add(first.id);
     state.activeProjectId = first.id;
   }
+  /* Проект, в котором человек работал: его же и открываем, иначе после
+     перезагрузки панель файлов вернулась бы к чужой папке. */
+  const uiProject = savedUi ? state.projects.find((project) => project.id === savedUi.projectId) : null;
+  if (uiProject) {
+    state.expanded.add(uiProject.id);
+    state.activeProjectId = uiProject.id;
+  }
   /* Задачи, которые шли в момент перезагрузки страницы: подхватываем их сразу,
      чтобы работа выглядела непрерывной. */
   for (const run of payload.runs || []) trackRun(run.id, run.chatId);
@@ -516,12 +534,16 @@ async function startApp(payload) {
   const runningChat = (payload.runs || []).find((run) => findChatProject(run.chatId));
   const remembered = lastChatId();
   const target =
-    runningChat?.chatId || (remembered && findChatProject(remembered) ? remembered : '') || first?.chats?.[0]?.id || '';
+    runningChat?.chatId || (remembered && findChatProject(remembered) ? remembered : '') || activeProject()?.chats?.[0]?.id || '';
   if (target) await openChat(target);
   else renderThread();
   updateCrumbs();
   watchWideBlocks();
-  if (state.activeProjectId) syncFilesPanel({ reload: true });
+  /* Панель «Файлы проекта», открытая до перезагрузки, возвращается открытой:
+     так после системного просмотрщика на телефоне человек остаётся у списка
+     файлов, а не оказывается в чате. */
+  const restoredUi = restoreFilesUi(savedUi);
+  if (state.activeProjectId) syncFilesPanel({ reload: !restoredUi });
   /* Черновик возвращаем, если страница сама обновилась до новой версии. */
   restoreDraft();
   checkAppVersion();
@@ -774,7 +796,7 @@ async function openChat(chatId) {
     renderThread();
     updateCrumbs();
     if (state.filesOpen) loadFiles('.');
-    closeSidebar();
+    if (!restoreFilesUi()) closeSidebar();
     rememberChat(chatId);
     /* В этом диалоге идёт задача — подключаемся и показываем накопленное. */
     const run = liveRunFor(chatId);
@@ -1741,6 +1763,48 @@ function closeSidebar() {
    открывается и закрывается кнопкой-папкой в шапке. */
 const filesNarrow = () => window.matchMedia('(max-width: 1100px)').matches;
 
+/* Открытая панель файлов переживает перезагрузку страницы. Телефон иногда
+   показывает файл системным окном и возвращает уже новую страницу — без этой
+   памяти человек оказывался в чате вместо списка, из которого открывал файл. */
+const FILES_UI_KEY = 'dshow:files-ui';
+
+function saveFilesUi() {
+  /* До входа в аккаунт запоминать нечего: разметка страницы строится раньше,
+     чем приходит сессия, и такая «пустая» запись затирала открытую панель. */
+  if (!state.user) return;
+  try {
+    sessionStorage.setItem(
+      FILES_UI_KEY,
+      JSON.stringify({ projectId: state.activeProjectId || '', drawer: Boolean(state.filesDrawerOpen), path: state.filesPath || '.' }),
+    );
+  } catch {
+    /* Приватный режим может запрещать хранилище — панель просто не запомнится. */
+  }
+}
+
+function readFilesUi() {
+  try {
+    const raw = sessionStorage.getItem(FILES_UI_KEY);
+    if (!raw) return null;
+    const saved = JSON.parse(raw);
+    return saved && typeof saved === 'object' ? saved : null;
+  } catch {
+    return null;
+  }
+}
+
+function restoreFilesUi(saved = readFilesUi()) {
+  if (!saved || !saved.drawer) return false;
+  if (!filesNarrow() || !state.activeProjectId) return false;
+  if (saved.projectId && saved.projectId !== state.activeProjectId) return false;
+  if (state.filesDrawerOpen) return false;
+  state.filesDrawerOpen = true;
+  state.filesPath = saved.path && saved.path !== '.' ? saved.path : '.';
+  syncFilesPanel();
+  loadFiles(state.filesPath);
+  return true;
+}
+
 function syncFilesPanel({ reload = false } = {}) {
   const app = $('#app');
   const panel = $('#filesPanel');
@@ -1753,6 +1817,7 @@ function syncFilesPanel({ reload = false } = {}) {
   app.classList.toggle('files-open', drawer && open);
   if (drawer && open) app.classList.remove('sidebar-open');
   state.filesOpen = open;
+  saveFilesUi();
   applyLayout();
   if (open && reload && state.activeProjectId) {
     state.filesPath = '.';
@@ -1770,6 +1835,18 @@ function closeFilesDrawer() {
   if (!state.filesDrawerOpen) return;
   state.filesDrawerOpen = false;
   syncFilesPanel();
+}
+
+/* Сообщение о файлах — строкой в самой панели, а не всплывающей подсказкой внизу
+   экрана: подсказка вставала поверх поля ввода и закрывала набранный текст.
+   Строка занимает своё место в потоке панели и исчезает сама. */
+function filesNote(text) {
+  const node = $('#filesNote');
+  if (!node) return;
+  clearTimeout(filesNote.timer);
+  node.textContent = text;
+  node.classList.remove('hidden');
+  filesNote.timer = setTimeout(() => node.classList.add('hidden'), 9000);
 }
 
 async function loadFiles(relPath) {
@@ -1834,14 +1911,14 @@ function renderFiles() {
     const isImage = /\.(png|jpe?g|webp|gif|bmp)$/i.test(item.name);
     row.innerHTML = `<span class="f-icon">${item.dir ? ICONS.folder : isImage ? ICONS.image : ICONS.file}</span>`;
     const name = fileNameEl(item.name, 'f-name');
-    const officeApp = item.dir ? null : officeOpener(item.name);
-    /* Подсказка про управление: на телефоне — тап, на компьютере — двойной щелчок. */
-    const touch = window.matchMedia('(pointer: coarse)').matches;
+    /* Подсказка про управление: на телефоне — тап, на компьютере — двойной щелчок.
+       В обоих случаях файл открывается в окне просмотра приложения. */
+    const touch = isTouchUi();
     name.title = item.dir
       ? item.path
       : touch
         ? `${item.path} — нажмите, чтобы открыть в приложении; кнопка «Скачать» — сохранить файл`
-        : `${item.path} — двойной щелчок: открыть${officeApp ? ` в ${officeApp.label}` : ''}; кнопка «Скачать» — сохранить файл`;
+        : `${item.path} — двойной щелчок: открыть в приложении; кнопка «Скачать» — сохранить файл`;
     row.appendChild(name);
     if (!item.dir) row.appendChild(el('span', 'f-size', fmtSize(item.size)));
     const actions = el('div', 'f-actions');
@@ -1895,31 +1972,32 @@ function renderFiles() {
         await api(`/api/projects/${state.activeProjectId}/file?path=${encodeURIComponent(item.path)}`, { method: 'DELETE' });
         loadFiles(state.filesPath);
       } catch (error) {
-        toast(error.message);
+        filesNote(error.message);
       }
     });
     actions.appendChild(del);
     row.appendChild(actions);
     const activate = () => {
       if (item.dir) loadFiles(item.path);
-      else openInOffice(item);
+      else openFilePreview(item);
     };
     row.addEventListener('click', () => {
       if (item.dir) {
         loadFiles(item.path);
         return;
       }
-      /* На телефоне кнопки строки появляются по тапу: одиночный тап открывает
-         файл в своём окне (скачивание — только кнопкой «Скачать»).
-         На компьютере двойной щелчок открывает документ в Word/Excel/PowerPoint. */
-      if (window.matchMedia('(pointer: coarse)').matches) openFilePreview(item);
+      /* На тач-экране одиночный тап открывает файл в окне просмотра (скачивание —
+         только кнопкой «Скачать»). На компьютере открывает двойной щелчок — и тоже
+         в окне просмотра: внешние Word/Excel/PowerPoint больше не вызываются, они
+         показывали системное окно «Microsoft Office» с вопросом про безопасность. */
+      if (isTouchUi()) openFilePreview(item);
     });
     row.addEventListener('dblclick', (event) => {
-      if (item.dir || window.matchMedia('(pointer: coarse)').matches) return;
+      if (item.dir || isTouchUi()) return;
       /* Двойной щелчок по кнопке «Скачать» — это два скачивания, а не открытие. */
       if (event.target.closest('.f-actions')) return;
       event.preventDefault();
-      openInOffice(item);
+      openFilePreview(item);
     });
     /* Строка — это кнопка: с клавиатуры она тоже открывает папку или файл. */
     row.setAttribute('role', 'button');
@@ -1997,10 +2075,13 @@ async function saveFileFromServer(url, name) {
   return name;
 }
 
-/* Клик по кнопке «Скачать» сохраняет оригинал к себе. Двойной щелчок по строке
-   открывает документ сразу в Office по протоколу ms-word/ms-excel/ms-powerpoint;
-   для этого ему нужна короткая подписанная ссылка, потому что у Word и Excel
-   нет cookie браузера. */
+/* Клик по кнопке «Скачать» сохраняет оригинал к себе — молча, без всплывающих
+   подсказок: подсказка вставала снизу поверх поля ввода и закрывала текст,
+   который человек в этот момент печатал. Об успехе говорит сама загрузка
+   браузера, об ошибке — тихая строка в панели файлов.
+
+   Скачивание — единственный путь к правке в Word/Excel: открывать документ
+   сразу во внешней программе больше нельзя (см. ниже). */
 function openFileViewer(item) {
   /* Двойной щелчок и случайный повторный тап не должны скачивать файл дважды. */
   const key = `${state.activeProjectId}:${item.path}`;
@@ -2008,72 +2089,33 @@ function openFileViewer(item) {
   if (key === openFileViewer.lastKey && now - openFileViewer.lastAt < 600) return;
   openFileViewer.lastKey = key;
   openFileViewer.lastAt = now;
-  toast(`«${item.name}» сохраняется в «Загрузки»…`, 'ok');
-  saveFileFromServer(fileUrl(item.path, true), item.name)
-    .then((name) => toast(`«${name}» сохранён в «Загрузки» — приложение можно не закрывать.`, 'ok'))
-    .catch((error) => toast(`${error.message}. Попробуйте ещё раз.`));
+  saveFileFromServer(fileUrl(item.path, true), item.name).catch((error) => {
+    filesNote(`${error.message}. Попробуйте ещё раз.`);
+  });
 }
 
-const OFFICE_OPENERS = [
-  {
-    test: /^(doc|docx|docm|dot|dotx|rtf|odt)$/i,
-    protocol: 'ms-word',
-    label: 'Word',
-  },
-  {
-    test: /^(xls|xlsx|xlsm|xlsb|csv|ods)$/i,
-    protocol: 'ms-excel',
-    label: 'Excel',
-  },
-  {
-    test: /^(ppt|pptx|pptm|pps|ppsx|odp)$/i,
-    protocol: 'ms-powerpoint',
-    label: 'PowerPoint',
-  },
-];
-
-function officeOpener(name) {
-  const ext = String(name || '').split('.').pop();
-  return OFFICE_OPENERS.find((opener) => opener.test.test(ext)) || null;
+/* Тач-устройство определяем по трём признакам: сенсорные экраны бывают и с
+   «мышиным» указателем (планшеты с пером, режим DeX), а вести себя они должны
+   как телефон: одиночный тап по файлу сразу открывает окно просмотра. */
+function isTouchUi() {
+  return (
+    (navigator.maxTouchPoints || 0) > 0 ||
+    window.matchMedia('(pointer: coarse)').matches ||
+    window.matchMedia('(any-pointer: coarse)').matches
+  );
 }
 
-function launchProtocol(href) {
-  const link = document.createElement('a');
-  link.href = href;
-  link.rel = 'noopener';
-  link.style.display = 'none';
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-}
+/* Внешние Word, Excel и PowerPoint сервис больше не вызывает — ни на телефоне,
+   ни на компьютере. Раньше документ уходил в них по протоколу
+   ms-word:ofe|u|<ссылка>, программа сама скачивала файл из интернета, и после
+   этого Office показывал системное окно «Microsoft Office» с вопросом, открывать
+   ли файл (а внутри — защищённый просмотр).
 
-async function openInOffice(item) {
-  /* На телефоне документ открываем у себя: системная страница «Открыть в…»
-     уводит из приложения, и вернуться из неё нечем — ни кнопки, ни жеста. */
-  if (window.matchMedia('(pointer: coarse)').matches) {
-    openFilePreview(item);
-    return;
-  }
-  const opener = officeOpener(item.name);
-  if (!opener) {
-    /* Не Office: PDF, картинки и текст показываем в своём окне внутри
-       приложения — новая вкладка и чужие программы оставляют человека вне
-       приложения, откуда нет ни «назад», ни «закрыть». Остальное сохраняем. */
-    if (/\.(pdf|png|jpe?g|webp|gif|bmp|svg|txt|md|html?)$/i.test(item.name)) {
-      openFilePreview(item);
-      return;
-    }
-    openFileViewer(item);
-    return;
-  }
-  try {
-    const data = await api(`/api/projects/${state.activeProjectId}/file-link?path=${encodeURIComponent(item.path)}`);
-    launchProtocol(`${opener.protocol}:ofe|u|${encodeURI(data.url)}`);
-    toast(`«${item.name}» открывается в ${opener.label}. Если окно не появилось, скачайте файл кнопкой «Скачать».`, 'ok');
-  } catch (error) {
-    toast(`${error.message}. Файл можно скачать кнопкой «Скачать».`);
-  }
-}
+   Окно нельзя убрать со стороны сервера: метку «файл из интернета»
+   (Mark-of-the-Web, поток Zone.Identifier) ставит Windows в момент скачивания,
+   и никакой заголовок ответа её не отменяет. Поэтому документ открывается в окне
+   просмотра самого сервиса (там он читается без всяких окон), а для правки
+   остаётся кнопка «Скачать» — файл сохраняется в «Загрузки». */
 
 /* -------------------- просмотр файла внутри приложения -------------------- */
 
@@ -2085,6 +2127,10 @@ async function openInOffice(item) {
 
 const PREVIEW_IMAGE = /\.(png|jpe?g|webp|gif|bmp|avif|svg)$/i;
 const PREVIEW_TEXT = /\.(txt|md|markdown|csv|tsv|json|log|ya?ml|xml|ini|conf|srt)$/i;
+/* Документы Office показываем в своём окне. Внешние Word, Excel и PowerPoint
+   больше не вызываются: именно они открывали системное окно «Microsoft
+   Office» с вопросом, открывать ли файл из интернета. */
+const OFFICE_DOC = /\.(docx?|docm|dotx?|dotm|rtf|odt|xlsx?|xlsm|xlsb|xltx?|ods|pptx?|pptm|ppsx?|potx?|odp)$/i;
 
 /* pdf.js лежит рядом с приложением (/vendor/pdfjs) и грузится только при
    первом открытии PDF — остальные экраны он не задерживает. */
@@ -2228,28 +2274,304 @@ async function mountTextPreview(container, url) {
   }
 }
 
-/* Word, Excel, презентации и остальные «офисные» файлы телефон сам не рисует.
-   Текст документа вытаскивает сервер — файл можно прочитать прямо здесь, а
-   рядом подсказка, какими бесплатными приложениями его открыть целиком. */
+/* ------------------------ строим документ для чтения ------------------------
+   Сервер присылает структуру (заголовки, абзацы с выделением, списки, таблицы,
+   листы книги, слайды), а не готовую разметку: здесь мы собираем её через DOM,
+   поэтому текст файла никогда не становится исполняемым HTML. */
+
+const PV_TONE = {
+  docx: 'word', docm: 'word', doc: 'word', rtf: 'word', odt: 'word', dotx: 'word',
+  xlsx: 'sheet', xlsm: 'sheet', xls: 'sheet', xlsb: 'sheet', csv: 'sheet', tsv: 'sheet', ods: 'sheet',
+  pptx: 'slide', pptm: 'slide', ppt: 'slide', ppsx: 'slide', odp: 'slide',
+  pdf: 'pdf',
+  html: 'web', htm: 'web',
+  md: 'text', markdown: 'text', txt: 'text', log: 'text',
+};
+
+const PV_CODE = /^(json|js|mjs|cjs|ts|css|py|ps1|sh|sql|bat|xml|ya?ml|ini|conf|env|srt)$/i;
+
+function fileExtOf(name) {
+  return String(name || '').split('.').pop().toLowerCase();
+}
+
+function pvBadge(name) {
+  const ext = fileExtOf(name);
+  const tone = PV_TONE[ext] || (PV_CODE.test(ext) ? 'code' : 'plain');
+  return el('span', `pv-badge pv-${tone}`, (ext.length > 4 ? ext.slice(0, 4) : ext).toUpperCase() || 'ФАЙЛ');
+}
+
+function pvSize(bytes) {
+  const size = Number(bytes);
+  if (!Number.isFinite(size) || size <= 0) return '';
+  if (size >= 1024 * 1024) return `${(size / 1024 / 1024).toFixed(1).replace('.', ',')} МБ`;
+  if (size >= 1024) return `${Math.max(1, Math.round(size / 1024))} КБ`;
+  return `${size} байт`;
+}
+
+function pvKindLabel(name) {
+  const ext = fileExtOf(name);
+  const map = {
+    docx: 'Документ Word', docm: 'Документ Word', doc: 'Документ Word', rtf: 'Документ RTF', odt: 'Документ OpenDocument',
+    xlsx: 'Таблица Excel', xlsm: 'Таблица Excel', xls: 'Таблица Excel', csv: 'Таблица CSV', tsv: 'Таблица TSV', ods: 'Таблица OpenDocument',
+    pptx: 'Презентация', pptm: 'Презентация', ppt: 'Презентация', odp: 'Презентация',
+    pdf: 'Документ PDF',
+    html: 'Веб-страница', htm: 'Веб-страница',
+    md: 'Текст Markdown', markdown: 'Текст Markdown', txt: 'Текст', log: 'Журнал',
+    json: 'Данные JSON',
+    png: 'Изображение', jpg: 'Изображение', jpeg: 'Изображение', webp: 'Изображение', gif: 'Изображение', svg: 'Изображение',
+    zip: 'Архив',
+  };
+  return map[ext] || (PV_CODE.test(ext) ? 'Код' : 'Файл');
+}
+
+function pvSummary(item) {
+  return [pvKindLabel(item.name), pvSize(item.size)].filter(Boolean).join(' · ');
+}
+
+function pvRunNode(run) {
+  let node = document.createTextNode(run.text);
+  if (run.underline) {
+    const tag = document.createElement('u');
+    tag.appendChild(node);
+    node = tag;
+  }
+  if (run.italic) {
+    const tag = document.createElement('em');
+    tag.appendChild(node);
+    node = tag;
+  }
+  if (run.bold || run.strike) {
+    const tag = document.createElement(run.strike ? 's' : 'strong');
+    tag.appendChild(node);
+    node = tag;
+  }
+  return node;
+}
+
+function pvAppendRuns(node, runs) {
+  for (const run of runs || []) {
+    if (!run || !run.text) continue;
+    const parts = String(run.text).split('\n');
+    parts.forEach((part, index) => {
+      if (index) node.appendChild(document.createElement('br'));
+      if (part) node.appendChild(pvRunNode({ ...run, text: part }));
+    });
+  }
+}
+
+function pvParagraph(runs, align) {
+  const node = el('p', 'pv-p');
+  if (align) node.classList.add(`pv-${align}`);
+  pvAppendRuns(node, runs);
+  return node;
+}
+
+function pvCell(container, cell) {
+  const td = el('div', 'pv-td');
+  if (Array.isArray(cell)) {
+    cell.forEach((line, index) => {
+      if (index) td.appendChild(el('div', 'pv-td-gap'));
+      const lineNode = el('span', 'pv-td-line');
+      pvAppendRuns(lineNode, line);
+      td.appendChild(lineNode);
+    });
+  } else {
+    const text = String(cell ?? '');
+    td.textContent = text;
+    if (/^[-+]?[\d\s]+(?:[.,]\d+)?\s*(?:%|₽|\$|€|руб\.?)?$/.test(text.trim())) td.classList.add('pv-num');
+  }
+  container.appendChild(td);
+}
+
+/* Таблица листа и таблица документа выглядят одинаково: сетка, подписи в
+   первой строке, числа по правому краю. */
+function pvGrid(rows, { header = false } = {}) {
+  const box = el('div', 'pv-table-box');
+  const table = el('table', 'pv-table');
+  const headPart = header ? rows[0] : null;
+  const bodyRows = header ? rows.slice(1) : rows;
+  if (headPart) {
+    const thead = document.createElement('thead');
+    const tr = document.createElement('tr');
+    for (const cell of headPart) {
+      const th = document.createElement('th');
+      th.textContent = Array.isArray(cell) ? cell.map((line) => (line || []).map((run) => run.text).join('')).join(' ') : String(cell ?? '');
+      tr.appendChild(th);
+    }
+    thead.appendChild(tr);
+    table.appendChild(thead);
+  }
+  const tbody = document.createElement('tbody');
+  for (const row of bodyRows) {
+    const tr = document.createElement('tr');
+    for (const cell of row) {
+      const td = document.createElement('td');
+      pvCell(td, cell);
+      tr.appendChild(td);
+    }
+    tbody.appendChild(tr);
+  }
+  table.appendChild(tbody);
+  box.appendChild(table);
+  return box;
+}
+
+function pvNotice(text) {
+  return el('p', 'pv-notice', text);
+}
+
+function pvDocument(data) {
+  const wrap = el('div', 'pv-doc');
+  for (const block of data.blocks || []) {
+    if (block.type === 'heading') {
+      const level = Math.min(Math.max(Number(block.level) || 1, 1), 6);
+      const heading = el('div', `pv-h pv-h${level}`);
+      pvAppendRuns(heading, block.runs);
+      wrap.appendChild(heading);
+    } else if (block.type === 'list') {
+      const list = document.createElement(block.ordered ? 'ol' : 'ul');
+      list.className = 'pv-list';
+      if (block.level) list.classList.add(`pv-list-${Math.min(block.level + 1, 3)}`);
+      for (const item of block.items || []) {
+        const li = document.createElement('li');
+        pvAppendRuns(li, item.runs);
+        list.appendChild(li);
+      }
+      wrap.appendChild(list);
+    } else if (block.type === 'table') {
+      wrap.appendChild(pvGrid(block.rows || [], { header: Boolean(block.header) }));
+    } else {
+      wrap.appendChild(pvParagraph(block.runs, block.align));
+    }
+  }
+  if (!wrap.childElementCount) wrap.appendChild(pvNotice('В документе нет текста для чтения — скачайте файл.'));
+  for (const extra of data.extras || []) {
+    if (!extra || !extra.text) continue;
+    wrap.appendChild(pvNotice(`${extra.title}: ${extra.text}`));
+  }
+  for (const warning of data.warnings || []) wrap.appendChild(pvNotice(warning));
+  return wrap;
+}
+
+function pvSheets(sheets) {
+  const wrap = el('div', 'pv-sheets');
+  const tabs = el('div', 'pv-sheet-tabs');
+  const body = el('div', 'pv-sheet-body');
+  wrap.append(tabs, body);
+  const paint = (index) => {
+    const sheet = sheets[index];
+    body.innerHTML = '';
+    body.appendChild(pvGrid(sheet.rows || [], { header: true }));
+    if (sheet.truncated) body.appendChild(pvNotice('Показаны первые строки листа — остальные видны в скачанном файле.'));
+    [...tabs.children].forEach((tab, tabIndex) => tab.classList.toggle('is-active', tabIndex === index));
+  };
+  sheets.forEach((sheet, index) => {
+    const tab = el('button', 'pv-sheet-tab', sheet.name || `Лист ${index + 1}`);
+    tab.type = 'button';
+    tab.addEventListener('click', () => paint(index));
+    tabs.appendChild(tab);
+  });
+  if (sheets.length > 1) tabs.classList.remove('hidden');
+  else tabs.classList.add('hidden');
+  paint(0);
+  return wrap;
+}
+
+function pvSlides(slides) {
+  const wrap = el('div', 'pv-slides');
+  for (const slide of slides) {
+    const card = el('article', 'pv-slide');
+    card.appendChild(el('div', 'pv-slide-no', `Слайд ${slide.number}`));
+    const title = el('div', 'pv-slide-title');
+    title.textContent = slide.title;
+    card.appendChild(title);
+    if (slide.lines && slide.lines.length) {
+      const list = document.createElement('ul');
+      list.className = 'pv-list';
+      for (const line of slide.lines) {
+        const li = document.createElement('li');
+        li.textContent = line;
+        list.appendChild(li);
+      }
+      card.appendChild(list);
+    }
+    wrap.appendChild(card);
+  }
+  return wrap;
+}
+
+function pvCodeBlock(text) {
+  return el('pre', 'preview-text', String(text || '').slice(0, 200000));
+}
+
+/* HTML-страница открывается как страница — в рамке, ровно как ссылка в ответе
+   ассистента, только без перехода в новую вкладку. Страница живёт в песочнице:
+   у неё нет доступа к сессии сервиса и к нашему окну. */
+function mountHtmlPreview(container, item) {
+  const status = el('div', 'preview-status', 'Открываем страницу…');
+  container.appendChild(status);
+  const frame = document.createElement('iframe');
+  frame.className = 'preview-frame';
+  frame.setAttribute('sandbox', 'allow-scripts allow-popups allow-forms allow-modals');
+  frame.setAttribute('referrerpolicy', 'no-referrer');
+  frame.title = item.name;
+  frame.addEventListener('load', () => {
+    status.remove();
+    frame.classList.add('is-ready');
+  });
+  frame.src = `/api/projects/${state.activeProjectId}/file-page?path=${encodeURIComponent(item.path)}`;
+  container.appendChild(frame);
+}
+
 async function mountDocPreview(container, item) {
   const status = el('div', 'preview-status', 'Читаем документ…');
   container.appendChild(status);
+  let data;
   try {
-    const data = await api(`/api/projects/${state.activeProjectId}/file-preview?path=${encodeURIComponent(item.path)}`);
-    status.remove();
-    const text = String(data.text || '').trim();
-    if (text) {
-      container.appendChild(el('pre', 'preview-text', text.slice(0, 200000)));
-      if (text.length > 200000) container.appendChild(el('p', 'preview-more', 'Показаны первые 200 000 символов.'));
-    } else {
-      container.appendChild(el('p', 'preview-more', 'Из этого файла текст не извлекается — скачайте его, чтобы открыть в приложении.'));
-    }
-    container.appendChild(officeHintBody());
+    data = await api(`/api/projects/${state.activeProjectId}/file-preview?path=${encodeURIComponent(item.path)}`);
   } catch (error) {
     status.remove();
-    container.appendChild(el('p', 'preview-more', `${error.message}. Скачайте файл — он откроется в приложении.`));
+    container.appendChild(pvNotice(`${error.message}. Скачайте файл — он откроется в приложении.`));
     container.appendChild(officeHintBody());
+    return;
   }
+  status.remove();
+  const format = String(data.format || 'other');
+  const text = String(data.text || '');
+  const truncated = text.length > 200000;
+
+  if (format === 'docx' && Array.isArray(data.blocks)) {
+    container.appendChild(pvDocument(data));
+    return;
+  }
+  if (format === 'xlsx' && Array.isArray(data.sheets) && data.sheets.length) {
+    container.appendChild(pvSheets(data.sheets));
+    return;
+  }
+  if (format === 'pptx' && Array.isArray(data.slides) && data.slides.length) {
+    container.appendChild(pvSlides(data.slides));
+    return;
+  }
+  if (format === 'table' && Array.isArray(data.rows) && data.rows.length) {
+    container.appendChild(pvGrid(data.rows, { header: true }));
+    if (data.truncated) container.appendChild(pvNotice('Показаны первые строки таблицы.'));
+    return;
+  }
+  if (format === 'markdown' && text.trim()) {
+    const node = el('div', 'md md-preview');
+    node.innerHTML = renderMarkdown(text);
+    container.appendChild(node);
+    if (truncated) container.appendChild(pvNotice('Показано начало файла.'));
+    return;
+  }
+  if (text.trim()) {
+    container.appendChild(pvCodeBlock(text));
+    for (const warning of data.warnings || []) container.appendChild(pvNotice(warning));
+    return;
+  }
+  container.appendChild(pvNotice('Из этого файла не удалось прочитать содержимое — скачайте его, чтобы открыть в приложении.'));
+  for (const warning of data.warnings || []) container.appendChild(pvNotice(warning));
+  container.appendChild(officeHintBody());
 }
 
 function openFilePreview(item) {
@@ -2262,27 +2584,46 @@ function openFilePreview(item) {
 
   const url = fileUrl(item.path, false);
   const body = el('div', 'file-preview');
+  const ext = fileExtOf(item.name);
+
+  /* Документ Office читается здесь же — без Word и без окна безопасности.
+     Для правки человеку нужен сам файл, поэтому подсказываем кнопку «Скачать». */
+  if (OFFICE_DOC.test(item.name)) {
+    body.appendChild(
+      el(
+        'p',
+        'pv-hint',
+        'Документ открыт в просмотре сервиса. Чтобы править его, скачайте файл кнопкой «Скачать» — он откроется в Word, Excel или PowerPoint на вашем компьютере.',
+      ),
+    );
+  }
 
   if (PREVIEW_IMAGE.test(item.name)) {
     const img = el('img', 'preview-img');
     img.src = url;
     img.alt = item.name;
     body.appendChild(img);
-  } else if (/\.pdf$/i.test(item.name)) {
+  } else if (ext === 'pdf') {
     const holder = el('div', 'pdf-box');
     body.appendChild(holder);
     mountPdfPreview(holder, url);
-  } else if (PREVIEW_TEXT.test(item.name)) {
-    mountTextPreview(body, url);
+  } else if (ext === 'html' || ext === 'htm') {
+    mountHtmlPreview(body, item);
   } else {
     mountDocPreview(body, item);
   }
 
+  /* Окно открывается поверх панели файлов, а не вместо неё: после «Закрыть»
+     человек остаётся там же, где выбирал файл. */
+  const reopenDrawer = Boolean(state.filesDrawerOpen) && filesNarrow();
   openModal({
     title: item.name,
+    headLead: pvBadge(item.name),
+    subtitle: pvSummary(item),
     body,
     wide: true,
     className: 'file-preview-modal',
+    rootClass: 'preview-open',
     actions: [
       {
         label: 'Скачать',
@@ -2292,6 +2633,12 @@ function openFilePreview(item) {
       },
       { label: 'Закрыть', kind: 'primary' },
     ],
+    onClose: () => {
+      if (reopenDrawer && !state.filesDrawerOpen) {
+        state.filesDrawerOpen = true;
+        syncFilesPanel();
+      }
+    },
   });
 }
 
@@ -2302,7 +2649,7 @@ async function uploadToProject(fileList, dir = state.filesPath) {
   const files = Array.from(fileList || []);
   if (!files.length) return;
   if (!state.activeProjectId) {
-    toast('Сначала выберите проект');
+    filesNote('Сначала выберите проект — файл добавится в его папку.');
     return;
   }
   const folder = dir && dir !== '.' ? String(dir).replace(/\/+$/, '') : '';
@@ -2328,7 +2675,7 @@ async function uploadToProject(fileList, dir = state.filesPath) {
         }
         added += 1;
       } catch (error) {
-        toast(error.message);
+        filesNote(error.message);
       }
     }
   } finally {
@@ -2336,7 +2683,8 @@ async function uploadToProject(fileList, dir = state.filesPath) {
     if (label) label.textContent = previousLabel;
   }
   if (added) {
-    toast(added === 1 ? 'Файл добавлен в проект' : `Добавлено файлов: ${added}`, 'ok');
+    /* Успех виден по самому списку: файл уже в панели. Всплывающее окно здесь
+       только мешало — оно закрывало поле ввода снизу экрана. */
     await loadFiles(state.filesPath);
   }
 }
@@ -2447,15 +2795,22 @@ function openContextMenu(anchor, items) {
   }, 0);
 }
 
-function openModal({ title, body, actions = [], wide = false, className = '', onMount }) {
+function openModal({ title, subtitle, headLead, body, actions = [], wide = false, className = '', rootClass = '', onMount, onClose }) {
   const root = $('#modalRoot');
   root.innerHTML = '';
-  root.classList.remove('hidden');
+  root.className = `modal-root${rootClass ? ` ${rootClass}` : ''}`;
   const modal = el('div', `modal${wide ? ' wide' : ''}${className ? ` ${className}` : ''}`);
   const head = el('div', 'modal-head');
-  head.appendChild(el('div', 'modal-title', title));
-  const close = el('button', 'btn btn-ghost btn-icon');
+  if (headLead) head.appendChild(headLead);
+  const headText = el('div', 'modal-head-text');
+  const titleNode = el('div', 'modal-title', title);
+  titleNode.title = title;
+  headText.appendChild(titleNode);
+  if (subtitle) headText.appendChild(el('div', 'modal-sub', subtitle));
+  head.appendChild(headText);
+  const close = el('button', 'btn btn-ghost btn-icon modal-close');
   close.type = 'button';
+  close.setAttribute('aria-label', 'Закрыть');
   close.innerHTML = '<svg viewBox="0 0 20 20"><path d="M5 5l10 10M15 5L5 15"/></svg>';
   close.addEventListener('click', () => closeModal());
   head.appendChild(close);
@@ -2489,6 +2844,7 @@ function openModal({ title, body, actions = [], wide = false, className = '', on
   }
   modal.appendChild(foot);
   root.appendChild(modal);
+  modalCloseHook = typeof onClose === 'function' ? onClose : null;
 
   root.onmousedown = (event) => {
     if (event.target === root) closeModal();
@@ -2496,19 +2852,30 @@ function openModal({ title, body, actions = [], wide = false, className = '', on
   document.onkeydown = (event) => {
     if (event.key === 'Escape') {
       closeModal();
-      document.onkeydown = null;
     }
   };
   if (onMount) onMount(bodyNode, modal, apiActions);
   return modal;
 }
 
+let modalCloseHook = null;
+
 function closeModal() {
   const root = $('#modalRoot');
+  if (!root || root.classList.contains('hidden')) {
+    const hook = modalCloseHook;
+    modalCloseHook = null;
+    if (hook) hook();
+    return;
+  }
   root.classList.add('hidden');
+  root.className = 'modal-root hidden';
   root.innerHTML = '';
   root.onmousedown = null;
   document.onkeydown = null;
+  const hook = modalCloseHook;
+  modalCloseHook = null;
+  if (hook) hook();
 }
 
 /* ------------------------------ popover ------------------------------ */
@@ -3316,7 +3683,14 @@ function resetClientState() {
   state.chat = null;
   state.attachments = [];
   state.filesPath = '.';
+  state.filesDrawerOpen = false;
   state.filesLoading = false;
+  /* Запомненное состояние панели принадлежит прошлому аккаунту — не переносим. */
+  try {
+    sessionStorage.removeItem(FILES_UI_KEY);
+  } catch {
+    /* ignore */
+  }
   state.expanded = new Set();
   state.collapsedWorkflows = new Set();
   state.lastTitle = '';
@@ -4164,13 +4538,17 @@ applyLayout();
 syncFilesPanel();
 
 $('#input').addEventListener('input', autoResize);
+/* Ширина экрана меняется не только при повороте телефона: её меняет клавиатура
+   и перезагрузка страницы. Поэтому ящик закрываем только при переходе с
+   широкого экрана на узкий, иначе открытая «Файлы проекта» захлопывалась. */
+let wasNarrow = filesNarrow();
 window.addEventListener('resize', () => {
   syncInputPlaceholder();
   autoResize();
   markWideBlocks();
-  // При переходе на узкий экран выезжающий ящик не должен перекрывать диалог,
-  // а на широком панель файлов обязана быть открытой колонкой.
-  if (filesNarrow() && state.filesDrawerOpen) state.filesDrawerOpen = false;
+  const narrowNow = filesNarrow();
+  if (narrowNow && !wasNarrow && state.filesDrawerOpen) state.filesDrawerOpen = false;
+  wasNarrow = narrowNow;
   syncFilesPanel();
 });
 window.addEventListener('orientationchange', () => setTimeout(autoResize, 120));

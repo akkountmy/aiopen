@@ -10,6 +10,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { Document, Packer, Paragraph, TextRun, HeadingLevel } from 'docx';
 
 const BASE = process.env.DSHOW_BASE || 'http://127.0.0.1:3131';
 const USER = process.env.DSHOW_USER || 'admin';
@@ -19,6 +20,22 @@ const NEW_USER = `flow_${STAMP}`;
 const NEW_PASS = 'Flow-pass-2026';
 const FILE_NAME = `flows-${STAMP}.txt`;
 const DOCX_NAME = `office-${STAMP}.docx`;
+
+/* Настоящий docx: окно просмотра показывает документ разметкой, а не текстом,
+   поэтому проверять его нужно на файле, который действительно открывает Word. */
+async function realDocx() {
+  const doc = new Document({
+    sections: [
+      {
+        children: [
+          new Paragraph({ text: 'Договор проверки', heading: HeadingLevel.HEADING_1 }),
+          new Paragraph({ children: [new TextRun({ text: 'Сумма ' }), new TextRun({ text: '1 000 ₽', bold: true })] }),
+        ],
+      },
+    ],
+  });
+  return Packer.toBuffer(doc);
+}
 
 const CHROME_CANDIDATES = [
   path.join(process.env['ProgramFiles'] || 'C:\\Program Files', 'Google', 'Chrome', 'Application', 'chrome.exe'),
@@ -376,8 +393,8 @@ try {
   }
 
   /* Клик по кнопке «Скачать» должен один раз отдать оригинал. Двойной щелчок
-     по документу Office открывает его протоколом ms-word/ms-excel, для этого
-     перехватываем программный клик по ссылке и не запускаем внешнюю программу. */
+     по документу открывает окно просмотра сервиса: проверяем, что приложение
+     не уходит ни в скачивание, ни во внешнюю программу по протоколу ms-*. */
   async function installLinkProbe() {
     return evaluate(`(() => {
       if (!window.__linkProbe) {
@@ -527,25 +544,60 @@ try {
         fail('удаление файла', 'подтверждение не открылось');
       }
 
-      /* Двойной щелчок по документу Office открывает его через протокол
-         ms-word/ms-excel, а кнопка «Скачать» по-прежнему просто сохраняет файл. */
-      await setInputFile('#filesPanelInput', DOCX_NAME, 'проверка клика по документу');
+      /* Двойной щелчок по документу открывает окно просмотра сервиса — без
+         скачивания и без перехода во внешние Word/Excel/PowerPoint. */
+      await setInputFile('#filesPanelInput', DOCX_NAME, await realDocx());
       const docxUploaded = await waitFor(`[...document.querySelectorAll('.file-row .f-name')].some(n => n.textContent === ${JSON.stringify(DOCX_NAME)})`, 10000);
       if (docxUploaded) {
         const hrefBefore = await evaluate('location.href');
         const docxClick = await clickFileName(DOCX_NAME);
         const docxDouble = await doubleClickFileName(DOCX_NAME);
+        const previewOpened = await waitFor(`!!document.querySelector('.file-preview-modal')`, 8000);
         const hrefAfter = await evaluate('location.href');
-        const noPreview = await evaluate(`!document.querySelector('.preview-modal')`);
+        const header = await evaluate(`(() => {
+          const head = document.querySelector('.file-preview-modal .modal-head');
+          if (!head) return null;
+          return {
+            badge: (head.querySelector('.pv-badge') || {}).textContent || '',
+            title: (head.querySelector('.modal-title') || {}).textContent || '',
+            subtitle: (head.querySelector('.modal-sub') || {}).textContent || '',
+            close: !!head.querySelector('.modal-close'),
+          };
+        })()`);
+        const rendered = await evaluate(`(() => {
+          const box = document.querySelector('.file-preview');
+          if (!box) return null;
+          return {
+            blocks: box.querySelectorAll('.pv-h, .pv-p, .pv-table, .pv-list').length,
+            pre: box.querySelectorAll('pre').length,
+            hint: box.querySelectorAll('.file-hint').length,
+            officeHint: box.querySelectorAll('.pv-hint').length,
+            submit: [...box.querySelectorAll('button')].map((b) => b.textContent.trim()),
+          };
+        })()`);
         docxClick && docxClick.downloads.length === 0 && docxClick.protocols.length === 0
-          && docxDouble && docxDouble.downloads.length === 0
-          && docxDouble.protocols.length === 1
-          && docxDouble.protocols[0].startsWith('ms-word:ofe|u|')
-          && docxDouble.protocols[0].includes('/o/')
+          && docxDouble && docxDouble.downloads.length === 0 && docxDouble.protocols.length === 0
+          && previewOpened
           && hrefAfter === hrefBefore
-          && noPreview
-          ? ok('двойной щелчок открывает документ Office по протоколу ms-word')
-          : fail('двойной щелчок по документу Office', { docxClick, docxDouble, before: hrefBefore, after: hrefAfter, noPreview });
+          && header && header.badge === 'DOCX' && header.close
+          && /Документ Word/.test(header.subtitle)
+          && rendered && rendered.blocks > 0 && rendered.pre === 0 && rendered.hint === 0
+          && rendered.officeHint === 1
+          ? ok('двойной щелчок открывает документ в окне просмотра — без скачивания и внешних программ')
+          : fail('двойной щелчок по документу', { docxClick, docxDouble, previewOpened, header, rendered, before: hrefBefore, after: hrefAfter });
+
+        /* Закрытие окна возвращает к панели «Файлы проекта», а не в диалог проекта. */
+        const panelOpen = `(() => {
+          const panel = document.querySelector('.files-panel');
+          return !!panel && panel.offsetParent !== null && document.querySelectorAll('.file-row').length > 0;
+        })()`;
+        const panelBefore = await evaluate(panelOpen);
+        await evaluate(`document.querySelector('.file-preview-modal .modal-close').click()`);
+        const previewClosed = await waitFor(`!document.querySelector('.file-preview-modal')`, 6000);
+        const panelAfter = await evaluate(panelOpen);
+        previewClosed && panelBefore && panelAfter
+          ? ok('закрытие окна просмотра возвращает к панели «Файлы проекта»')
+          : fail('возврат к файлам после просмотра', { previewClosed, panelBefore, panelAfter });
 
         /* «Файлы проекта» принадлежат выбранному проекту: после переключения
            в списке не должно остаться файлов прошлого проекта. */

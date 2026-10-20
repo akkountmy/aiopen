@@ -2141,6 +2141,21 @@ body.resizing {
   display: none;
 }
 
+/* Строка состояния панели файлов. Заменила всплывающие подсказки внизу экрана:
+   те вставали поверх поля ввода и закрывали текст, который человек печатал.
+   Здесь сообщение занимает своё место в потоке панели и ничего не перекрывает. */
+.files-note {
+  margin: 0 12px 6px;
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--layer-2);
+  color: var(--text-2);
+  font-size: var(--fs-12);
+  line-height: var(--lh-16);
+  overflow-wrap: anywhere;
+}
+
 .files-list {
   flex: 1;
   overflow-y: auto;
@@ -2927,13 +2942,19 @@ body.resizing {
 
 /* ------------------------------- toast ------------------------------- */
 
+/* Плашки состояния — под шапкой по центру. Раньше они висели внизу экрана и
+   перекрывали поле ввода: подсказка вылетала прямо над композером и закрывала
+   текст, который человек печатал. Сверху они ничего не перекрывают: под шапкой
+   начинается лента сообщений, а не поле ввода. */
 .toast-root {
   position: fixed;
-  bottom: 22px;
+  top: calc(var(--head-h) + 10px);
   left: 50%;
+  bottom: auto;
   transform: translateX(-50%);
   display: flex;
   flex-direction: column;
+  align-items: center;
   gap: 8px;
   z-index: 80;
   pointer-events: none;
@@ -2953,6 +2974,8 @@ body.resizing {
   color: var(--text);
   animation: toast-in 0.18s ease;
   line-height: var(--lh-22);
+  pointer-events: auto;
+  cursor: pointer;
 }
 
 .toast.error {
@@ -3572,8 +3595,11 @@ body.resizing {
   .toast-root {
     left: 10px;
     right: 10px;
-    bottom: calc(96px + env(safe-area-inset-bottom, 0px));
+    /* На телефоне плашка тоже сверху: внизу она закрывала поле ввода и клавиатуру. */
+    top: calc(var(--head-h) + 8px);
+    bottom: auto;
     transform: none;
+    align-items: stretch;
   }
   .toast {
     max-width: none;
@@ -3818,15 +3844,101 @@ body.resizing {
   overflow: hidden;
 }
 
+/* Шапка окна — как в остальном сервисе: значок типа файла, имя и строка
+   «тип · размер», справа закрытие. Имя не разъезжается на две строки. */
+.modal.file-preview-modal .modal-head {
+  gap: 11px;
+  padding: 10px 10px 10px 14px;
+  align-items: center;
+}
+
+.modal-head-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.modal-head-text .modal-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.modal-sub {
+  font-size: var(--fs-12);
+  line-height: 16px;
+  color: var(--text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pv-badge {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 40px;
+  height: 36px;
+  padding: 0 7px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--layer-2);
+  color: var(--text-2);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.pv-badge.pv-word {
+  color: #7aa7ff;
+  border-color: rgba(90, 140, 255, 0.3);
+  background: rgba(70, 120, 255, 0.13);
+}
+
+.pv-badge.pv-sheet {
+  color: #63c992;
+  border-color: rgba(80, 200, 140, 0.3);
+  background: rgba(60, 190, 120, 0.13);
+}
+
+.pv-badge.pv-slide {
+  color: #ffa268;
+  border-color: rgba(255, 150, 90, 0.3);
+  background: rgba(255, 140, 80, 0.13);
+}
+
+.pv-badge.pv-pdf {
+  color: #ff7b7b;
+  border-color: rgba(255, 110, 110, 0.3);
+  background: rgba(255, 90, 90, 0.13);
+}
+
+.pv-badge.pv-web {
+  color: #c79bff;
+  border-color: rgba(180, 130, 255, 0.3);
+  background: rgba(160, 110, 255, 0.13);
+}
+
+.pv-badge.pv-code {
+  color: #e6c877;
+  border-color: rgba(220, 190, 110, 0.3);
+  background: rgba(210, 180, 100, 0.13);
+}
+
 .file-preview {
   display: flex;
   flex-direction: column;
   gap: 10px;
   flex: 1 1 auto;
   min-height: 0;
-  padding: 12px 14px;
+  padding: 14px 16px 18px;
   overflow: auto;
   -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
 }
 
 .file-preview .preview-img {
@@ -3835,6 +3947,261 @@ body.resizing {
   max-height: 100%;
   margin: 0 auto;
   object-fit: contain;
+}
+
+/* --------------------- документ, лист и слайды --------------------- */
+
+.pv-doc {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  max-width: 760px;
+  width: 100%;
+}
+
+.pv-h {
+  color: var(--text);
+  font-weight: 600;
+  line-height: 1.28;
+  margin-top: 8px;
+}
+
+.pv-h1 {
+  font-size: 21px;
+}
+
+.pv-h2 {
+  font-size: 17px;
+}
+
+.pv-h3 {
+  font-size: 15px;
+}
+
+.pv-h4,
+.pv-h5,
+.pv-h6 {
+  font-size: 14px;
+}
+
+.pv-p {
+  margin: 0;
+  color: var(--text-2);
+  line-height: 1.62;
+}
+
+.pv-p.pv-center {
+  text-align: center;
+}
+
+.pv-p.pv-right {
+  text-align: right;
+}
+
+.pv-p.pv-justify {
+  text-align: justify;
+  text-justify: inter-word;
+}
+
+.pv-list {
+  margin: 0;
+  padding-left: 20px;
+  display: grid;
+  gap: 4px;
+  color: var(--text-2);
+  line-height: 1.55;
+}
+
+.pv-list-2 {
+  padding-left: 34px;
+}
+
+.pv-list-3 {
+  padding-left: 48px;
+}
+
+.pv-table-box {
+  max-width: 100%;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--layer-1);
+}
+
+.pv-table {
+  border-collapse: separate;
+  border-spacing: 0;
+  width: 100%;
+  font-size: var(--fs-13);
+  color: var(--text-2);
+}
+
+.pv-table th,
+.pv-table td {
+  padding: 7px 10px;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--line);
+}
+
+.pv-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--layer-2);
+  color: var(--text);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.pv-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.pv-td-line {
+  display: block;
+}
+
+.pv-td-gap {
+  height: 4px;
+}
+
+.pv-table td:has(.pv-td.pv-num),
+.pv-td.pv-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.pv-sheets {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.pv-sheet-tabs {
+  display: flex;
+  gap: 6px;
+  flex: none;
+  overflow-x: auto;
+  scrollbar-width: none;
+  padding-bottom: 2px;
+}
+
+.pv-sheet-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.pv-sheet-tab {
+  flex: none;
+  height: 28px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--text-3);
+  font: inherit;
+  font-size: var(--fs-13);
+  cursor: pointer;
+  transition: color 0.16s, background 0.16s, border-color 0.16s;
+}
+
+.pv-sheet-tab:hover {
+  color: var(--text-2);
+  border-color: var(--line-strong);
+}
+
+.pv-sheet-tab.is-active {
+  color: var(--text);
+  font-weight: 600;
+  border-color: color-mix(in srgb, var(--accent) 52%, transparent);
+  background: var(--accent-soft);
+}
+
+.pv-sheet-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+}
+
+.pv-slides {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 760px;
+  width: 100%;
+}
+
+.pv-slide {
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--layer-2);
+}
+
+.pv-slide-no {
+  font-size: var(--fs-11);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  margin-bottom: 4px;
+}
+
+.pv-slide-title {
+  color: var(--text);
+  font-weight: 600;
+  font-size: var(--fs-16);
+  line-height: 1.3;
+  margin-bottom: 6px;
+}
+
+.pv-slide .pv-list {
+  margin: 0;
+}
+
+.pv-notice {
+  margin: 0;
+  color: var(--text-3);
+  font-size: var(--fs-13);
+  line-height: 1.5;
+}
+
+/* Подсказка сверху документа Office: где читать и как править. Это спокойная
+   плашка в потоке окна, а не всплывающее окно поверх страницы. */
+.pv-hint {
+  margin: 0 0 12px;
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--layer-2);
+  color: var(--text-2);
+  font-size: var(--fs-13);
+  line-height: 1.45;
+}
+
+.md-preview {
+  max-width: 760px;
+  width: 100%;
+}
+
+/* HTML-страница: рамка занимает всё окно, как вкладка браузера. */
+.preview-frame {
+  display: block;
+  flex: 1 1 auto;
+  width: 100%;
+  min-height: 320px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+  opacity: 0;
+  transition: opacity 0.16s ease;
+}
+
+.preview-frame.is-ready {
+  opacity: 1;
 }
 
 .pdf-box {
@@ -3898,7 +4265,7 @@ body.resizing {
   border: 1px solid var(--line);
   border-radius: 8px;
   font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
-  font-size: var(--fs-13, 13px);
+  font-size: var(--fs-13);
   line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-word;
@@ -3908,7 +4275,7 @@ body.resizing {
 .preview-more {
   margin: 0;
   color: var(--text-3);
-  font-size: var(--fs-13, 13px);
+  font-size: var(--fs-13);
 }
 
 /* Формат, который телефон сам не рисует: вместо «открыть в чужой программе» —
@@ -3936,16 +4303,40 @@ body.resizing {
 }
 
 @media (max-width: 560px) {
-  .modal.file-preview-modal {
+  /* На телефоне окно просмотра — целый лист: документ читается на всю ширину,
+     а шапка и кнопки уходят под «челку» и домашнюю полосу аккуратно. */
+  .modal-root.preview-open {
+    padding: 0;
+    align-items: stretch;
+  }
+  .modal-root.preview-open .modal.file-preview-modal {
+    width: 100%;
     height: 100%;
     max-height: 100%;
+    border: none;
+    border-radius: 0;
+    box-shadow: none;
+  }
+  .modal.file-preview-modal .modal-head {
+    padding: calc(8px + env(safe-area-inset-top, 0px)) 8px 8px 14px;
+  }
+  .modal.file-preview-modal .modal-foot {
+    padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px));
   }
   .file-preview {
-    padding: 10px 12px;
+    padding: 12px 12px 16px;
   }
   /* На телефоне кнопки окна крупные: их жмут пальцем. */
   .modal.file-preview-modal .modal-foot .btn {
     flex: 1 1 auto;
+  }
+  .pv-h1 {
+    font-size: 19px;
+  }
+  .preview-frame {
+    border-radius: 0;
+    border-left: none;
+    border-right: none;
   }
 }
 
