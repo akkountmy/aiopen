@@ -565,18 +565,18 @@ try {
     drawer ? ok('ящик файлов открывается кнопкой в шапке') : fail('ящик файлов', 'не открылся');
   }
 
-  // Экспорт проекта: ссылка ведёт на архив и отдаёт его.
+  /* Экспорт проекта архивом: кнопки в шапке больше нет, но адрес архива
+     остаётся рабочим — его можно открыть вручную. */
   const exportOk = await evaluate(`(async () => {
-    window.__opened = [];
-    window.open = (u) => { window.__opened.push(u); return null; };
-    document.getElementById('exportProjectBtn').click();
-    const url = window.__opened[0] || '';
-    if (!url.includes('/download')) return { url, status: 0 };
+    const me = await (await fetch('/api/me')).json();
+    const project = (me.projects || []).find(p => (p.chats || []).length) || (me.projects || [])[0];
+    if (!project) return { url: '', status: 0 };
+    const url = '/api/projects/' + project.id + '/download';
     const res = await fetch(url);
     return { url, status: res.status };
   })()`);
   exportOk.status === 200
-    ? ok('«Скачать проект» отдаёт архив', exportOk.url)
+    ? ok('архив проекта отдаётся по адресу /download', exportOk.url)
     : fail('скачивание проекта', exportOk);
 
   /* ------------------------- 8. меню и их закрытие ------------------------- */

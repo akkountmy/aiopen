@@ -3921,9 +3921,6 @@ $('#filesPanelInput').addEventListener('change', (event) => {
   uploadToProject(event.target.files);
   event.target.value = '';
 });
-$('#exportProjectBtn').addEventListener('click', () => {
-  if (state.activeProjectId) window.open(`/api/projects/${state.activeProjectId}/download`, '_blank');
-});
 $('#sidebarToggle').addEventListener('click', () => {
   const app = $('#app');
   const willOpen = !app.classList.contains('sidebar-open');

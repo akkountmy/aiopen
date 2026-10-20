@@ -485,10 +485,13 @@ svg {
 
 /* Главная кнопка левой панели: та же высота, рамка и фон, что у заголовка
    «Файлы проекта» справа, — обе панели начинаются одинаковым блоком. */
+/* Подписи в шапках панелей стоят по центру своего блока: слева «Новый проект»,
+   справа «Файлы проекта». Блоки одной высоты и ширины, поэтому подписи
+   читаются как парные заголовки двух панелей. */
 .btn-new {
   width: 100%;
   height: 36px;
-  justify-content: flex-start;
+  justify-content: center;
   gap: 8px;
   padding: 0 10px;
   border: 1px solid var(--line);
@@ -2044,7 +2047,7 @@ body.resizing {
   align-items: center;
   gap: 6px;
   height: var(--head-h);
-  padding: 0 8px 0 10px;
+  padding: 0 10px;
   border-bottom: 1px solid var(--line);
   flex: none;
 }
@@ -2055,6 +2058,7 @@ body.resizing {
 .files-title {
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 8px;
   flex: 1;
   min-width: 0;
@@ -2083,8 +2087,11 @@ body.resizing {
   white-space: nowrap;
 }
 
+/* Справа от заголовка на настольном экране ничего нет (крестик живёт только в
+   выезжающем ящике), поэтому блок действий не занимает места и заголовок
+   растягивается на всю панель. */
 .files-head-actions {
-  display: flex;
+  display: none;
   gap: 0;
   flex: none;
 }
@@ -3018,6 +3025,26 @@ body.resizing {
   }
 }
 
+/* На настольном экране диалог и поле ввода чуть шире: боковые поля меньше,
+   сам столбец больше. Телефон и планшет эта правка не касается — там ширина
+   ограничена экраном. */
+@media (min-width: 1101px) {
+  .thread {
+    width: min(1400px, 100%);
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+
+  .composer-wrap {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+
+  .composer {
+    width: min(1400px, 100%);
+  }
+}
+
 /* Плавный выезд панели файлов: она всегда в разметке, а прячется сдвигом,
    поэтому открытие — анимация, а не мгновенная подмена разметки. */
 @media (max-width: 1100px) {
@@ -3032,6 +3059,10 @@ body.resizing {
   .files-toggle,
   .files-close {
     display: inline-flex;
+  }
+  /* В ящике у заголовка снова появляется крестик — блок действий нужен. */
+  .files-head-actions {
+    display: flex;
   }
 
   .app.with-files {
