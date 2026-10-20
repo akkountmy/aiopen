@@ -217,6 +217,7 @@ function buildUserContent(text, images) {
  * @param {string} params.workspace путь рабочей папки проекта
  * @param {{history: Array, memory: string}} params.chat
  * @param {string} params.userText текст пользователя с уже вставленными выдержками из файлов
+ * @param {string} params.filesBrief сводка по файлам проекта (что уже лежит в папке и что внутри)
  * @param {string[]} params.images data-url изображений текущего сообщения
  * @param {Function} params.emit события для UI
  * @param {AbortSignal} params.signal
@@ -227,6 +228,7 @@ export async function runTurn({
   projectName,
   userName,
   userText,
+  filesBrief = '',
   images = [],
   emit,
   signal,
@@ -279,7 +281,7 @@ export async function runTurn({
        отрезаем между шагами, а не только в начале хода. Задача закреплена,
        поэтому агент всегда видит, что от него требуется. */
     trimHistory(chat, CONTEXT.historyTokens, taskMessage);
-    const system = systemPrompt({ projectName, memory: chat.memory, userName, question: userText, facts, skillsText });
+    const system = systemPrompt({ projectName, memory: chat.memory, userName, question: userText, facts, skillsText, filesBrief });
     const messages = [{ role: 'system', content: system }, ...chat.history];
 
     let result;
@@ -446,7 +448,7 @@ export async function runTurn({
      без инструментов. */
   if (!finished) {
     try {
-      const system = systemPrompt({ projectName, memory: chat.memory, userName, question: userText, facts, skillsText });
+      const system = systemPrompt({ projectName, memory: chat.memory, userName, question: userText, facts, skillsText, filesBrief });
       const result = await requestCompletion(
         {
           model: MODEL.name,

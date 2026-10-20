@@ -25,6 +25,7 @@ import {
 import { describeFailure, generateTitle, runTurn } from './src/agent.mjs';
 import { transcribeAudio } from './src/asr.mjs';
 import { detectKind, extractDocumentText, kindLabel } from './src/docparse.mjs';
+import { projectFilesBrief } from './src/filebrief.mjs';
 import { docEngines } from './src/doc/index.mjs';
 import { approvalMessage, notifyAdmin, suspicionMessage } from './src/notify.mjs';
 import { issueOpenLink, resolveOpenLink, asciiFileName, OPEN_PREFIX } from './src/openlink.mjs';
@@ -1140,6 +1141,17 @@ async function executeRun(run, job) {
     /* Пока ждали вложения, человек мог нажать «Стоп» — тогда работу не начинаем. */
     if (controller.signal.aborted) throw Object.assign(new Error('Остановлено'), { name: 'AbortError' });
     const ctx = attachmentContext(attachments);
+    /* Что уже лежит в проекте: свежие файлы пересказаны коротко, чтобы задача
+       про загруженный файл решалась сразу, без «пришлите ещё раз». Вложения
+       этого же сообщения уже целиком в тексте — их не дублируем. */
+    let filesBrief = '';
+    try {
+      filesBrief = projectFilesBrief(store.workspaceDir(project.id), {
+        skipPaths: attachments.map((att) => att.relPath),
+      }).text;
+    } catch (error) {
+      console.error('[files]', error?.message || error);
+    }
     const userMessage = {
       role: 'user',
       content: text,
@@ -1168,6 +1180,7 @@ async function executeRun(run, job) {
       projectName: project.name,
       userName: user.displayName || user.username,
       userText,
+      filesBrief,
       images: ctx.images,
       emit: stream.emit,
       signal: controller.signal,
