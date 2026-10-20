@@ -6,6 +6,7 @@ import { checkDocument, formatCheckReport } from './doccheck.mjs';
 import { memoryToolReply } from './memory.mjs';
 import { skillBody, skillIds } from './skills.mjs';
 import { detectKind, extractDocumentText } from './docparse.mjs';
+import { analyzeData, formatAnalysis } from './analysis.mjs';
 import { createDocumentPdf, createPresentationPdf } from './pdf.mjs';
 import { docEngines, docIssues, makePdf, makePresentation, makeWord, makeWorkbook } from './doc/index.mjs';
 import { imageInfo } from './doc/image-info.mjs';
@@ -28,6 +29,7 @@ function ensureFreeSpace(extraBytes = 0) {
 }
 
 const HIDDEN = new Set(['.dshow']);
+
 
 export function resolveSafe(root, rel = '.') {
   const clean = String(rel || '.').replace(/\\/g, '/').replace(/^\/+/, '');
@@ -293,9 +295,7 @@ function runProcess(command, args, { cwd, timeoutMs, input }) {
   });
 }
 
-/* ------------------- нормализация аргументов документов ------------------- */
-
-/** Диаграмма Word: одна схема на все места, где она допустима. */
+/* ------------------- нормализация аргументов документов ------------------- *//** Диаграмма Word: одна схема на все места, где она допустима. */
 const DOCX_CHART_SCHEMA = {
   type: 'object',
   description:
@@ -712,6 +712,83 @@ export const TOOL_DEFS = [
       parameters: {
         type: 'object',
         properties: { path: { type: 'string' } },
+        required: ['path'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'analyze_data',
+      description:
+        'Анализ таблиц данных: CSV и XLSX. Читает файл потоком, поэтому работает и на 100 000+ строк, где read_file бесполезен. '
+        + 'mode=profile — профиль колонок (типы, пропуски, уникальные, мин/среднее/медиана/p95/макс, частые значения); '
+        + 'mode=query — фильтры + группировка (включая по месяцу/кварталу/году) + метрики sum/avg/min/max/median/p95/stddev/count/countDistinct + сортировка; '
+        + 'mode=sheets — какие листы в книге. Сначала profile, потом query, результат — в create_excel.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Путь к .csv или .xlsx в проекте.' },
+          mode: { type: 'string', enum: ['profile', 'query', 'sheets'], description: 'Что сделать. По умолчанию profile.' },
+          sheet: { type: 'string', description: 'Имя (или номер) листа для .xlsx. По умолчанию первый.' },
+          delimiter: { type: 'string', description: 'Разделитель CSV: ; , tab |. По умолчанию определяется сам.' },
+          encoding: { type: 'string', description: 'Кодировка CSV: utf8 (по умолчанию) или win1251.' },
+          headerRow: { type: 'integer', description: 'Номер строки с шапкой, с 1. По умолчанию 1.' },
+          filters: {
+            type: 'array',
+            description: 'Условия отбора: все должны выполняться.',
+            items: {
+              type: 'object',
+              properties: {
+                column: { type: 'string' },
+                op: { type: 'string', enum: ['eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'contains', 'startsWith', 'endsWith', 'in', 'notIn', 'between', 'empty', 'notEmpty'] },
+                value: { description: 'Значение; для in/notIn — список или строка через запятую, для between — [от, до].' },
+              },
+              required: ['column', 'op'],
+            },
+          },
+          groupBy: {
+            type: 'array',
+            description: 'До трёх колонок группировки (строкой или объектом с part для дат).',
+            items: {
+              anyOf: [
+                { type: 'string' },
+                {
+                  type: 'object',
+                  properties: {
+                    column: { type: 'string' },
+                    as: { type: 'string', description: 'Имя колонки в результате.' },
+                    part: { type: 'string', enum: ['year', 'quarter', 'month', 'week', 'day'], description: 'Разрезать дату по части.' },
+                  },
+                  required: ['column'],
+                },
+              ],
+            },
+          },
+          metrics: {
+            type: 'array',
+            description: 'До восьми метрик. Без column — count строк.',
+            items: {
+              type: 'object',
+              properties: {
+                agg: { type: 'string', enum: ['count', 'countDistinct', 'sum', 'avg', 'min', 'max', 'median', 'p95', 'stddev'] },
+                column: { type: 'string' },
+                as: { type: 'string' },
+              },
+              required: ['agg'],
+            },
+          },
+          sort: {
+            type: 'object',
+            description: 'Сортировка результата по колонке результата.',
+            properties: {
+              column: { type: 'string' },
+              desc: { type: 'boolean', description: 'По убыванию, по умолчанию true.' },
+            },
+            required: ['column'],
+          },
+          limit: { type: 'integer', description: 'Сколько групп вернуть, 1–2000. По умолчанию 50.' },
+        },
         required: ['path'],
       },
     },
@@ -1139,6 +1216,7 @@ export const TOOL_LABELS = {
   move_path: 'Перемещение',
   find_in_files: 'Поиск по файлам',
   read_document: 'Разбор документа',
+  analyze_data: 'Анализ данных',
   analyze_image: 'Распознавание изображения',
   web_search: 'Поиск в интернете',
   fetch_url: 'Загрузка страницы',
@@ -1172,6 +1250,8 @@ export function toolSummary(name, args) {
       return args.query || '';
     case 'fetch_url':
       return args.url || '';
+    case 'analyze_data':
+      return `${args.path || ''}${args.mode ? ` · ${args.mode}` : ''}`;
     case 'find_in_files':
       return args.query || '';
     case 'run_python':
@@ -1395,10 +1475,37 @@ export async function executeTool(name, args, ctx) {
         meta: { path: args.path, kind: parsed.kind },
       };
     }
+    case 'analyze_data': {
+      const full = assertInside(root, resolveSafe(root, args.path));
+      const stat = fs.statSync(full);
+      if (!stat.isFile()) throw new Error('Это не файл');
+      const result = await analyzeData({
+        filePath: full,
+        mode: args.mode,
+        sheet: args.sheet,
+        delimiter: args.delimiter,
+        encoding: args.encoding,
+        headerRow: args.headerRow,
+        filters: args.filters,
+        groupBy: args.groupBy,
+        metrics: args.metrics,
+        sort: args.sort,
+        limit: args.limit,
+      });
+      const text = formatAnalysis(result);
+      return {
+        text: truncate(text, 20000),
+        meta: {
+          path: args.path,
+          mode: result.mode,
+          rows: result.scanned ?? result.rows?.length ?? 0,
+          matched: result.matched ?? null,
+        },
+      };
+    }
     case 'analyze_image': {
       const full = assertInside(root, resolveSafe(root, args.path));
-      const ext = path.extname(args.path).toLowerCase().slice(1);
-      const mime = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', gif: 'image/gif' }[ext] || 'image/png';
+      const ext = path.extname(args.path).toLowerCase().slice(1);      const mime = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', gif: 'image/gif' }[ext] || 'image/png';
       const result = await describeImage({
         buffer: fs.readFileSync(full),
         mime,

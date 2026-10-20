@@ -303,7 +303,7 @@ test('ошибки: неверное расширение и выход из п�
   await assert.rejects(() => executeTool('create_pdf', { path: 'пусто.pdf', sections: [] }, ctx), /раздел|абзац/);
 });
 
-test('стандарты подключаются к просьбе: финансы, продукт, дизайн, схемы', async () => {
+test('стандарты подключаются к просьбе: финансы, данные, аудит, план, ресёрч', async () => {
   const { expertBlocks, systemPrompt } = await import('../src/prompt.mjs');
   const ids = (question) => expertBlocks(question).map((block) => block.id);
   assert.deepEqual(ids('обычный вопрос про погоду'), [], 'для нейтрального вопроса экспертные блоки не нужны');
@@ -311,7 +311,14 @@ test('стандарты подключаются к просьбе: финан�
   assert.deepEqual(ids('напиши PRD для мобильного приложения'), ['product']);
   assert.deepEqual(ids('сделай лендинг для студии дизайна'), ['design']);
   assert.deepEqual(ids('нарисуй блок-схему процесса согласования'), ['diagram']);
+  assert.deepEqual(ids('проанализируй выгрузку продаж за год'), ['data']);
+  assert.deepEqual(ids('составь бизнес-план кофейни на 3 года'), ['plan']);
+  assert.deepEqual(ids('проведи ресёрч рынка лизинга в Казахстане'), ['research']);
+  assert.ok(ids('проведи аудит финансовой отчётности').includes('audit'), 'просьба про аудит включает блок аудита');
+  assert.ok(!ids('посчитай юнит-экономику').includes('plan'), 'метрики не дублируют блок бизнес-плана');
   assert.ok(ids('финмодель и бэклог продукта').length <= 2, 'не больше двух экспертных блоков');
+  const audit = systemPrompt({ projectName: 'П', memory: '', userName: '', question: 'проведи аудит финансовой отчётности' });
+  assert.match(audit, /существенност/i, 'блок аудита доехал до системного промпта');
 
   const plain = systemPrompt({ projectName: 'П', memory: '', userName: '', question: 'привет' });
   assert.match(plain, /Стандарты деловых документов/);
