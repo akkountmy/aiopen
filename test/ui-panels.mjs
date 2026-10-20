@@ -19,6 +19,7 @@ const BASE = process.env.DSHOW_BASE || 'http://127.0.0.1:3131';
 const USER = process.env.DSHOW_USER || 'admin';
 const PASS = process.env.DSHOW_PASS || 'Test-pass-2026';
 const FILE_NAME = `panels-${Date.now().toString().slice(-6)}.txt`;
+const STAMP = Date.now().toString().slice(-6);
 
 const CHROME_CANDIDATES = [
   path.join(process.env['ProgramFiles'] || 'C:\\Program Files', 'Google', 'Chrome', 'Application', 'chrome.exe'),
@@ -489,6 +490,91 @@ try {
     ? ok('значок «Файлы проекта» — раскрытая папка в наборе Harness', `сетка ${icons.filesTitle.viewBox}, заливка ${icons.filesTitle.fill}`)
     : fail('значок «Файлы проекта»', JSON.stringify({ title: icons.filesTitle, toggle: icons.filesToggle }));
 
+  /* 12.7. Заголовок «Файлы проекта» — кнопка выбора проекта: раскрывает список
+     проектов, и при выборе в панели появляются файлы выбранного проекта.
+     Крестика закрытия в шапке панели нет. */
+  const PICK_FILE = `picker-${STAMP}.txt`;
+  const pickerSetup = await evaluate(`(async () => {
+    const boot = await (await fetch('/api/bootstrap')).json();
+    const current = (document.getElementById('filesProjectName') || {}).textContent || '';
+    const other = (boot.projects || []).find((project) => project.name !== current);
+    if (!other) return { missing: true };
+    await fetch('/api/projects/' + other.id + '/upload?path=' + encodeURIComponent(${JSON.stringify(PICK_FILE)}), {
+      method: 'POST',
+      headers: { 'x-filename': encodeURIComponent(${JSON.stringify(PICK_FILE)}) },
+      body: 'файл другого проекта',
+    });
+    const sidebarOrder = [...document.querySelectorAll('.project .p-name')].map((node) => node.textContent.trim());
+    return { other: other.name, current, sidebarOrder };
+  })()`);
+  if (pickerSetup.missing) {
+    fail('выбор проекта в панели файлов', 'нет второго проекта');
+  } else {
+    const noClose = await evaluate(`!document.getElementById('filesClose')`);
+    noClose
+      ? ok('крестика закрытия в шапке панели файлов нет')
+      : fail('крестик панели файлов', 'ещё в разметке');
+    await evaluate(`document.getElementById('filesProjectBtn').click()`);
+    const menuShown = await waitFor(`!!document.querySelector('.files-panel .menu')`);
+    const menuShape = menuShown
+      ? await evaluate(`(() => {
+          const menu = document.querySelector('.files-panel .menu');
+          return {
+            labels: [...menu.querySelectorAll('button')].map((b) => b.textContent.trim()),
+            expanded: document.getElementById('filesProjectBtn').getAttribute('aria-expanded'),
+          };
+        })()`)
+      : { labels: [], expanded: 'false' };
+    menuShape.labels.includes(pickerSetup.other) && menuShape.expanded === 'true'
+      ? ok('заголовок панели раскрывает список проектов', menuShape.labels.join(' / '))
+      : fail('список проектов в панели файлов', JSON.stringify(menuShape));
+    const sameOrder =
+      menuShape.labels.length === pickerSetup.sidebarOrder.length &&
+      menuShape.labels.every((label, index) => label === pickerSetup.sidebarOrder[index]);
+    sameOrder
+      ? ok('проекты в списке идут в том же порядке, что папки слева')
+      : fail('порядок проектов в списке', JSON.stringify({ menu: menuShape.labels, sidebar: pickerSetup.sidebarOrder }));
+
+    const beforePick = await evaluate(
+      `[...document.querySelectorAll('#filesList .file-row')].some((r) => r.textContent.includes(${JSON.stringify(PICK_FILE)}))`,
+    );
+    !beforePick
+      ? ok('чужого файла в панели нет до выбора проекта')
+      : fail('файл другого проекта виден заранее', PICK_FILE);
+    const picked = await evaluate(`(() => {
+      const button = [...document.querySelectorAll('.files-panel .menu button')].find((b) => b.textContent.trim() === ${JSON.stringify(pickerSetup.other)});
+      if (!button) return false;
+      button.click();
+      return true;
+    })()`);
+    const switched =
+      picked &&
+      (await waitFor(
+        `(() => {
+          const label = (document.getElementById('filesProjectName') || {}).textContent || '';
+          if (label !== ${JSON.stringify(pickerSetup.other)}) return false;
+          return [...document.querySelectorAll('#filesList .file-row')].some((r) => r.textContent.includes(${JSON.stringify(PICK_FILE)}));
+        })()`,
+        10000,
+      ));
+    switched
+      ? ok('выбранный проект показывает в панели свои файлы', pickerSetup.other)
+      : fail('переключение проекта в панели', await text('#filesList'));
+    /* Возвращаем панель к проекту диалога: кнопка-заголовок снова открывает
+       список, выбор первого проекта возвращает прежнюю подпись. */
+    await evaluate(`document.getElementById('filesProjectBtn').click()`);
+    await waitFor(`!!document.querySelector('.files-panel .menu')`);
+    await evaluate(`(() => {
+      const button = [...document.querySelectorAll('.files-panel .menu button')].find((b) => b.textContent.trim() === ${JSON.stringify(pickerSetup.current)});
+      if (button) button.click();
+    })()`);
+    const backAgain = await waitFor(
+      `(document.getElementById('filesProjectName') || {}).textContent === ${JSON.stringify(pickerSetup.current)}`,
+      8000,
+    );
+    backAgain ? ok('выбор проекта в заголовке возвращает панель назад') : fail('возврат проекта в панели', pickerSetup.current);
+  }
+
   const wide = await evaluate(`(() => {
     const main = document.querySelector('.main');
     const thread = document.querySelector('.thread');
@@ -533,6 +619,77 @@ try {
   await evaluate(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`);
   await evaluate(`document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))`);
   await waitFor(`!document.querySelector('.menu')`);
+
+  /* 14. Порядок в панели «Проекты» — по времени создания, а не по последнему
+     диалогу: работа в проекте не должна переставлять папки и диалоги. */
+  const orderNames = [`Начало-${STAMP}`, `Середина-${STAMP}`, `Конец-${STAMP}`];
+  const orderSetup = await evaluate(`(async () => {
+    const names = ${JSON.stringify(orderNames)};
+    const created = [];
+    for (const name of names) {
+      const data = await (await fetch('/api/projects', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }),
+      })).json();
+      const project = data.project;
+      created.push(project.id);
+      for (const title of ['Диалог 1', 'Диалог 2']) {
+        await fetch('/api/projects/' + project.id + '/chats', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title }),
+        });
+      }
+    }
+    return created;
+  })()`);
+  await goto(BASE + '/');
+  await waitFor(`document.querySelectorAll('.project').length >= 3`);
+  const orderOfMine = () =>
+    evaluate(`[...document.querySelectorAll('.project .p-name')]
+      .map((node) => node.textContent.trim())
+      .filter((name) => /-${STAMP}$/.test(name))`);
+  const orderBefore = await orderOfMine();
+  const orderOk = orderBefore.length === 3 && orderBefore.every((name, index) => name === orderNames[index]);
+  orderOk
+    ? ok('проекты идут в порядке создания', orderBefore.join(' / '))
+    : fail('порядок проектов до работы', JSON.stringify(orderBefore));
+
+  /* Работаем в проекте из середины списка: диалог и переименование обновляют
+     дату изменения — раньше из-за этого проект уезжал наверх. */
+  const orderTouched = await evaluate(`(async () => {
+    const boot = await (await fetch('/api/bootstrap')).json();
+    const project = (boot.projects || []).find((p) => p.name === ${JSON.stringify(orderNames[1])});
+    if (!project) return { missing: true };
+    const chats = project.chats || [];
+    if (chats.length) {
+      await fetch('/api/chats/' + chats[0].id, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: 'Диалог 1 (обновлён)' }) });
+    }
+    await fetch('/api/projects/' + project.id, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: ${JSON.stringify(orderNames[1])} }) });
+    const again = await (await fetch('/api/bootstrap')).json();
+    return { chats: (again.projects || []).find((p) => p.id === project.id).chats.map((c) => c.title) };
+  })()`);
+  await goto(BASE + '/');
+  await waitFor(`document.querySelectorAll('.project').length >= 3`);
+  const orderAfter = await orderOfMine();
+  orderAfter.length === 3 && orderAfter.every((name, index) => name === orderNames[index])
+    ? ok('после работы в проекте порядок не изменился', orderAfter.join(' / '))
+    : fail('порядок проектов после работы', JSON.stringify({ before: orderBefore, after: orderAfter }));
+  /* Новый диалог встаёт в конец списка, а не наверх. */
+  const chatOrder = !orderTouched.missing && Array.isArray(orderTouched.chats)
+    ? orderTouched.chats
+    : [];
+  chatOrder.length === 2 && /Диалог 2/.test(chatOrder[1]) && /Диалог 1/.test(chatOrder[0])
+    ? ok('диалоги идут в порядке создания', chatOrder.join(' / '))
+    : fail('порядок диалогов', JSON.stringify(chatOrder));
+
+  /* Уборка за собой: созданные для проверки порядка проекты не нужны. */
+  await evaluate(`(async () => {
+    const boot = await (await fetch('/api/bootstrap')).json();
+    for (const project of boot.projects || []) {
+      if (/-${STAMP}$/.test(String(project.name || ''))) {
+        await fetch('/api/projects/' + project.id, { method: 'DELETE' });
+      }
+    }
+    return true;
+  })()`);
 
   if (process.env.DSHOW_UI_PANELS_SHOT) {
     const shot = await cdp.send('Page.captureScreenshot', { format: 'png' });

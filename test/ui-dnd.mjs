@@ -269,6 +269,54 @@ try {
   );
   appeared ? ok('файл из перетаскивания попал в проект', FILE_NAME) : fail('загрузка перетаскиванием', 'файла нет в списке');
 
+  // 4.5. файл можно отпустить в любом месте области ответа, не только на поле
+  //      ввода: раньше зоной был сам <form id="composer">
+  const ATTACH_NAME = 'reply-drop-' + Date.now().toString().slice(-6) + '.txt';
+  const dropAnywhere = await evaluate(`(async () => {
+     const main = document.querySelector('main.main');
+     const hint = document.getElementById('dropHint');
+     const structure = {
+       hintInMain: !!hint && main.contains(hint),
+       hintInComposer: !!hint && !!document.getElementById('composer').contains(hint),
+     };
+     const before = document.querySelectorAll('#attachStrip .file-chip').length;
+     const dt = new DataTransfer();
+     dt.items.add(new File(['вложение из области ответа'], ${JSON.stringify(ATTACH_NAME)}, {type:'text/plain'}));
+     /* Бросок в ленту сообщений — мимо поля ввода. */
+     const target = document.getElementById('thread') || main;
+     target.dispatchEvent(new DragEvent('dragenter', {bubbles:true, cancelable:true, dataTransfer: dt}));
+     const highlighted = main.classList.contains('dragover');
+     const hintShown = getComputedStyle(hint).display !== 'none';
+     target.dispatchEvent(new DragEvent('drop', {bubbles:true, cancelable:true, dataTransfer: dt}));
+     await new Promise((resolve) => setTimeout(resolve, 1500));
+     const chips = [...document.querySelectorAll('#attachStrip .file-chip .fc-name')].map((n) => n.textContent);
+     return { structure, highlighted, hintShown, before, chips, added: chips.length - before };
+   })()`);
+  dropAnywhere.structure.hintInMain && !dropAnywhere.structure.hintInComposer
+    ? ok('подсказка «Отпустите файлы…» стоит в области ответа, а не в поле ввода')
+    : fail('место подсказки перетаскивания', JSON.stringify(dropAnywhere.structure));
+  dropAnywhere.highlighted && dropAnywhere.hintShown
+    ? ok('область ответа подсвечивается при перетаскивании')
+    : fail('подсветка области ответа', JSON.stringify({ highlighted: dropAnywhere.highlighted, hint: dropAnywhere.hintShown }));
+  dropAnywhere.added === 1 && dropAnywhere.chips.includes(ATTACH_NAME)
+    ? ok('файл, брошенный в область ответа, прикрепился к сообщению — ровно один раз')
+    : fail('вложение из области ответа', JSON.stringify(dropAnywhere));
+
+  // 4.6. бросок на поле ввода идёт тем же путём: один файл — одно вложение
+  const dropOnComposer = await evaluate(`(async () => {
+     const before = document.querySelectorAll('#attachStrip .file-chip').length;
+     const dt = new DataTransfer();
+     dt.items.add(new File(['вложение на поле ввода'], 'composer-drop.txt', {type:'text/plain'}));
+     const input = document.getElementById('input');
+     input.dispatchEvent(new DragEvent('drop', {bubbles:true, cancelable:true, dataTransfer: dt}));
+     await new Promise((resolve) => setTimeout(resolve, 1500));
+     const chips = document.querySelectorAll('#attachStrip .file-chip').length;
+     return { added: chips - before };
+   })()`);
+  dropOnComposer.added === 1
+    ? ok('бросок на поле ввода прикрепляет файл один раз')
+    : fail('бросок на поле ввода', JSON.stringify(dropOnComposer));
+
   // 5. вытаскивание файла из панели: dragstart должен отдать DownloadURL и ссылку
   const dragOut = await evaluate(`(() => {
      const row = Array.from(document.querySelectorAll('.file-row'))
@@ -293,6 +341,9 @@ try {
   }
 
   // 6. уборка: удаляем загруженный файл, чтобы тест не оставлял мусор
+  await evaluate(
+    `[...document.querySelectorAll('#attachStrip .file-chip button[title="Убрать"]')].forEach((b) => b.click())`,
+  );
   const cleaned = await evaluate(
     `(async () => {
        const boot = await (await fetch('/api/bootstrap')).json();

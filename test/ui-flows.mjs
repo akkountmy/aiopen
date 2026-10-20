@@ -413,6 +413,18 @@ try {
         };
         window.__linkProbe = true;
       }
+      /* Считаем запросы за файлом: одно нажатие «Скачать» — ровно один запрос,
+         иначе браузер показывает в «Загрузках» две строки одного файла. */
+      if (!window.__fetchProbe) {
+        const nativeFetch = window.fetch;
+        window.fetch = function (input, init) {
+          const url = typeof input === 'string' ? input : (input && input.url) || '';
+          if (url.includes('/file?')) window.__fileGets.push(url);
+          return nativeFetch.call(this, input, init);
+        };
+        window.__fetchProbe = true;
+      }
+      window.__fileGets = [];
       window.__downloads = [];
       window.__protocols = [];
       return true;
@@ -433,6 +445,27 @@ try {
         await new Promise((resolve) => setTimeout(resolve, 100));
       }
       return window.__downloads;
+    })()`);
+  }
+
+  /* Тройной быстрый тап по «Скачать» не должен давать три запроса и три
+     сохранения: одно нажатие — одно скачивание. */
+  async function tripleClickDownloadAndCapture(fileName) {
+    await installLinkProbe();
+    return evaluate(`(async () => {
+      const row = [...document.querySelectorAll('.file-row')].find(r => (r.querySelector('.f-name') || {}).textContent === ${JSON.stringify(fileName)});
+      if (!row) return null;
+      const button = row.querySelector('.f-actions button[aria-label^="Скачать"]');
+      if (!button) return { missing: true };
+      button.click();
+      button.click();
+      button.click();
+      for (let i = 0; i < 100 && !window.__downloads.length; i += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      /* Даём возможным лишним запросам дойти до сервера, прежде чем считать. */
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      return { downloads: window.__downloads.length, gets: window.__fileGets.length };
     })()`);
   }
 
@@ -510,6 +543,17 @@ try {
       stillHere && stillHere.app && !stillHere.path.startsWith('/api/')
         ? ok('после скачивания приложение остаётся открытым')
         : fail('после скачивания приложение осталось на месте', stillHere);
+
+      const txtTriple = await tripleClickDownloadAndCapture(FILE_NAME);
+      txtTriple && txtTriple.downloads === 1 && txtTriple.gets === 1
+        ? ok('три быстрых нажатия «Скачать» дают один запрос и одно сохранение')
+        : fail('повторные нажатия «Скачать»', txtTriple);
+
+      /* Блокировка одноразовая: после завершения скачивания кнопка снова живая. */
+      const txtAgain = await clickDownloadAndCapture(FILE_NAME);
+      txtAgain && txtAgain.length === 1
+        ? ok('после завершения скачивания кнопка снова работает')
+        : fail('повторное скачивание после паузы', txtAgain);
 
       const txtClick = await clickFileName(FILE_NAME);
       txtClick && txtClick.downloads.length === 0 && txtClick.protocols.length === 0

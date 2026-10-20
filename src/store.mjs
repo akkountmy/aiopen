@@ -726,9 +726,12 @@ class Store {
   /* ---------------- projects ---------------- */
 
   projectsFor(userId) {
+    /* Порядок — по времени создания, а не по последнему диалогу: папки слева не
+       должны переставляться после каждого разговора. Для записей без createdAt
+       (старые данные) берём updatedAt, чтобы список не прыгал. */
     return this.state.projects
       .filter((p) => p.ownerId === userId)
-      .sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
+      .sort((a, b) => String(a.createdAt || a.updatedAt || '').localeCompare(String(b.createdAt || b.updatedAt || '')));
   }
 
   getProject(id, ownerId) {
@@ -865,9 +868,11 @@ class Store {
   /* ---------------- chats ---------------- */
 
   chatsFor(projectId) {
+    /* Диалоги, как и проекты, идут по времени создания: новый разговор встаёт в
+       конец списка и не переставляет соседей наверх. */
     return this.state.chats
       .filter((c) => c.projectId === projectId)
-      .sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
+      .sort((a, b) => String(a.createdAt || a.updatedAt || '').localeCompare(String(b.createdAt || b.updatedAt || '')));
   }
 
   getChatMeta(id) {

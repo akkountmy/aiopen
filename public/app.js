@@ -65,6 +65,9 @@ const state = {
   liveStreams: new Map(),
   filesOpen: true,
   filesDrawerOpen: false,
+  /* Проект, чьи файлы показывает правая панель. Пусто — панель идёт за
+     активным проектом; выбор в заголовке панели ставит сюда id явно. */
+  filesProjectId: '',
   filesPath: '.',
   filesLoading: false,
   dragOut: false,
@@ -568,6 +571,10 @@ async function startApp(payload) {
     state.expanded.add(uiProject.id);
     state.activeProjectId = uiProject.id;
   }
+  /* Панель файлов показывает файлы проекта диалога, пока проект не выбран
+     вручную в её заголовке. */
+  state.filesProjectId = state.activeProjectId || '';
+  syncFilesProjectLabel();
   /* Задачи, которые шли в момент перезагрузки страницы: подхватываем их сразу,
      чтобы работа выглядела непрерывной. */
   for (const run of payload.runs || []) trackRun(run.id, run.chatId);
@@ -595,6 +602,67 @@ async function startApp(payload) {
 
 function activeProject() {
   return state.projects.find((project) => project.id === state.activeProjectId) || null;
+}
+
+/* Правая панель показывает файлы одного проекта, а диалог может быть открыт в
+   другом. Заголовок панели — кнопка выбора проекта: пока человек ничего не
+   выбрал, панель идёт за активным проектом; выбранный вручную проект живёт до
+   следующего переключения диалога или проекта. */
+function filesProjectId() {
+  const wanted = state.filesProjectId || state.activeProjectId || '';
+  if (wanted && state.projects.some((project) => project.id === wanted)) return wanted;
+  return state.activeProjectId || '';
+}
+
+function filesProject() {
+  const id = filesProjectId();
+  return state.projects.find((project) => project.id === id) || null;
+}
+
+/* Подпись кнопки-заголовка: имя проекта, чьи файлы видны в панели. */
+function syncFilesProjectLabel() {
+  const button = $('#filesProjectBtn');
+  const label = $('#filesProjectName');
+  if (!label) return;
+  const project = filesProject();
+  label.textContent = project?.name || 'Файлы проекта';
+  if (button) {
+    button.title = project
+      ? `Файлы проекта «${project.name}». Нажмите, чтобы выбрать другой проект`
+      : 'Выбрать проект, чьи файлы показывать';
+    button.setAttribute('aria-label', button.title);
+  }
+}
+
+/* Переключение диалога или проекта возвращает панель к проекту диалога. */
+function followActiveProject() {
+  state.filesProjectId = state.activeProjectId || '';
+  syncFilesProjectLabel();
+}
+
+/* Выбор проекта в заголовке панели: список строится в том же порядке, что и
+   папки слева, — по времени создания. */
+function openFilesProjectMenu() {
+  const anchor = $('#filesProjectBtn');
+  if (!anchor) return;
+  const current = filesProjectId();
+  const items = state.projects.map((project) => ({
+    label: project.name,
+    icon: project.id === current ? ICONS.check : '',
+    action: () => {
+      anchor.setAttribute('aria-expanded', 'false');
+      if (project.id === filesProjectId()) return;
+      state.filesProjectId = project.id;
+      state.filesPath = '.';
+      syncFilesProjectLabel();
+      loadFiles('.');
+    },
+  }));
+  if (!items.length) items.push({ label: 'Пока нет проектов', action: () => {} });
+  openContextMenu(anchor, items);
+  /* Состояние кнопки выставляем после открытия: openContextMenu сначала
+     закрывает прежние меню и сбрасывает признак раскрытия. */
+  anchor.setAttribute('aria-expanded', 'true');
 }
 
 function workflowOf(project) {
@@ -669,6 +737,8 @@ function projectNode(project) {
       state.attachments = [];
       renderAttachStrip();
       state.filesPath = '.';
+      /* Панель файлов возвращается к проекту, который открыли в диалоге. */
+      followActiveProject();
       if (state.filesOpen) loadFiles('.');
     } else if (chats.length) {
       if (state.expanded.has(project.id)) state.expanded.delete(project.id);
@@ -834,6 +904,9 @@ async function openChat(chatId) {
     state.expanded.add(state.activeProjectId);
     state.attachments = [];
     renderAttachStrip();
+    /* Диалог другого проекта — панель файлов переходит к его проекту. */
+    followActiveProject();
+    state.filesPath = '.';
     if (data.chat.run?.id) trackRun(data.chat.run.id, chatId);
     renderSidebar();
     renderThread();
@@ -861,13 +934,16 @@ async function ensureChat() {
     const created = await api('/api/projects', { method: 'POST', body: { name: 'Мой проект' } });
     state.projects.push({ ...created.project, chats: [] });
     state.activeProjectId = created.project.id;
+    followActiveProject();
   }
   const project = activeProject();
   const created = await api(`/api/projects/${state.activeProjectId}/chats`, { method: 'POST', body: {} });
   const chat = { id: created.chat.id, projectId: state.activeProjectId, title: 'Новый диалог', messages: [] };
   if (project) {
     project.chats = project.chats || [];
-    project.chats.unshift(created.chat);
+    /* Новый диалог встаёт в конец: список идёт по времени создания, а не по
+       последней активности. */
+    project.chats.push(created.chat);
   }
   state.chat = chat;
   state.activeChatId = chat.id;
@@ -1428,10 +1504,19 @@ async function syncFromServer() {
       state.chat = null;
       state.filesPath = '.';
       state.files = [];
+      state.filesProjectId = state.activeProjectId || '';
+      syncFilesProjectLabel();
       if (first) state.expanded.add(first.id);
       renderThread();
     } else if (state.activeProjectId) {
       state.expanded.add(state.activeProjectId);
+    }
+    /* Проект, выбранный в заголовке панели файлов, мог быть удалён с другого
+       устройства — возвращаем панель к проекту диалога. */
+    if (state.filesProjectId && !state.projects.some((project) => project.id === state.filesProjectId)) {
+      state.filesProjectId = state.activeProjectId || '';
+      state.filesPath = '.';
+      syncFilesProjectLabel();
     }
     /* Диалог удалён с другого устройства — вкладка не должна показывать призрак. */
     if (
@@ -1818,7 +1903,7 @@ function saveFilesUi() {
   try {
     sessionStorage.setItem(
       FILES_UI_KEY,
-      JSON.stringify({ projectId: state.activeProjectId || '', drawer: Boolean(state.filesDrawerOpen), path: state.filesPath || '.' }),
+      JSON.stringify({ projectId: filesProjectId(), drawer: Boolean(state.filesDrawerOpen), path: state.filesPath || '.' }),
     );
   } catch {
     /* Приватный режим может запрещать хранилище — панель просто не запомнится. */
@@ -1839,7 +1924,7 @@ function readFilesUi() {
 function restoreFilesUi(saved = readFilesUi()) {
   if (!saved || !saved.drawer) return false;
   if (!filesNarrow() || !state.activeProjectId) return false;
-  if (saved.projectId && saved.projectId !== state.activeProjectId) return false;
+  if (saved.projectId && saved.projectId !== filesProjectId()) return false;
   if (state.filesDrawerOpen) return false;
   state.filesDrawerOpen = true;
   state.filesPath = saved.path && saved.path !== '.' ? saved.path : '.';
@@ -1862,7 +1947,8 @@ function syncFilesPanel({ reload = false } = {}) {
   state.filesOpen = open;
   saveFilesUi();
   applyLayout();
-  if (open && reload && state.activeProjectId) {
+  syncFilesProjectLabel();
+  if (open && reload && filesProjectId()) {
     state.filesPath = '.';
     loadFiles('.');
   }
@@ -1893,25 +1979,25 @@ function filesNote(text) {
 }
 
 async function loadFiles(relPath) {
-  if (!state.activeProjectId) return;
+  const projectId = filesProjectId();
+  if (!projectId) return;
   /* Проект мог смениться, пока шёл запрос: ответ от прошлого проекта не должен
      перерисовать список уже выбранного. */
-  const projectId = state.activeProjectId;
   const list = $('#filesList');
   list.innerHTML = '<div class="files-empty"><div class="spin-lg"></div></div>';
   state.filesLoading = true;
   try {
     const data = await api(`/api/projects/${projectId}/files?path=${encodeURIComponent(relPath)}&depth=6`);
-    if (projectId !== state.activeProjectId) return;
+    if (projectId !== filesProjectId()) return;
     state.filesPath = relPath;
     state.files = data.items || [];
     renderFiles();
   } catch (error) {
-    if (projectId !== state.activeProjectId) return;
+    if (projectId !== filesProjectId()) return;
     list.innerHTML = '';
     list.appendChild(el('div', 'files-empty', error.message));
   } finally {
-    if (projectId === state.activeProjectId) state.filesLoading = false;
+    if (projectId === filesProjectId()) state.filesLoading = false;
   }
 }
 
@@ -2012,7 +2098,7 @@ function renderFiles() {
       });
       if (!ok) return;
       try {
-        await api(`/api/projects/${state.activeProjectId}/file?path=${encodeURIComponent(item.path)}`, { method: 'DELETE' });
+        await api(`/api/projects/${filesProjectId()}/file?path=${encodeURIComponent(item.path)}`, { method: 'DELETE' });
         loadFiles(state.filesPath);
       } catch (error) {
         filesNote(error.message);
@@ -2057,7 +2143,7 @@ function renderFiles() {
 
 function fileUrl(relPath, download = false) {
   const suffix = download ? '&download=1' : '';
-  return `/api/projects/${state.activeProjectId}/file?path=${encodeURIComponent(relPath)}${suffix}`;
+  return `/api/projects/${filesProjectId()}/file?path=${encodeURIComponent(relPath)}${suffix}`;
 }
 
 /* Тип файла нужен, чтобы система знала, чем открыть файл, вытащенный из панели. */
@@ -2126,15 +2212,20 @@ async function saveFileFromServer(url, name) {
    Скачивание — единственный путь к правке в Word/Excel: открывать документ
    сразу во внешней программе больше нельзя (см. ниже). */
 function openFileViewer(item) {
-  /* Двойной щелчок и случайный повторный тап не должны скачивать файл дважды. */
-  const key = `${state.activeProjectId}:${item.path}`;
-  const now = Date.now();
-  if (key === openFileViewer.lastKey && now - openFileViewer.lastAt < 600) return;
-  openFileViewer.lastKey = key;
-  openFileViewer.lastAt = now;
-  saveFileFromServer(fileUrl(item.path, true), item.name).catch((error) => {
-    filesNote(`${error.message}. Попробуйте ещё раз.`);
-  });
+  /* Один файл — одно сохранение. Пока запрос за файлом не завершился, повторные
+     нажатия (двойной щелчок, второй тап, кнопка в окне просмотра) игнорируются:
+     иначе браузер показывал в «Загрузках» две строки одного файла. */
+  const key = `${filesProjectId()}:${item.path}`;
+  const busy = openFileViewer.busy || (openFileViewer.busy = new Set());
+  if (busy.has(key)) return;
+  busy.add(key);
+  saveFileFromServer(fileUrl(item.path, true), item.name)
+    .catch((error) => {
+      filesNote(`${error.message}. Попробуйте ещё раз.`);
+    })
+    .finally(() => {
+      busy.delete(key);
+    });
 }
 
 /* Тач-устройство определяем по трём признакам: сенсорные экраны бывают и с
@@ -2332,6 +2423,25 @@ const PV_TONE = {
 };
 
 const PV_CODE = /^(json|js|mjs|cjs|ts|css|py|ps1|sh|sql|bat|xml|ya?ml|ini|conf|env|srt)$/i;
+
+/* Вид файла задаёт пропорции окна просмотра. Таблице нужен размах по горизонту:
+   в узком окне колонки сжимаются и цифры читаются по одной. Документу Word —
+   наоборот: окно пошире, но строка текста остаётся удобной длины. Страница
+   живёт почти как вкладка браузера. На телефоне окно и так занимает весь экран,
+   поэтому там важнее не ширина, а прокрутка таблицы внутри окна. */
+const PV_KIND = {
+  xlsx: 'sheet', xlsm: 'sheet', xls: 'sheet', xlsb: 'sheet', ods: 'sheet', csv: 'sheet', tsv: 'sheet',
+  docx: 'word', docm: 'word', doc: 'word', rtf: 'word', odt: 'word', dotx: 'word', dotm: 'word',
+  pptx: 'slide', pptm: 'slide', ppt: 'slide', ppsx: 'slide', odp: 'slide',
+  pdf: 'pdf',
+  html: 'web', htm: 'web',
+};
+
+function previewKindOf(name) {
+  const ext = fileExtOf(name);
+  if (PV_KIND[ext]) return PV_KIND[ext];
+  return PREVIEW_IMAGE.test(name) ? 'image' : 'text';
+}
 
 function fileExtOf(name) {
   return String(name || '').split('.').pop().toLowerCase();
@@ -2628,6 +2738,7 @@ function openFilePreview(item) {
   const url = fileUrl(item.path, false);
   const body = el('div', 'file-preview');
   const ext = fileExtOf(item.name);
+  const kind = previewKindOf(item.name);
 
   /* Документ Office читается здесь же — без Word и без окна безопасности.
      Для правки человеку нужен сам файл, поэтому подсказываем кнопку «Скачать». */
@@ -2665,17 +2776,24 @@ function openFilePreview(item) {
     subtitle: pvSummary(item),
     body,
     wide: true,
-    className: 'file-preview-modal',
+    /* Ширина и высота окна — по виду файла: таблица разворачивается по
+       горизонту, документ Word держит удобную строку, страница идёт во всю
+       высоту экрана без нижней полосы кнопок (закрыть можно крестиком в шапке,
+       клавишей Esc или тапом мимо окна). */
+    className: `file-preview-modal pv-kind-${kind}`,
     rootClass: 'preview-open',
-    actions: [
-      {
-        label: 'Скачать',
-        onClick: () => {
-          openFileViewer(item);
-        },
-      },
-      { label: 'Закрыть', kind: 'primary' },
-    ],
+    actions:
+      kind === 'web'
+        ? []
+        : [
+            {
+              label: 'Скачать',
+              onClick: () => {
+                openFileViewer(item);
+              },
+            },
+            { label: 'Закрыть', kind: 'primary' },
+          ],
     onClose: () => {
       if (reopenDrawer && !state.filesDrawerOpen) {
         state.filesDrawerOpen = true;
@@ -2691,7 +2809,8 @@ function openFilePreview(item) {
 async function uploadToProject(fileList, dir = state.filesPath) {
   const files = Array.from(fileList || []);
   if (!files.length) return;
-  if (!state.activeProjectId) {
+  const projectId = filesProjectId();
+  if (!projectId) {
     filesNote('Сначала выберите проект — файл добавится в его папку.');
     return;
   }
@@ -2706,7 +2825,7 @@ async function uploadToProject(fileList, dir = state.filesPath) {
     for (const file of files) {
       try {
         const rel = folder ? `${folder}/${file.name}` : file.name;
-        const response = await fetch(`/api/projects/${state.activeProjectId}/upload?path=${encodeURIComponent(rel)}`, {
+        const response = await fetch(`/api/projects/${projectId}/upload?path=${encodeURIComponent(rel)}`, {
           method: 'POST',
           credentials: 'same-origin',
           headers: { 'Content-Type': file.type || 'application/octet-stream', 'X-Filename': encodeURIComponent(file.name) },
@@ -2739,6 +2858,9 @@ let menuAnchor = null;
 function closeMenus() {
   menuAnchor = null;
   $$('.menu').forEach((menu) => menu.remove());
+  /* Кнопка-заголовок панели файлов объявляет себя раскрытой, пока меню открыто. */
+  const filesButton = $('#filesProjectBtn');
+  if (filesButton) filesButton.setAttribute('aria-expanded', 'false');
 }
 
 /* Панель, из которой вызвана карточка или меню: слева «Проекты», справа «Файлы
@@ -2885,7 +3007,9 @@ function openModal({ title, subtitle, headLead, body, actions = [], wide = false
     foot.appendChild(button);
     apiActions[action.id || action.label] = () => button.click();
   }
-  modal.appendChild(foot);
+  /* Нет кнопок — нет и нижней полосы: у окна просмотра HTML-страницы остаётся
+     одна шапка с крестиком, а сама страница занимает всю высоту. */
+  if (actions.length) modal.appendChild(foot);
   root.appendChild(modal);
   modalCloseHook = typeof onClose === 'function' ? onClose : null;
 
@@ -3304,6 +3428,10 @@ async function deleteProject(project, anchor = null) {
       if (first) {
         state.activeProjectId = first.id;
         state.expanded.add(first.id);
+        /* Удалили проект, чьи файлы показывала панель, — переходим к живому. */
+        followActiveProject();
+        state.filesPath = '.';
+        if (state.filesOpen) loadFiles('.');
         if (first.chats?.[0]) await openChat(first.chats[0].id);
         else {
           renderThread();
@@ -3313,6 +3441,13 @@ async function deleteProject(project, anchor = null) {
         renderThread();
         updateCrumbs();
       }
+    }
+    /* Панель показывала файлы удалённого проекта — возвращаем её к активному. */
+    if (state.filesProjectId === project.id) {
+      state.filesProjectId = state.activeProjectId || '';
+      state.filesPath = '.';
+      syncFilesProjectLabel();
+      if (state.filesOpen) loadFiles('.');
     }
     renderSidebar();
   } catch (error) {
@@ -3325,7 +3460,7 @@ async function newChatFor(project) {
   try {
     const created = await api(`/api/projects/${project.id}/chats`, { method: 'POST', body: {} });
     project.chats = project.chats || [];
-    project.chats.unshift(created.chat);
+    project.chats.push(created.chat);
     state.activeProjectId = project.id;
     state.expanded.add(project.id);
     await openChat(created.chat.id);
@@ -3394,7 +3529,8 @@ function createProjectModal({ workflowId = '', anchor = null } = {}) {
         body: { name, workflowId: chosenWorkflow || null },
       });
       const project = { ...created.project, chats: [] };
-      state.projects.unshift(project);
+      /* Проекты идут по времени создания — новый встаёт в конец списка. */
+      state.projects.push(project);
       state.activeProjectId = project.id;
       state.activeChatId = null;
       state.chat = null;
@@ -3405,6 +3541,8 @@ function createProjectModal({ workflowId = '', anchor = null } = {}) {
       renderSidebar();
       renderThread();
       updateCrumbs();
+      followActiveProject();
+      state.filesPath = '.';
       if (state.filesOpen) loadFiles('.');
       /* Телефон: проект создаётся из ящика «Проекты», и ящик закрывается сам —
          иначе новый диалог оставался под ним: поля ввода не видно, сообщение
@@ -3726,6 +3864,7 @@ function resetClientState() {
   state.chat = null;
   state.attachments = [];
   state.filesPath = '.';
+  state.filesProjectId = '';
   state.filesDrawerOpen = false;
   state.filesLoading = false;
   /* Запомненное состояние панели принадлежит прошлому аккаунту — не переносим. */
@@ -4391,8 +4530,9 @@ $('#backdrop').addEventListener('click', () => {
   $('#app').classList.remove('sidebar-open');
   closeFilesDrawer();
 });
-/* Крестик в заголовке ящика: тем же путём, что затемнение и кнопка-папка. */
-$('#filesClose').addEventListener('click', () => closeFilesDrawer());
+/* Заголовок панели «Файлы проекта» — кнопка выбора проекта: раскрывает список
+   проектов, и в панели появляются файлы выбранного. */
+$('#filesProjectBtn').addEventListener('click', () => openFilesProjectMenu());
 /* ------------------------------ panel resize ------------------------------ */
 /* Полная версия: ширину панели проектов и панели файлов можно тянуть мышью
    за разделитель, ширины запоминаются. На телефоне панели — выезжающие ящики,
@@ -4758,36 +4898,60 @@ document.addEventListener('keydown', (event) => {
     return;
   }
   if (!$('#modalRoot').classList.contains('hidden')) closeModal();
+  /* Выезжающий ящик файлов закрывается и с клавиатуры: крестика в шапке панели
+     больше нет. */
+  else closeFilesDrawer();
 });
 
 /* drag and drop + paste */
 
-const composer = $('#composer');
-['dragenter', 'dragover'].forEach((type) => {
-  composer.addEventListener(type, (event) => {
-    event.preventDefault();
-    composer.classList.add('dragover');
-  });
-});
-['dragleave', 'drop'].forEach((type) => {
-  composer.addEventListener(type, (event) => {
-    event.preventDefault();
-    if (type === 'dragleave' && composer.contains(event.relatedTarget)) return;
-    composer.classList.remove('dragover');
-  });
-});
-composer.addEventListener('drop', (event) => {
-  if (event.dataTransfer?.files?.length) uploadFiles(event.dataTransfer.files);
-});
-
-/* Перетаскивание файлов с компьютера в панель «Файлы проекта»: файл сразу
-   сохраняется в проект (в ту папку, которая открыта), а не прикрепляется к сообщению. */
-const filesPanel = $('#filesPanel');
+/* Файл с компьютера можно отпустить где угодно в области ответа: и над полем
+   ввода, и в любом месте переписки. Раньше зоной был только сам <form
+   id="composer">, поэтому бросок в список сообщений ничего не делал.
+   Обработчики живут на <main>: поле ввода — его часть, так что оба случая
+   проходят через один обработчик и файл никогда не уходит дважды. */
+const mainArea = document.querySelector('main.main') || $('#scroll')?.closest('main');
 
 function dragCarriesFiles(event) {
   return Array.from(event.dataTransfer?.types || []).includes('Files');
 }
 
+/* Перетаскивание файлов с компьютера в панель «Файлы проекта»: файл сразу
+   сохраняется в проект (в ту папку, которая открыта), а не прикрепляется к сообщению. */
+const filesPanel = $('#filesPanel');
+
+function markDropZone(active) {
+  if (!mainArea) return;
+  mainArea.classList.toggle('dragover', active);
+}
+
+if (mainArea) {
+  ['dragenter', 'dragover'].forEach((type) => {
+    mainArea.addEventListener(type, (event) => {
+      if (!dragCarriesFiles(event)) return;
+      /* Новый drag с файлами сбрасывает след от перетаскивания файла из панели. */
+      state.dragOut = false;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = 'copy';
+      markDropZone(true);
+    });
+  });
+  ['dragleave', 'drop'].forEach((type) => {
+    mainArea.addEventListener(type, (event) => {
+      if (type === 'dragleave' && mainArea.contains(event.relatedTarget)) return;
+      markDropZone(false);
+    });
+  });
+  mainArea.addEventListener('drop', (event) => {
+    const files = event.dataTransfer?.files;
+    if (!files || !files.length) return;
+    event.preventDefault();
+    markDropZone(false);
+    /* Файл вытащили из панели проекта и бросили в диалог — это не загрузка. */
+    if (state.dragOut) return;
+    uploadFiles(files);
+  });
+}
 ['dragenter', 'dragover'].forEach((type) => {
   filesPanel.addEventListener(type, (event) => {
     if (!dragCarriesFiles(event)) return;

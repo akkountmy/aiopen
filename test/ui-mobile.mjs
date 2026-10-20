@@ -237,10 +237,14 @@ try {
   filesDrawer.filesOpen && !filesDrawer.sidebarOpen && filesDrawer.backdrop !== 'none'
     ? ok('открыт один ящик, остальное затемнено')
     : fail('состояние ящиков', JSON.stringify(filesDrawer));
-  filesDrawer.close && filesDrawer.close.display !== 'none' && filesDrawer.close.width >= 32
-    ? ok('в ящике файлов есть крестик', `${filesDrawer.close.width}×${filesDrawer.close.display}`)
+  /* Крестика в шапке панели больше нет: в ящике её закрывают затемнение,
+     кнопка-папка в шапке и Escape. */
+  filesDrawer.close === null
+    ? ok('в шапке панели файлов нет крестика закрытия')
     : fail('крестик ящика файлов', JSON.stringify(filesDrawer.close));
-  await evaluate(`document.getElementById('filesClose').click()`);
+  await evaluate(
+    `document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`,
+  );
   // visibility переключается по завершении выезда (0,28 s), поэтому ждём её, а не класс.
   const filesClosed = await waitFor(`(() => {
     const panel = document.getElementById('filesPanel');
@@ -249,8 +253,8 @@ try {
   })()`);
   const closedState = await evaluate(DRAWERS);
   filesClosed && closedState.files.visibility === 'hidden'
-    ? ok('крестик закрывает ящик файлов')
-    : fail('закрытие ящика крестиком', JSON.stringify(closedState.files));
+    ? ok('Escape закрывает ящик файлов')
+    : fail('закрытие ящика файлов', JSON.stringify(closedState.files));
 
   // 4. файл в приложении-ярлыке: тап открывает своё окно просмотра, а
   //    «Скачать» оттуда не уводит из приложения. Раньше ссылка отдавала файл

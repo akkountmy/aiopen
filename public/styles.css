@@ -1872,7 +1872,9 @@ body.resizing {
   box-shadow: 0 0 0 3px rgba(86, 134, 254, 0.08);
 }
 
-.composer.dragover {
+/* Пока над диалогом держат файл, поле ввода подсвечивается тем же акцентом:
+   видно, куда именно уйдёт вложение. */
+.main.dragover .composer {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px rgba(86, 134, 254, 0.12);
 }
@@ -2049,21 +2051,27 @@ body.resizing {
   border-color: rgba(78, 209, 126, 0.35);
 }
 
+/* Подсказка о перетаскивании — одна на всю область ответа: файл можно
+   отпустить где угодно в диалоге, не только над полем ввода. */
 .drop-hint {
   position: absolute;
-  inset: 0;
+  inset: 8px;
   display: none;
   align-items: center;
   justify-content: center;
-  border-radius: var(--radius-lg);
+  padding: 16px;
+  text-align: center;
+  border: 2px dashed var(--accent);
+  border-radius: var(--radius);
   background: var(--overlay);
-  color: var(--text-2);
-  font-size: var(--fs-13);
-  pointer-events: none;
+  color: var(--text);
+  font-size: var(--fs-14);
   line-height: var(--lh-20);
+  pointer-events: none;
+  z-index: 6;
 }
 
-.composer.dragover .drop-hint {
+.main.dragover .drop-hint {
   display: flex;
 }
 
@@ -2089,12 +2097,13 @@ body.resizing {
 }
 
 /* Заголовок панели оформлен тем же блоком, что кнопка «Новый проект» слева:
-   та же высота, рамка, фон, скругление и иконка папки. Так обе панели
-   начинаются одинаково, и по иконке видно, что здесь файлы проекта. */
+   та же высота, рамка, фон, скругление и иконка папки. Это не подпись, а
+   кнопка выбора проекта: она раскрывает список и показывает файлы выбранного
+   проекта, поэтому у неё есть шеврон и курсор-указатель. */
 .files-title {
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
   gap: 8px;
   flex: 1;
   min-width: 0;
@@ -2107,6 +2116,21 @@ body.resizing {
   font-size: var(--fs-14);
   font-weight: 500;
   line-height: var(--lh-22);
+  cursor: pointer;
+  text-align: left;
+}
+
+.files-title:hover {
+  background: var(--layer-hover);
+}
+
+.files-title[aria-expanded='true'] {
+  background: var(--layer-3);
+}
+
+.files-title:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 
 .files-title svg {
@@ -2116,6 +2140,17 @@ body.resizing {
   color: var(--text-2);
 }
 
+/* Шеврон выбора прижат к правому краю: по нему видно, что это выпадающий список. */
+.files-title svg.chev {
+  width: 14px;
+  height: 14px;
+  margin-left: auto;
+  color: var(--text-4);
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+}
+
 .files-title span {
   min-width: 0;
   overflow: hidden;
@@ -2123,32 +2158,9 @@ body.resizing {
   white-space: nowrap;
 }
 
-/* Справа от заголовка на настольном экране ничего нет (крестик живёт только в
-   выезжающем ящике), поэтому блок действий не занимает места и заголовок
-   растягивается на всю панель. */
-.files-head-actions {
-  display: none;
-  gap: 0;
-  flex: none;
-}
-
-.files-head-actions .btn-icon {
-  /* Кнопка «Скачать» — ровно тот же блок, что заголовок «Файлы проекта»:
-     её hover-фон не должен быть меньше соседнего блока. */
-  width: 36px;
-  height: 36px;
-}
-
-.files-head-actions svg {
-  width: 16px;
-  height: 16px;
-}
-
-/* Крестик закрытия: у постоянной правой панели закрывать нечего, поэтому он
-   появляется только в выезжающем ящике (до 1100 px, см. медиазапрос). */
-.files-close {
-  display: none;
-}
+/* Крестика закрытия в панели нет: на широком экране закрывать нечего, а в
+   выезжающем ящике панель закрывают затемнением, кнопкой-папкой в шапке и
+   Escape. */
 
 .files-crumb {
   padding: 8px 16px 4px;
@@ -3117,13 +3129,8 @@ body.resizing {
   .resizer {
     display: none;
   }
-  .files-toggle,
-  .files-close {
+  .files-toggle {
     display: inline-flex;
-  }
-  /* В ящике у заголовка снова появляется крестик — блок действий нужен. */
-  .files-head-actions {
-    display: flex;
   }
 
   .app.with-files {
@@ -3526,26 +3533,17 @@ body.resizing {
   /* ---------------------------- панель файлов ---------------------------- */
   /* На телефоне панель — такой же выезжающий ящик справа, как «Проекты»
      слева: та же ширина (--drawer), те же скругления у внутреннего края и
-     затемнение. Закрытие — крестиком в её заголовке. */
+     затемнение. Закрытие — затемнением, кнопкой-папкой в шапке или Escape. */
   .files-panel {
     width: var(--drawer);
     border-radius: var(--radius-lg) 0 0 var(--radius-lg);
     padding-top: env(safe-area-inset-top, 0px);
   }
   .files-head {
-    /* Крестик в ящике не должен прилипать к скруглённому краю. */
-    padding: 0 8px 0 10px;
+    padding: 0 10px;
   }
   .files-title {
     height: 40px;
-  }
-  .files-head-actions .btn-icon {
-    width: 40px;
-    height: 40px;
-  }
-  .files-head-actions svg {
-    width: 18px;
-    height: 18px;
   }
   .files-crumb {
     padding: 10px 14px 4px;
@@ -3856,9 +3854,33 @@ body.resizing {
 /* --------------------- просмотр файла в приложении --------------------- */
 
 /* Окно просмотра высокое, но не во весь экран: документ должен читаться, а
-   кнопка «Закрыть» — всегда быть на месте. */
+   кнопка «Закрыть» — всегда быть на месте. Ширина зависит от того, что внутри
+   (правила ниже), поэтому базовая ширина приличная — это не форма с полями. */
 .modal.file-preview-modal {
-  height: min(84vh, 760px);
+  width: min(880px, 90vw);
+  height: min(84dvh, 760px);
+  max-height: none;
+}
+
+/* Таблица Excel — самое широкое окно: в узком колонки сжимаются, и цифры
+   читаются по одной. Страница — почти вкладка браузера, тоже с размахом. */
+.modal.file-preview-modal.pv-kind-sheet {
+  width: min(1240px, 94vw);
+  height: min(88dvh, 900px);
+}
+
+.modal.file-preview-modal.pv-kind-web {
+  width: min(1180px, 94vw);
+  height: min(90dvh, 940px);
+}
+
+/* PDF и картинки живут по высоте страницы: лишняя ширина им ничего не даёт. */
+.modal.file-preview-modal.pv-kind-pdf {
+  width: min(820px, 86vw);
+}
+
+.modal.file-preview-modal.pv-kind-image {
+  width: min(960px, 92vw);
 }
 
 .modal.file-preview-modal .modal-body {
@@ -3983,6 +4005,14 @@ body.resizing {
   gap: 7px;
   max-width: 760px;
   width: 100%;
+}
+
+/* Документ Word: окно шире, но строка текста остаётся удобной длины — глазам
+   не приходится бегать от края до края. Текст чуть крупнее, чем в формах. */
+.pv-kind-word .pv-doc {
+  max-width: 780px;
+  margin: 0 auto;
+  font-size: 15px;
 }
 
 .pv-h {
@@ -4153,6 +4183,23 @@ body.resizing {
   min-height: 0;
 }
 
+/* Таблица Excel: прокрутка живёт внутри окна, поэтому строка заголовков
+   остаётся на верху листа, пока листаешь строки. Длинный лист не тянет за
+   собой всё окно, а короткий не отращивает пустую рамку. */
+.pv-kind-sheet .file-preview {
+  overflow: hidden;
+}
+
+.pv-kind-sheet .pv-sheet-body {
+  flex: 1 1 auto;
+}
+
+.pv-kind-sheet .pv-sheet-body > .pv-table-box {
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+
 .pv-slides {
   display: flex;
   flex-direction: column;
@@ -4228,6 +4275,22 @@ body.resizing {
 
 .preview-frame.is-ready {
   opacity: 1;
+}
+
+/* HTML-страница без нижних кнопок: рамка занимает окно целиком, без полей и
+   скруглений — как вкладка браузера. */
+.pv-kind-web .file-preview {
+  padding: 0;
+  overflow: hidden;
+}
+
+.pv-kind-web .preview-frame {
+  border: none;
+  border-radius: 0;
+}
+
+.pv-kind-web .preview-status {
+  padding: 24px 16px;
 }
 
 .pdf-box {
@@ -4355,6 +4418,12 @@ body.resizing {
   /* На телефоне кнопки окна крупные: их жмут пальцем. */
   .modal.file-preview-modal .modal-foot .btn {
     flex: 1 1 auto;
+  }
+  /* Таблица на телефоне: ячейки плотнее — в экран входит больше колонок, а
+     остальные достаются прокруткой внутри окна. */
+  .pv-table th,
+  .pv-table td {
+    padding: 6px 8px;
   }
   .pv-h1 {
     font-size: 19px;
