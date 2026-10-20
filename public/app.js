@@ -1949,11 +1949,43 @@ function mimeOf(fileName) {
   return map[ext] || 'application/octet-stream';
 }
 
-/* Клик по кнопке «Скачать» сохраняет оригинал: браузер отдаёт файл системе, и
-   дальше его открывает программа по умолчанию — на компьютере или телефоне.
-   Двойной щелчок по строке открывает документ сразу в Office по протоколу
-   ms-word/ms-excel/ms-powerpoint; для этого ему нужна короткая подписанная
-   ссылка, потому что у Word и Excel нет cookie браузера. */
+/* Сохранение файла внутрь устройства без выхода из приложения.
+
+   Раньше кнопка «Скачать» отдавала системе прямую ссылку на файл: в
+   приложении-ярлыке (и на телефоне, и на компьютере) это открывало чужое окно
+   «чем открыть файл» — уже не наше приложение, без «назад» и без «закрыть».
+   Вернуться оттуда было нечем, приходилось закрывать и открывать ярлык.
+
+   Теперь файл сначала забирается внутрь приложения обычным fetch, а дальше
+   сохраняется из памяти (blob): окно приложения остаётся на месте со всем
+   разговором, загрузка уходит в «Загрузки» — и там уже человек сам решает,
+   чем открывать. */
+function saveBlob(blob, name) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = name;
+  link.rel = 'noopener';
+  link.style.display = 'none';
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  /* Ссылку отпускаем не мгновенно: браузеру нужно успеть начать сохранение. */
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+}
+
+/* Забрать файл у сервера и сразу сохранить. Возвращает имя файла. */
+async function saveFileFromServer(url, name) {
+  const response = await fetch(url, { credentials: 'same-origin' });
+  if (!response.ok) throw new Error(`Не удалось скачать «${name}» (${response.status})`);
+  saveBlob(await response.blob(), name);
+  return name;
+}
+
+/* Клик по кнопке «Скачать» сохраняет оригинал к себе. Двойной щелчок по строке
+   открывает документ сразу в Office по протоколу ms-word/ms-excel/ms-powerpoint;
+   для этого ему нужна короткая подписанная ссылка, потому что у Word и Excel
+   нет cookie браузера. */
 function openFileViewer(item) {
   /* Двойной щелчок и случайный повторный тап не должны скачивать файл дважды. */
   const key = `${state.activeProjectId}:${item.path}`;
@@ -1961,15 +1993,10 @@ function openFileViewer(item) {
   if (key === openFileViewer.lastKey && now - openFileViewer.lastAt < 600) return;
   openFileViewer.lastKey = key;
   openFileViewer.lastAt = now;
-  const link = document.createElement('a');
-  link.href = fileUrl(item.path, true);
-  link.download = item.name;
-  link.rel = 'noopener';
-  link.style.display = 'none';
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  toast(`«${item.name}» скачивается — откройте файл в программе по умолчанию.`, 'ok');
+  toast(`«${item.name}» сохраняется в «Загрузки»…`, 'ok');
+  saveFileFromServer(fileUrl(item.path, true), item.name)
+    .then((name) => toast(`«${name}» сохранён в «Загрузки» — приложение можно не закрывать.`, 'ok'))
+    .catch((error) => toast(`${error.message}. Попробуйте ещё раз.`));
 }
 
 const OFFICE_OPENERS = [
@@ -2014,10 +2041,11 @@ async function openInOffice(item) {
   }
   const opener = officeOpener(item.name);
   if (!opener) {
-    /* Не Office: PDF и картинки показываем в новой вкладке браузера, остальное
-       отдаём системе как обычное скачивание — один раз. */
+    /* Не Office: PDF, картинки и текст показываем в своём окне внутри
+       приложения — новая вкладка и чужие программы оставляют человека вне
+       приложения, откуда нет ни «назад», ни «закрыть». Остальное сохраняем. */
     if (/\.(pdf|png|jpe?g|webp|gif|bmp|svg|txt|md|html?)$/i.test(item.name)) {
-      window.open(fileUrl(item.path, false), '_blank', 'noopener');
+      openFilePreview(item);
       return;
     }
     openFileViewer(item);

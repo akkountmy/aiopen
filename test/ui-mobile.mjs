@@ -252,7 +252,91 @@ try {
     ? ok('крестик закрывает ящик файлов')
     : fail('закрытие ящика крестиком', JSON.stringify(closedState.files));
 
-  // 3. уборка: свой проект удаляем, чужие не трогаем
+  // 4. файл в приложении-ярлыке: тап открывает своё окно просмотра, а
+  //    «Скачать» оттуда не уводит из приложения. Раньше ссылка отдавала файл
+  //    системе: открывалось чужое окно «чем открыть файл», из которого не было
+  //    ни «назад», ни «закрыть» — оставалось перезапускать ярлык.
+  const PHONE_FILE = 'мобильный-файл.txt';
+  await cdp.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
+  /* Без этого Chrome не считает указатель грубым, и тап по строке файла не
+     доходит до мобильного поведения (двойной щелчок — это компьютер). */
+  await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 });
+  await goto(BASE + '/');
+  await waitFor(`!!document.getElementById('app') && !document.getElementById('app').classList.contains('hidden')`);
+  const fileUploaded = await evaluate(
+    `(async () => {
+       const res = await fetch('/api/projects/' + ${JSON.stringify(target.id)} + '/upload?path=' + encodeURIComponent(${JSON.stringify(PHONE_FILE)}), {
+         method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: 'файл для проверки мобильной версии',
+       });
+       return res.status;
+     })()`,
+  );
+  fileUploaded === 200 ? ok('файл для мобильной проверки загружен') : fail('загрузка файла на телефоне', fileUploaded);
+  // Встаём в свой проект и открываем ящик «Файлы проекта».
+  await evaluate(`(() => {
+     const row = [...document.querySelectorAll('.project-row')].find(r => r.textContent.includes('Проверка мобильной версии'));
+     if (row) row.click();
+     return !!row;
+   })()`);
+  await sleep(600);
+  await evaluate(`document.getElementById('filesBtn').click()`);
+  await waitFor(`document.getElementById('app').classList.contains('files-open')`);
+  const fileSeen = await waitFor(`[...document.querySelectorAll('.file-row .f-name')].some(n => n.textContent === ${JSON.stringify(PHONE_FILE)})`, 8000);
+  fileSeen ? ok('файл виден в ящике на телефоне') : fail('файл не появился в ящике', await evaluate(`document.getElementById('filesList').innerText`));
+
+  if (fileSeen) {
+    // Тап по строке на телефоне: своё окно просмотра, без перехода на файл.
+    await evaluate(`(() => {
+       window.__downloads = [];
+       if (!window.__linkProbe) {
+         const native = HTMLAnchorElement.prototype.click;
+         HTMLAnchorElement.prototype.click = function () {
+           if (this.hasAttribute('download')) { window.__downloads.push({ href: this.href, name: this.download }); return; }
+           return native.call(this);
+         };
+         window.__linkProbe = true;
+       }
+       const row = [...document.querySelectorAll('.file-row')].find(r => (r.querySelector('.f-name') || {}).textContent === ${JSON.stringify(PHONE_FILE)});
+       row.querySelector('.f-name').click();
+       return true;
+     })()`);
+    const previewOpen = await waitFor(`!!document.querySelector('.file-preview-modal')`, 8000);
+    previewOpen ? ok('тап по файлу открывает своё окно просмотра') : fail('окно просмотра не открылось');
+    const stillApp = await evaluate(`({ path: location.pathname, app: !!document.getElementById('composer') })`);
+    stillApp && stillApp.app && !stillApp.path.startsWith('/api/')
+      ? ok('после тапа по файлу приложение на месте')
+      : fail('тап по файлу увёл из приложения', stillApp);
+
+    // «Скачать» из окна просмотра: сохраняется из памяти приложения.
+    const saved = await evaluate(`(async () => {
+       const button = [...document.querySelectorAll('.file-preview-modal button')].find(b => b.textContent.trim() === 'Скачать');
+       if (!button) return { missing: true };
+       button.click();
+       for (let i = 0; i < 100 && !window.__downloads.length; i += 1) await new Promise((r) => setTimeout(r, 100));
+       return { downloads: window.__downloads, path: location.pathname, app: !!document.getElementById('composer') };
+     })()`);
+    saved && saved.downloads && saved.downloads.length === 1 && /^blob:/.test(saved.downloads[0].href) && saved.downloads[0].name === PHONE_FILE
+      ? ok('«Скачать» сохраняет файл, не открывая чужие окна')
+      : fail('«Скачать» на телефоне', saved);
+    saved && saved.app && !saved.path.startsWith('/api/')
+      ? ok('после скачивания приложение остаётся открытым')
+      : fail('скачивание увело из приложения', saved);
+
+    // Окно закрывается крестиком/кнопкой, разговор на месте — перезапуск не нужен.
+    await evaluate(`(() => {
+       const button = [...document.querySelectorAll('.file-preview-modal button')].find(b => b.textContent.trim() === 'Закрыть');
+       if (button) button.click();
+       return !!button;
+     })()`);
+    const closed = await waitFor(`!document.querySelector('.file-preview-modal')`, 5000);
+    const usable = await evaluate(`!!document.getElementById('composer') && !document.getElementById('app').classList.contains('hidden')`);
+    closed && usable
+      ? ok('окно просмотра закрывается, приложение работает дальше')
+      : fail('закрытие окна просмотра', { closed, usable });
+  }
+
+  // 5. уборка: свой проект удаляем, чужие не трогаем
+  await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: false });
   await cdp.send('Emulation.clearDeviceMetricsOverride');
   const cleaned = await evaluate(
     `(async () => {

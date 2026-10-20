@@ -404,12 +404,17 @@ try {
 
   async function clickDownloadAndCapture(fileName) {
     await installLinkProbe();
-    return evaluate(`(() => {
+    return evaluate(`(async () => {
       const row = [...document.querySelectorAll('.file-row')].find(r => (r.querySelector('.f-name') || {}).textContent === ${JSON.stringify(fileName)});
       if (!row) return null;
       const button = row.querySelector('.f-actions button[aria-label^="Скачать"]');
       if (!button) return { missing: true };
       button.click();
+      /* Файл теперь забирается с сервера и только потом сохраняется — ждём
+         готовую ссылку, а не пустой список. */
+      for (let i = 0; i < 100 && !window.__downloads.length; i += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
       return window.__downloads;
     })()`);
   }
@@ -474,11 +479,20 @@ try {
         : fail('глазок предпросмотра', 'кнопка ещё есть в строке файла');
 
       const txtDownload = await clickDownloadAndCapture(FILE_NAME);
+      /* Файл сохраняется из памяти приложения (blob:) — ссылка на сервер при
+         этом не открывается, иначе приложение-ярлык уходит в чужое окно. */
       txtDownload && txtDownload.length === 1
         && txtDownload[0].name === FILE_NAME
-        && txtDownload[0].href.includes('download=1')
+        && /^blob:/.test(txtDownload[0].href)
         ? ok('кнопка «Скачать» один раз отдаёт оригинал, без просмотра в вебе')
         : fail('кнопка «Скачать»', txtDownload);
+
+      /* После скачивания приложение обязано остаться на месте: раньше ссылка
+         уводила в окно «чем открыть файл», из которого не было выхода. */
+      const stillHere = await evaluate(`({ path: location.pathname, app: !!document.getElementById('composer') })`);
+      stillHere && stillHere.app && !stillHere.path.startsWith('/api/')
+        ? ok('после скачивания приложение остаётся открытым')
+        : fail('после скачивания приложение осталось на месте', stillHere);
 
       const txtClick = await clickFileName(FILE_NAME);
       txtClick && txtClick.downloads.length === 0 && txtClick.protocols.length === 0
