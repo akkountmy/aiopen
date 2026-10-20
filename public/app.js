@@ -63,7 +63,6 @@ const state = {
   dragOut: false,
   expanded: new Set(),
   collapsedWorkflows: new Set(),
-  openTools: new Set(),
   lastTitle: '',
 };
 
@@ -511,6 +510,9 @@ async function startApp(payload) {
   updateCrumbs();
   watchWideBlocks();
   if (state.activeProjectId) syncFilesPanel({ reload: true });
+  /* Черновик возвращаем, если страница сама обновилась до новой версии. */
+  restoreDraft();
+  checkAppVersion();
   $('#input').focus();
 }
 
@@ -703,18 +705,33 @@ function renderSidebar() {
     }
     for (const workflow of state.workflows) root.appendChild(workflowNode(workflow));
   }
+  /* Запоминаем, что именно нарисовано: тихая синхронизация сравнивает подпись
+     и не трогает панель без изменений. */
+  sidebarSignature = sidebarKey(state.projects, state.workflows);
 }
 
 function updateCrumbs() {
   const project = activeProject();
-  /* В шапке только название диалога — без «проект /». Пока диалога нет,
-     показываем имя проекта, чтобы шапка не пустовала, но и без косой черты:
-     название проекта целиком живёт в боковой панели. */
-  $('#crumbChat').textContent = state.chat?.title || project?.name || '';
+  /* В шапке — проект и название диалога. Проект стоит первым и виден всегда:
+     документы из ответа попадают в его папку, и человек должен видеть, куда
+     именно, даже когда боковая панель на телефоне свёрнута. */
+  const projectName = project?.name || '';
+  const chatTitle = state.chat?.title || '';
+  const chip = $('#crumbProject');
+  chip.textContent = projectName;
+  chip.title = projectName ? `Проект «${projectName}» — сюда попадут документы` : '';
+  chip.classList.toggle('hidden', !projectName);
   const crumb = $('#crumbChat');
-  const caption = state.chat?.title || project?.name || '';
-  crumb.title = caption;
-  document.title = state.chat?.title ? `${state.chat.title} — DSH Open` : 'DSH Open';
+  crumb.textContent = chatTitle;
+  crumb.title = chatTitle;
+  crumb.classList.toggle('hidden', !chatTitle);
+  /* Та же подпись над списком файлов: панель всегда показывает только файлы
+     выбранного проекта, и её заголовок это подтверждает. */
+  const filesName = $('#filesProjectName');
+  filesName.textContent = projectName;
+  filesName.title = projectName;
+  filesName.classList.toggle('hidden', !projectName);
+  document.title = chatTitle ? `${chatTitle} — DSH Open` : projectName ? `${projectName} — DSH Open` : 'DSH Open';
 }
 
 /* Какой диалог был открыт последним: после перезагрузки страницы человек
@@ -834,105 +851,10 @@ function renderEmpty() {
   thread.appendChild(empty);
 }
 
-function renderChip(tool) {
-  const chip = el('span', `tool-chip ${tool.status === 'ok' ? 'ok' : tool.status === 'error' ? 'err' : ''}`);
-  if (tool.status === 'run') chip.innerHTML = '<span class="spinner"></span>';
-  else if (tool.status === 'error') chip.innerHTML = '<span class="tick">✕</span>';
-  else chip.innerHTML = '<span class="tick">✓</span>';
-  const label = el('span', 't-label', tool.label || tool.name || 'Действие');
-  chip.appendChild(label);
-  if (tool.summary) {
-    const arg = el('span', 't-arg', tool.summary);
-    arg.title = tool.summary;
-    chip.appendChild(arg);
-  }
-  return chip;
-}
-
-/* Агент часто делает десятки однотипных шагов («Расчёты» ×8, файл создан
-   дважды). Складываем одинаковые действия в одну строку со счётчиком:
-   подробности — по клику, чтобы лента не превращалась в простыню. */
-function renderTools(tools) {
-  const wrap = el('div', 'tools');
-  if (!tools.length) return wrap;
-
-  const groups = [];
-  const byLabel = new Map();
-  for (const tool of tools) {
-    const label = tool.label || tool.name || 'Действие';
-    let group = byLabel.get(label);
-    if (!group) {
-      group = { label, items: [] };
-      byLabel.set(label, group);
-      groups.push(group);
-    }
-    group.items.push(tool);
-  }
-
-  const many = groups.some((group) => group.items.length > 1);
-  if (many) wrap.classList.add('many');
-
-  for (const group of groups) {
-    if (group.items.length === 1) {
-      wrap.appendChild(renderChip(group.items[0]));
-      continue;
-    }
-    const running = group.items.some((tool) => tool.status === 'run');
-    const failed = group.items.some((tool) => tool.status === 'error');
-    const open = state.openTools.has(group.label);
-    const button = el('button', `tool-group ${running ? 'run' : failed ? 'err' : 'ok'}${open ? ' open' : ''}`);
-    button.type = 'button';
-    button.innerHTML = running
-      ? '<span class="spinner"></span>'
-      : failed
-        ? '<span class="tick">✕</span>'
-        : '<span class="tick">✓</span>';
-    button.appendChild(el('span', 't-label', group.label));
-    button.appendChild(el('span', 't-count', String(group.items.length)));
-    const last = group.items[group.items.length - 1];
-    if (last.summary) {
-      const arg = el('span', 't-arg', last.summary);
-      arg.title = last.summary;
-      button.appendChild(arg);
-    }
-    const caret = el('span', 't-caret');
-    caret.innerHTML = '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M6 8l4 4 4-4"/></svg>';
-    button.appendChild(caret);
-
-    // Внутри группы одинаковые вызовы тоже не дублируем — показываем «×N».
-    const unique = [];
-    const seen = new Map();
-    for (const tool of group.items) {
-      const key = `${tool.summary || ''}|${tool.status}`;
-      const found = seen.get(key);
-      if (found) found.count += 1;
-      else {
-        const entry = { tool, count: 1 };
-        seen.set(key, entry);
-        unique.push(entry);
-      }
-    }
-
-    const list = el('div', `tool-group-list${open ? '' : ' hidden'}`);
-    for (const entry of unique) {
-      const chip = renderChip(entry.tool);
-      if (entry.count > 1) chip.appendChild(el('span', 't-count', `×${entry.count}`));
-      list.appendChild(chip);
-    }
-
-    button.addEventListener('click', () => {
-      const opened = !button.classList.contains('open');
-      button.classList.toggle('open', opened);
-      list.classList.toggle('hidden', !opened);
-      if (opened) state.openTools.add(group.label);
-      else state.openTools.delete(group.label);
-    });
-
-    wrap.appendChild(button);
-    wrap.appendChild(list);
-  }
-  return wrap;
-}
+/* Служебную ленту действий («Чтение файла», «Поиск в интернете», «Загрузка
+   страницы») в интерфейсе не показываем: человек видит только, что ассистент
+   работает. Данные о вызовах остаются в задаче на сервере — для разбора и
+   проверок, но в ленту сообщения они не попадают. */
 
 function messageActions(text) {
   const actions = el('div', 'msg-actions');
@@ -986,10 +908,6 @@ function renderMessage(message) {
 
   if (message.streaming) wrap.classList.add('streaming');
   else wrap.classList.remove('streaming');
-
-  if (message.tools?.length) {
-    wrap.appendChild(renderTools(message.tools));
-  }
 
   if (message.error) {
     const error = el('div', 'msg-error');
@@ -1084,7 +1002,7 @@ function streamingMessageOf(run) {
   let message = messages.find((item) => item.runId === run.id);
   if (!message) message = messages.find((item) => item.streaming && !item.runId);
   if (!message) {
-    message = { role: 'assistant', content: '', tools: [], streaming: true, at: new Date().toISOString() };
+    message = { role: 'assistant', content: '', streaming: true, at: new Date().toISOString() };
     messages.push(message);
   }
   message.runId = run.id;
@@ -1099,7 +1017,6 @@ function trackRun(runId, chatId) {
       chatId: chatId || state.chat?.id,
       projectId: state.chat?.projectId,
       content: '',
-      tools: [],
       budget: null,
       error: '',
       status: 'running',
@@ -1127,7 +1044,6 @@ function paintRun(run) {
   const message = streamingMessageOf(run);
   if (message) {
     message.content = run.content;
-    message.tools = run.tools;
     if (run.budget) message.budget = run.budget;
     if (run.error && !run.content) message.error = run.error;
     else if (run.content) delete message.error;
@@ -1153,7 +1069,6 @@ function closeRunView(run, status) {
   if (message) {
     message.streaming = false;
     if (run.content) message.content = run.content;
-    if (run.tools.length) message.tools = run.tools;
     if (run.error && !run.content) message.error = run.error;
   }
   setStreaming(Boolean(currentLiveRun()));
@@ -1193,16 +1108,12 @@ async function reloadChatInPlace(chatId) {
 function applyRunEvent(run, event) {
   if (event.type === 'snapshot' && event.run) {
     run.content = event.run.text || '';
-    run.tools = (event.run.tools || []).map((tool) => ({ ...tool }));
     if (event.run.status) run.status = event.run.status;
     if (event.run.title) applyRunTitle(run, event.run.title);
   } else if (event.type === 'delta') {
     run.content += event.text || '';
-  } else if (event.type === 'tool') {
-    const known = run.tools.find((tool) => tool.id === event.id);
-    const tool = { id: event.id, label: event.label, summary: event.summary, status: event.status };
-    if (known) Object.assign(known, tool);
-    else run.tools.push(tool);
+  } else if (event.type === 'tool' || event.type === 'progress') {
+    /* Действия ассистента в ленту не попадают: человек видит только «работаю…». */
   } else if (event.type === 'title') {
     applyRunTitle(run, event.title);
   } else if (event.type === 'budget') {
@@ -1346,6 +1257,192 @@ function setStreaming(active) {
   $('#input').disabled = false;
 }
 
+/* ------------------------------ синхронизация ------------------------------ */
+/* Сервис работает на сервере: задачу могли поставить из ярлыка на телефоне, а
+   смотреть — на ноутбуке. Поэтому список проектов и диалогов, открытый диалог и
+   «Файлы проекта» подтягиваются сами. Возвращаться на вкладку и нажимать F5,
+   чтобы увидеть готовые документы, больше не нужно. */
+let syncInFlight = false;
+
+function chatHasLiveRun(chatId) {
+  for (const run of state.liveRuns.values()) if (run.chatId === chatId) return true;
+  return false;
+}
+
+function filesSignature(items) {
+  return (items || []).map((item) => `${item.path}|${item.size}|${item.modified}`).join('\n');
+}
+
+function chatSignature(chat) {
+  const messages = chat?.messages || [];
+  const last = messages[messages.length - 1] || {};
+  return `${chat?.title || ''}|${messages.length}|${last.role || ''}|${(last.content || '').length}`;
+}
+
+/* Подпись левой панели: пока проекты, диалоги и выбранный проект не менялись,
+   список не перерисовываем. Иначе каждые 20 секунд слетала бы прокрутка и
+   закрывались открытые меню. */
+let sidebarSignature = '';
+
+function sidebarKey(projects, workflows) {
+  const parts = [`a:${state.activeProjectId || ''}`];
+  for (const project of projects || []) {
+    parts.push(`p:${project.id}:${project.name}:${project.chats?.length || 0}`);
+    for (const chat of project.chats || []) parts.push(`c:${chat.id}:${chat.title}:${chat.messageCount || 0}`);
+  }
+  for (const workflow of workflows || []) parts.push(`w:${workflow.id}:${workflow.name}`);
+  return parts.join('\n');
+}
+
+function renderSidebarQuietly() {
+  if (sidebarKey(state.projects, state.workflows) === sidebarSignature) return;
+  /* В панели открыто меню или карточка: их нельзя выбивать из-под руки.
+     Перерисуем на следующем тике, когда всё закроется. */
+  if (menuAnchor) return;
+  const list = $('#projectList');
+  const top = list ? list.scrollTop : 0;
+  renderSidebar();
+  if (list) list.scrollTop = top;
+}
+
+/* Список файлов обновляем без «мигания»: пока содержимое папки не изменилось,
+   ничего не перерисовываем — иначе прокрутка списка сбрасывалась бы каждые
+   несколько секунд. */
+async function refreshFilesQuietly() {
+  const projectId = state.activeProjectId;
+  if (!projectId || !state.filesOpen) return;
+  let data;
+  try {
+    data = await api(`/api/projects/${projectId}/files?path=${encodeURIComponent(state.filesPath)}&depth=6`);
+  } catch {
+    return; /* нет связи — остаётся то, что уже нарисовано */
+  }
+  if (projectId !== state.activeProjectId) return;
+  const items = data.items || [];
+  if (filesSignature(items) === filesSignature(state.files)) return;
+  state.files = items;
+  renderFiles();
+}
+
+/* Открытый диалог мог получить новый ответ с другого устройства — сверяем
+   подпись и перерисовываем только при настоящих изменениях. */
+async function refreshOpenChatQuietly() {
+  const chatId = state.activeChatId;
+  if (!chatId || !state.chat || chatHasLiveRun(chatId)) return;
+  let data;
+  try {
+    data = await api(`/api/chats/${chatId}`);
+  } catch {
+    return;
+  }
+  if (chatId !== state.activeChatId) return;
+  if (chatSignature(data.chat) === chatSignature(state.chat)) return;
+  const stick = nearBottom();
+  state.chat = data.chat;
+  renderThread();
+  updateCrumbs();
+  if (stick) scrollToBottom(true);
+}
+
+async function syncFromServer() {
+  if (!state.user || document.hidden || syncInFlight) return;
+  syncInFlight = true;
+  try {
+    const payload = await api('/api/me');
+    if (!state.user || !payload?.projects) return;
+    state.projects = payload.projects;
+    state.workflows = payload.workflows || [];
+    /* Проект удалили с другого устройства — переключаемся на первый живой,
+       чтобы панель файлов не показывала папку, которой больше нет. */
+    if (!state.projects.some((project) => project.id === state.activeProjectId)) {
+      const first = state.projects[0] || null;
+      state.activeProjectId = first?.id || null;
+      state.activeChatId = null;
+      state.chat = null;
+      state.filesPath = '.';
+      state.files = [];
+      if (first) state.expanded.add(first.id);
+      renderThread();
+    } else if (state.activeProjectId) {
+      state.expanded.add(state.activeProjectId);
+    }
+    /* Диалог удалён с другого устройства — вкладка не должна показывать призрак. */
+    if (
+      state.activeChatId &&
+      !state.projects.some((project) => (project.chats || []).some((chat) => chat.id === state.activeChatId))
+    ) {
+      state.activeChatId = null;
+      state.chat = null;
+      renderThread();
+    }
+    renderSidebarQuietly();
+    updateCrumbs();
+    await refreshOpenChatQuietly();
+    await refreshFilesQuietly();
+  } catch {
+    /* нет сети — повторим на следующем тике */
+  } finally {
+    syncInFlight = false;
+  }
+}
+
+/* Версия страниц: когда на сервере выложили новую сборку, вкладка обновляется
+   сама, без F5 — но только когда человек ничего не печатает и ответ не идёт. */
+let appVersion = '';
+
+function saveDraft() {
+  try {
+    sessionStorage.setItem('dshow.draft', $('#input').value || '');
+  } catch {
+    /* приватный режим — не критично */
+  }
+}
+
+function restoreDraft() {
+  try {
+    const draft = sessionStorage.getItem('dshow.draft');
+    if (!draft) return;
+    sessionStorage.removeItem('dshow.draft');
+    const input = $('#input');
+    if (!input.value) {
+      input.value = draft;
+      input.dispatchEvent(new Event('input'));
+    }
+  } catch {
+    /* не критично */
+  }
+}
+
+function reloadForUpdate() {
+  const input = $('#input');
+  const busy = state.streaming || (input === document.activeElement && input.value.trim().length > 0);
+  if (busy) {
+    setTimeout(reloadForUpdate, 20000);
+    return;
+  }
+  saveDraft();
+  location.reload();
+}
+
+async function checkAppVersion() {
+  if (!state.user) return;
+  let data;
+  try {
+    data = await api('/api/version');
+  } catch {
+    return;
+  }
+  const version = data?.version || '';
+  if (!version) return;
+  if (!appVersion) {
+    appVersion = version;
+    return;
+  }
+  if (version === appVersion) return;
+  appVersion = version;
+  reloadForUpdate();
+}
+
 function getStreamingMessage() {
   const messages = state.chat?.messages || [];
   for (let i = messages.length - 1; i >= 0; i--) {
@@ -1377,10 +1474,8 @@ function scheduleStreamRender() {
       target.appendChild(block);
     }
     if (message.tools?.length) {
-      const toolsWrap = renderTools(message.tools);
       const existing = target.querySelector('.tools');
-      if (existing) existing.replaceWith(toolsWrap);
-      else target.insertBefore(toolsWrap, target.querySelector('.md'));
+      if (existing) existing.remove();
     }
     scrollToBottom();
   });
@@ -3194,7 +3289,6 @@ function resetClientState() {
   state.filesLoading = false;
   state.expanded = new Set();
   state.collapsedWorkflows = new Set();
-  state.openTools = new Set();
   state.lastTitle = '';
   state.dragOut = false;
 }
@@ -3849,6 +3943,14 @@ $('#sidebarToggle').addEventListener('click', () => {
   app.classList.toggle('sidebar-open', willOpen);
   if (willOpen) closeFilesDrawer();
 });
+/* Ярлык проекта в шапке — это ещё и кнопка «выбрать проект»: на телефоне она
+   открывает тот же список слева, что и кнопка меню. */
+$('#crumbProject').addEventListener('click', () => {
+  const toggle = $('#sidebarToggle');
+  if (!toggle || getComputedStyle(toggle).display === 'none') return;
+  $('#app').classList.add('sidebar-open');
+  closeFilesDrawer();
+});
 $('#backdrop').addEventListener('click', () => {
   $('#app').classList.remove('sidebar-open');
   closeFilesDrawer();
@@ -4387,13 +4489,34 @@ function registerServiceWorker() {
   syncSignupAvailability();
   registerServiceWorker();
   /* Телефон вернулся из сна, вкладку открыли снова, сеть восстановилась —
-     догоняем задачи, которые всё это время шли на сервере. */
+     догоняем задачи, которые всё это время шли на сервере, и заодно
+     подтягиваем свежие проекты, диалоги и файлы. */
   document.addEventListener('visibilitychange', () => {
-    if (!document.hidden) resumeLiveRuns();
+    if (document.hidden) return;
+    resumeLiveRuns();
+    syncFromServer();
+    checkAppVersion();
   });
-  window.addEventListener('online', resumeLiveRuns);
+  window.addEventListener('online', () => {
+    resumeLiveRuns();
+    syncFromServer();
+  });
   window.addEventListener('pageshow', (event) => {
-    if (event.persisted) resumeLiveRuns();
+    if (event.persisted) {
+      resumeLiveRuns();
+      syncFromServer();
+    }
+  });
+  /* Пока вкладка открыта, раз в 20 секунд сверяемся с сервером сами: документы,
+     сделанные с телефона, появляются в панели файлов без перезагрузки. */
+  setInterval(() => {
+    if (!document.hidden) syncFromServer();
+  }, 20000);
+  /* И раз в минуту смотрим, не выложена ли новая версия страницы. */
+  setInterval(checkAppVersion, 60000);
+  window.addEventListener('focus', () => {
+    syncFromServer();
+    checkAppVersion();
   });
   /* Подсказку показываем, когда экран уже нарисован: иначе окно висит над пустой страницей. */
   setTimeout(offerHomeScreenOnce, 1200);

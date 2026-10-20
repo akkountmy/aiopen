@@ -102,6 +102,10 @@
               <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 5h14M3 10h14M3 15h14" /></svg>
             </button>
             <div class="crumbs">
+              <!-- Проект в шапке виден всегда: по нему понятно, в какую папку
+                   попадут документы, даже когда боковая панель на телефоне
+                   свёрнута. -->
+              <span id="crumbProject" class="crumb-project hidden"></span>
               <span id="crumbChat" class="crumb-chat"></span>
             </div>
           </div>
@@ -172,7 +176,10 @@
                одинаково, и по иконке сразу понятно, что здесь файлы проекта. -->
           <div class="files-title">
             <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 6.5A1.5 1.5 0 014.5 5h3l1.5 2h6.5A1.5 1.5 0 0117 8.5v6A1.5 1.5 0 0115.5 16h-11A1.5 1.5 0 013 14.5v-8z" /></svg>
-            <span>Файлы проекта</span>
+            <span class="files-title-text">
+              <span class="ft-label">Файлы проекта</span>
+              <span id="filesProjectName" class="ft-project"></span>
+            </span>
           </div>
           <div class="files-head-actions">
             <button id="exportProjectBtn" class="btn btn-ghost btn-icon" type="button" title="Скачать проект архивом" aria-label="Скачать проект архивом">

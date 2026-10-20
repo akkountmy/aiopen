@@ -1412,6 +1412,11 @@ async function route(req, res) {
       if (cookies[SESSION.cookie]) store.dropSession(sessionKey(cookies[SESSION.cookie]));
       return sendJson(res, 200, { ok: true }, { 'Set-Cookie': clearSessionCookie(TRUST_PROXY) });
     }
+    if (pathname === '/api/version' && method === 'GET') {
+      /* Версия статики. Открытая вкладка сравнивает её сама и обновляется,
+         когда на сервере выложили новую сборку — без F5 у человека. */
+      return sendJson(res, 200, { version: assetVersion() }, { 'Cache-Control': 'no-store' });
+    }
     if (pathname === '/api/health' && method === 'GET') {
       /* сколько сеансов каждого класса устройства разрешено — видно, что
          под одним аккаунтом компьютер, телефон и его ярлык работают одновременно */
