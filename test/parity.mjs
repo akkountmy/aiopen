@@ -29,7 +29,7 @@ fs.mkdirSync(ctx.workspace, { recursive: true });
 test('навыки: каталог читается с диска', () => {
   const skills = listSkills();
   const ids = skills.map((skill) => skill.id);
-  for (const id of ['office-docx', 'office-xlsx', 'office-pptx', 'pdf-report', 'three-js', 'web-page']) {
+  for (const id of ['office-docx', 'office-xlsx', 'office-pptx', 'pdf-report', 'three-js', 'web-page', 'answer-structure', 'answer-visuals']) {
     assert.ok(ids.includes(id), `нет навыка ${id}`);
   }
   for (const skill of skills) {
@@ -52,7 +52,21 @@ test('навыки: каталог в промпте короткий и пер�
   const text = skillsPromptText();
   assert.match(text, /office-docx/);
   assert.match(text, /use_skill/);
-  assert.ok(text.length < 3000, 'каталог навыков раздулся');
+  assert.ok(text.length < 3400, 'каталог навыков раздулся');
+});
+
+test('навыки: структура и наглядность ответа в диалоге', () => {
+  const text = skillsPromptText();
+  assert.match(text, /answer-structure/);
+  assert.match(text, /answer-visuals/);
+  const structure = skillBody('answer-structure');
+  assert.equal(structure.ok, true);
+  assert.match(structure.text, /первая строка/i);
+  const visuals = skillBody('answer-visuals');
+  assert.equal(visuals.ok, true);
+  assert.match(visuals.text, /mermaid/i);
+  assert.match(visuals.text, /☐/);
+  assert.match(visuals.text, /create_excel/);
 });
 
 /* ------------------------------ память ------------------------------ */
