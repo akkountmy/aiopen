@@ -434,6 +434,42 @@ try {
     ? ok('кнопки «Скачать проект архивом» в шапке нет')
     : fail('кнопка выгрузки архива', 'всё ещё в шапке файлов');
 
+  /* 12.6. Значки: «Новый проект» нарисован как «добавить рабочую область» в
+     Harness (заливка в сетке 16 px), а у открытого проекта папка раскрыта —
+     у остальных она закрыта и значок тусклее. */
+  await evaluate(`(async () => {
+    const boot = await (await fetch('/api/bootstrap')).json();
+    if ((boot.projects || []).length < 2) {
+      await fetch('/api/projects', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name: 'Второй проект' }) });
+    }
+    return true;
+  })()`);
+  await goto(BASE + '/');
+  await waitFor(`document.querySelectorAll('.project').length >= 2`);
+  const icons = await evaluate(`(() => {
+    const btn = document.querySelector('#newProjectBtn svg');
+    const rowIcon = (project) => {
+      const holder = project.querySelector('.project-row .f-icon');
+      const svg = holder ? holder.querySelector('svg') : null;
+      return svg ? { viewBox: svg.getAttribute('viewBox'), color: getComputedStyle(holder).color } : null;
+    };
+    const rows = [...document.querySelectorAll('.project')].map((project) => ({ active: project.classList.contains('active'), ...rowIcon(project) }));
+    return {
+      button: btn ? { viewBox: btn.getAttribute('viewBox'), fill: getComputedStyle(btn).fill, stroke: getComputedStyle(btn).stroke } : null,
+      active: rows.find((row) => row.active) || null,
+      other: rows.find((row) => !row.active) || null,
+    };
+  })()`);
+  icons.button && icons.button.viewBox === '0 0 16 16' && icons.button.fill !== 'none' && icons.button.stroke === 'none'
+    ? ok('значок «Новый проект» — как «добавить рабочую область» в Harness', `сетка ${icons.button.viewBox}, заливка ${icons.button.fill}`)
+    : fail('значок «Новый проект»', JSON.stringify(icons.button));
+  icons.active && icons.active.viewBox === '0 0 24 24' && icons.other && icons.other.viewBox === '0 0 20 20'
+    ? ok('у открытого проекта папка раскрыта, у остальных закрыта')
+    : fail('значок открытого проекта', JSON.stringify({ active: icons.active, other: icons.other }));
+  icons.active && icons.other && icons.active.color !== icons.other.color
+    ? ok('значок открытого проекта заметнее закрытых', `${icons.active.color} против ${icons.other.color}`)
+    : fail('яркость значка открытого проекта', JSON.stringify({ active: icons.active, other: icons.other }));
+
   const wide = await evaluate(`(() => {
     const main = document.querySelector('.main');
     const thread = document.querySelector('.thread');

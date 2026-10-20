@@ -13,6 +13,13 @@ function plural(count, one, few, many) {
 const ICONS = {
   folder:
     '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 6.5A1.5 1.5 0 014.5 5h3l1.5 2h6.5A1.5 1.5 0 0117 8.5v6A1.5 1.5 0 0115.5 16h-11A1.5 1.5 0 013 14.5v-8z"/></svg>',
+  /* Открытая папка — как у открытой рабочей области в Harness: отогнутая
+     передняя створка шире задней, поэтому силуэт сразу отличается от
+     закрытой папки даже на 17 px. Толщина штриха задана в самой иконке:
+     она нарисована в сетке 24, а не 20, и без этого была бы тоньше соседней
+     закрытой папки. */
+  folderOpen:
+    '<svg viewBox="0 0 24 24" aria-hidden="true" style="stroke-width:1.9"><path d="m6 14 1.45-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.55 6a2 2 0 0 1-1.94 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.93a2 2 0 0 1 1.66.9l.82 1.2a2 2 0 0 0 1.66.9H18a2 2 0 0 1 2 2v2"/></svg>',
   file: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 3.5A1.5 1.5 0 016.5 2h4L15 6.5v10A1.5 1.5 0 0113.5 18h-7A1.5 1.5 0 015 16.5v-13z"/><path d="M10.5 2v4.5H15"/></svg>',
   image:
     '<svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="4" width="14" height="12" rx="1.6"/><circle cx="7.4" cy="8.2" r="1.1"/><path d="M3.5 14l4-4 3 3 2.4-2.4 3.6 3.6"/></svg>',
@@ -551,7 +558,10 @@ function projectNode(project) {
   /* Модификатор назван is-empty, а не empty: класс .empty — это пустое
      состояние чата (большой блок с отступами), и на треугольнике он ломал
      размеры строки проекта без диалогов. */
-  row.innerHTML = `<span class="p-caret${chats.length ? '' : ' is-empty'}"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M6 8l4 4 4-4"/></svg></span><span class="f-icon">${ICONS.folder}</span><span class="p-name">${escapeHtml(project.name)}</span>`;
+  /* Открытый проект — открытая папка (как в рабочей области Harness):
+     переключатель состояния виден прямо на значке строки. */
+  const projectIcon = project.id === state.activeProjectId ? ICONS.folderOpen : ICONS.folder;
+  row.innerHTML = `<span class="p-caret${chats.length ? '' : ' is-empty'}"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M6 8l4 4 4-4"/></svg></span><span class="f-icon">${projectIcon}</span><span class="p-name">${escapeHtml(project.name)}</span>`;
   const count = el('span', 'p-count', project.chats?.length ? String(project.chats.length) : '');
   row.appendChild(count);
 
