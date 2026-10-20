@@ -4163,6 +4163,29 @@ body.resizing {
   border-bottom: none;
 }
 
+/* Объединённая ячейка на всю ширину листа — название таблицы или примечание.
+   Идёт поперёк таблицы и переносится по словам: в узкой первой колонке такой
+   текст раздувал её на пол-экрана, и остальные колонки уезжали за край. */
+.pv-table .pv-row-span td {
+  background: var(--layer-2);
+  color: var(--text);
+  font-weight: 600;
+  white-space: normal;
+}
+
+/* Название листа над таблицей — из объединённой ячейки первой строки. */
+.pv-table-title {
+  caption-side: top;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+  background: var(--layer-2);
+  color: var(--text);
+  font-size: var(--fs-14);
+  font-weight: 600;
+  text-align: left;
+  white-space: normal;
+}
+
 .pv-td-line {
   display: block;
 }
@@ -4480,6 +4503,11 @@ body.resizing {
   .pv-many-cols .pv-table th,
   .pv-many-cols .pv-table td {
     white-space: nowrap;
+  }
+  /* Название листа — всегда поперёк и с переносом: даже в широкой таблице оно
+     не должно растягивать первую колонку. */
+  .pv-many-cols .pv-table .pv-row-span td {
+    white-space: normal;
   }
   .pv-h1 {
     font-size: 19px;

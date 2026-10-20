@@ -2536,30 +2536,79 @@ function pvCell(container, cell) {
   container.appendChild(td);
 }
 
+/* Текст ячейки без разметки: нужен, чтобы отличить объединённую строку
+   (заголовок листа, примечание) от обычной строки с данными. */
+function pvCellText(cell) {
+  if (Array.isArray(cell)) {
+    return cell.map((line) => (line || []).map((run) => (run && run.text) || '').join('')).join(' ');
+  }
+  return String(cell ?? '');
+}
+
 /* Таблица листа и таблица документа выглядят одинаково: сетка, подписи в
    первой строке, числа по правому краю. */
-function pvGrid(rows, { header = false } = {}) {
+function pvGrid(rows, { header = false, span = false } = {}) {
   const box = el('div', 'pv-table-box');
+  const list = (rows || []).filter((row) => Array.isArray(row) && row.length);
+  const width = list.reduce((max, row) => Math.max(max, row.length), 0);
   /* У широкой таблицы (больше пяти колонок) на телефоне строку не переносим:
      её читают прокруткой в сторону, как лист Excel. Две-три колонки наоборот
      переносим — так на экране сразу видны и подпись, и значение. */
-  if ((rows[0] || []).length > 5) box.classList.add('pv-many-cols');
+  if (width > 5) box.classList.add('pv-many-cols');
+  /* Ячейка, объединённая по всей ширине листа (название таблицы, примечание),
+     приходит одной непустой ячейкой в первой колонке. В узкой колонке такой
+     текст раздувает её на пол-экрана, поэтому такую строку выводим отдельно —
+     она идёт поперёк всей таблицы, как в Excel. */
+  const spanText = (row) =>
+    span &&
+    row.length === width &&
+    width > 1 &&
+    pvCellText(row[0]).trim() !== '' &&
+    row.slice(1).every((cell) => pvCellText(cell).trim() === '')
+      ? pvCellText(row[0])
+      : null;
   const table = el('table', 'pv-table');
-  const headPart = header ? rows[0] : null;
-  const bodyRows = header ? rows.slice(1) : rows;
+  const tbody = document.createElement('tbody');
+  const addSpanRow = (text) => {
+    const tr = document.createElement('tr');
+    tr.className = 'pv-row-span';
+    const td = document.createElement('td');
+    td.colSpan = width;
+    td.textContent = text;
+    tr.appendChild(td);
+    tbody.appendChild(tr);
+  };
+  let rest = list.slice();
+  let headPart = header && rest.length ? rest[0] : null;
+  if (headPart) rest = rest.slice(1);
+  /* Если объединённое название листа попало в шапку, оно становится подписью
+     над таблицей, а шапкой — следующая за ним настоящая строка заголовков. */
+  const banner = headPart && spanText(headPart);
+  if (banner && rest.length) {
+    const caption = document.createElement('caption');
+    caption.className = 'pv-table-title';
+    caption.textContent = banner;
+    table.appendChild(caption);
+    headPart = rest[0];
+    rest = rest.slice(1);
+  }
   if (headPart) {
     const thead = document.createElement('thead');
     const tr = document.createElement('tr');
     for (const cell of headPart) {
       const th = document.createElement('th');
-      th.textContent = Array.isArray(cell) ? cell.map((line) => (line || []).map((run) => run.text).join('')).join(' ') : String(cell ?? '');
+      th.textContent = pvCellText(cell);
       tr.appendChild(th);
     }
     thead.appendChild(tr);
     table.appendChild(thead);
   }
-  const tbody = document.createElement('tbody');
-  for (const row of bodyRows) {
+  for (const row of rest) {
+    const span = spanText(row);
+    if (span !== null) {
+      addSpanRow(span);
+      continue;
+    }
     const tr = document.createElement('tr');
     for (const cell of row) {
       const td = document.createElement('td');
@@ -2618,7 +2667,7 @@ function pvSheets(sheets) {
   const paint = (index) => {
     const sheet = sheets[index];
     body.innerHTML = '';
-    body.appendChild(pvGrid(sheet.rows || [], { header: true }));
+    body.appendChild(pvGrid(sheet.rows || [], { header: true, span: true }));
     if (sheet.truncated) body.appendChild(pvNotice('Показаны первые строки листа — остальные видны в скачанном файле.'));
     [...tabs.children].forEach((tab, tabIndex) => tab.classList.toggle('is-active', tabIndex === index));
   };
@@ -2710,7 +2759,7 @@ async function mountDocPreview(container, item) {
     return;
   }
   if (format === 'table' && Array.isArray(data.rows) && data.rows.length) {
-    container.appendChild(pvGrid(data.rows, { header: true }));
+    container.appendChild(pvGrid(data.rows, { header: true, span: true }));
     if (data.truncated) container.appendChild(pvNotice('Показаны первые строки таблицы.'));
     return;
   }
