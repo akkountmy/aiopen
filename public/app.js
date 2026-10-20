@@ -2540,6 +2540,10 @@ function pvCell(container, cell) {
    первой строке, числа по правому краю. */
 function pvGrid(rows, { header = false } = {}) {
   const box = el('div', 'pv-table-box');
+  /* У широкой таблицы (больше пяти колонок) на телефоне строку не переносим:
+     её читают прокруткой в сторону, как лист Excel. Две-три колонки наоборот
+     переносим — так на экране сразу видны и подпись, и значение. */
+  if ((rows[0] || []).length > 5) box.classList.add('pv-many-cols');
   const table = el('table', 'pv-table');
   const headPart = header ? rows[0] : null;
   const bodyRows = header ? rows.slice(1) : rows;
