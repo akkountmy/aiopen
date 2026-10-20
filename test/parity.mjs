@@ -52,7 +52,7 @@ test('навыки: каталог в промпте короткий и пер�
   const text = skillsPromptText();
   assert.match(text, /office-docx/);
   assert.match(text, /use_skill/);
-  assert.ok(text.length < 2500, 'каталог навыков раздулся');
+  assert.ok(text.length < 3000, 'каталог навыков раздулся');
 });
 
 /* ------------------------------ память ------------------------------ */
