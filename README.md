@@ -479,6 +479,30 @@ node test/vision.mjs путь\к\картинке.png
 - Доступ к файлам — только внутри каталога своего проекта.
 - Ответы API не содержат названий моделей и провайдеров.
 
+### Предупреждение Word про файл из интернета
+
+Сервис не передаёт документы внешним программам (см. «Что умеет»), поэтому окно
+«Microsoft Office — открыть этот файл?» больше не появляется: документ читается в
+окне просмотра. Но файл, сохранённый кнопкой «Скачать», Windows помечает как
+пришедший из интернета (Mark-of-the-Web — поток `Zone.Identifier`), и Word
+открывает его в защищённом просмотре с жёлтой полосой сверху. Со стороны сервера
+эту метку не снять: её ставит сама Windows в момент скачивания, и никакой заголовок
+ответа её не отменяет.
+
+Если документы с этого адреса — свои и сайту можно доверять, метку на своём
+компьютере отключает одна настройка Windows: адрес добавляется в «Надёжные узлы»
+(`2`) для текущего пользователя. Права администратора не нужны, ограничения
+системы не снимаются, отменяется удалением ключа:
+
+```powershell
+$site = 'dshopen-vladimir00177.msk1.amvera.tech'
+New-Item -Force -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings\ZoneMap\Domains\$site" | Out-Null
+New-ItemProperty -Force -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings\ZoneMap\Domains\$site" -Name https -PropertyType DWord -Value 2 | Out-Null
+
+# отменить
+Remove-Item -Recurse -Force "HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings\ZoneMap\Domains\$site"
+```
+
 ## Лицензия
 
 MIT — см. [LICENSE](LICENSE).
