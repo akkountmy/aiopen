@@ -1,6 +1,7 @@
 /**
- * Проверка семантики сеансов: телефон и компьютер живут параллельно,
- * второй компьютер выбивает первый, а служебный вход не выбивает никого.
+ * Проверка семантики сеансов: три устройства (ноутбук, телефон, второй
+ * компьютер) живут параллельно, четвёртый вход освобождает место у самого
+ * давно не использованного сеанса, а служебный вход не выбивает никого.
  * Поднимает отдельный экземпляр сервиса на 3199 с временными данными.
  */
 import { spawn } from 'node:child_process';
@@ -17,6 +18,7 @@ const UAS = {
   desktop: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36',
   desktop2: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36 Edg/154.0',
   phone: 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.7827.137 Mobile Safari/537.36',
+  tablet: 'Mozilla/5.0 (iPad; CPU OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1',
   watch: 'DSH-OPEN-WEB-storage-watch/1.0',
 };
 
@@ -92,21 +94,33 @@ try {
 
   const second = await login(UAS.desktop2);
   check(second.status === 200, 'второй вход с компьютера');
-  check((await me(laptop.cookie)).status === 401, 'второй компьютер выбил первый');
+  check((await me(laptop.cookie)).status === 200, 'три устройства работают одновременно');
   check((await me(second.cookie)).status === 200, 'второй компьютер работает');
   check((await me(phone.cookie)).status === 200, 'телефон по-прежнему жив');
   check((await me(watch.cookie)).status === 200, 'сеанс сторожа по-прежнему жив');
 
+  /* Мест всего три: четвёртый human-вход освобождает самое давнее, а служебный
+     сеанс не трогает. Телефон и второй компьютер только что работали, значит
+     уступать ноутбуку. */
+  await me(phone.cookie);
+  await me(second.cookie);
+  const tablet = await login(UAS.tablet);
+  check(tablet.status === 200, 'вход с четвёртого устройства');
+  check((await me(laptop.cookie)).status === 401, 'уступил самый давно не использованный сеанс');
+  check((await me(tablet.cookie)).status === 200, 'новое устройство работает');
+  check((await me(watch.cookie)).status === 200, 'служебный сеанс выбивание не задело');
+
   const again = await login(UAS.watch);
-  check((await me(laptop.cookie)).status === 401 && (await me(second.cookie)).status === 200, 'служебные входы не трогают людей');
   check(again.status === 200, 'повторный служебный вход');
+  check((await me(watch.cookie)).status === 200, 'служебные входы не трогают людей');
 
   const sessions = await fetch(`${BASE}/api/admin/sessions`, { headers: { cookie: again.cookie } });
   const data = await sessions.json();
   const service = data.sessions.filter((s) => s.service);
   check(sessions.status === 200 && service.length >= 2, 'в отчёте видно два служебных сеанса', `всего ${data.sessions.length}`);
   const human = data.sessions.filter((s) => !s.service);
-  check(human.length === 2, 'у людей ровно два живых сеанса (компьютер и телефон)', `их ${human.length}`);
+  check(human.length === 3, 'у людей ровно три живых сеанса', `их ${human.length}`);
+  check(data.seats === 3, 'в отчёте видно число мест', String(data.seats));
   check(
     data.audit.every((a) => a.events.every((e) => !/DSH-OPEN-WEB-/.test(e.ua))),
     'служебные входы не попадают в историю подозрений',

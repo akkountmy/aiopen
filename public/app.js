@@ -335,7 +335,12 @@ async function api(path, options = {}) {
     showAuth();
     /* Сеанс мог быть закрыт новым входом с другого устройства — объясняем это
        прямо на экране входа, чтобы выход не выглядел случайным сбоем. */
-    const notice = data.reason === 'displaced' ? data.error || 'Вход выполнен на другом устройстве' : '';
+    const notice =
+      data.reason === 'displaced' && data.error
+        ? data.error
+        : data.reason === 'displaced'
+          ? 'Этот сеанс закрыт: одновременно на аккаунте работает ограниченное число устройств. Войдите снова.'
+          : '';
     const box = $('#loginError');
     if (box) box.textContent = notice;
     const error = new Error(notice || 'unauthorized');

@@ -8,7 +8,7 @@ import {
   DEVICE_KINDS,
   INDEX_FILE,
   WORKSPACES_DIR,
-  deviceLimit,
+  sessionLimit,
 } from './config.mjs';
 import { MEMORY_LIMITS, normalizeFact } from './memory.mjs';
 import { hashPassword, sessionKind, verifyPassword } from './security.mjs';
@@ -17,6 +17,16 @@ import { atomicWrite, nowIso, readJson, uid } from './util.mjs';
 /* Насколько перекрытие слов должно быть большим, чтобы новый факт считался
    уточнением старого (тогда старый заменяется, а не добавляется рядом). */
 const REPLACE_OVERLAP = 0.6;
+
+/* Когда в сеансе последний раз что-то делали: свежая отметка, а если её ещё нет
+   (сеансы, созданные до появления поля), — момент входа. По этой величине
+   решается, какой сеанс закрыть, когда места на аккаунте закончились. */
+function lastActiveAt(session) {
+  const seen = Number(session?.lastSeen) || 0;
+  if (seen) return seen;
+  const created = Date.parse(String(session?.createdAt || ''));
+  return Number.isFinite(created) ? created : 0;
+}
 
 function factWords(text) {
   return new Set(
@@ -503,6 +513,10 @@ class Store {
     }
     const user = this.getUser(session.userId);
     if (!user || user.disabled) return null;
+    /* Отметка «здесь только что работали»: по ней видно, какой сеанс закрывать,
+       если мест на аккаунте больше нет. Пишется только в памяти — сохранится
+       вместе со следующим изменением состояния, без диска на каждый запрос. */
+    session.lastSeen = Date.now();
     return user;
   }
 
@@ -510,6 +524,7 @@ class Store {
     const session = this.state.sessions[key];
     if (!session) return;
     session.exp = Date.now() + ttlMs;
+    session.lastSeen = Date.now();
     this.save();
   }
 
@@ -520,24 +535,42 @@ class Store {
     }
   }
 
-  /* Закрывает лишние сеансы пользователя того же класса устройства, что и новый
-     вход: по умолчанию остаётся один компьютер и один телефон, поэтому работа на
-     ноутбуке и телефоне идёт одновременно. Возвращает список выбитых сеансов: их
-     адреса и время входа показывают, что аккаунтом, похоже, пользуется кто-то ещё. */
+  /* Освобождает место под новый вход. У аккаунта есть `sessionLimit()` мест:
+     ноутбук, браузер телефона и ярлык-приложение помещаются все сразу, и никто
+     никого не выбивает. Если мест больше нет, уступает самый давно не
+     использованный сеанс — тот, где дольше всего ничего не делали, а не «второй
+     такой же по типу». Возвращает список выбитых сеансов: их адреса и время
+     входа показывают, что аккаунтом, похоже, пользуется кто-то ещё. */
   dropOtherSessions(userId, keepKey, meta = {}) {
+    const limit = sessionLimit();
     const kind = String(meta.kind || 'desktop');
-    const limit = Math.max(1, Number(deviceLimit(kind)) || 1);
+    const device = String(meta.device || '');
     const dropped = [];
     const now = Date.now();
     if (!this.state.kicked) this.state.kicked = {};
-    /* Свежие сеансы того же класса остаются, старые — закрываем. */
-    const sameKind = Object.entries(this.state.sessions)
-      .filter(
-        ([key, session]) =>
-          session && !session.service && session.userId === userId && key !== keepKey && sessionKind(session) === kind,
-      )
-      .sort((a, b) => String(b[1].createdAt || '').localeCompare(String(a[1].createdAt || '')));
-    for (const [key, session] of sameKind.slice(Math.max(0, limit - 1))) {
+    const sameUser = Object.entries(this.state.sessions).filter(
+      ([key, session]) => session && !session.service && session.userId === userId && key !== keepKey,
+    );
+    /* Повторный вход с той же машины (тот же dshow_device) — это не «ещё одно
+       устройство»: прежний сеанс этой машины просто уступает, без тревожной
+       пометки «вас выбили» и без траты места на аккаунте. */
+    const sameDevice = sameUser.filter(([, session]) => device && String(session.device || '') === device);
+    for (const [key, session] of sameDevice) {
+      delete this.state.sessions[key];
+      dropped.push({
+        ip: session.ip || '',
+        ua: session.ua || '',
+        device: session.device || '',
+        kind: sessionKind(session),
+        createdAt: session.createdAt || null,
+        sameDevice: true,
+      });
+    }
+    /* Остальные сеансы: сначала те, где работали только что. */
+    const others = sameUser
+      .filter(([key]) => this.state.sessions[key])
+      .sort((a, b) => lastActiveAt(b[1]) - lastActiveAt(a[1]));
+    for (const [key, session] of others.slice(Math.max(0, limit - 1))) {
       dropped.push({
         ip: session.ip || '',
         ua: session.ua || '',

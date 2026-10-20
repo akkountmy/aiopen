@@ -193,9 +193,9 @@ export function timingSafeEqualString(a, b) {
   return crypto.timingSafeEqual(bufA, bufB);
 }
 
-/* Выдаёт новый сеанс. Сеансы того же класса устройства закрываются лишние
-   (по умолчанию — один компьютер, один телефон и один ярлык-приложение), поэтому
-   работа с ноутбука, из браузера телефона и из ярлыка идёт параллельно.
+/* Выдаёт новый сеанс. У аккаунта несколько мест под устройства: ноутбук,
+   браузер телефона и ярлык-приложение работают одновременно. Если мест больше
+   нет, уступает самый давно не использованный сеанс (см. dropOtherSessions).
    Возвращает метку нового сеанса, его класс и список выбитых — по нему видно,
    не пользуются ли аккаунтом вдвоём. */
 export function issueSession(store, userId, meta) {
@@ -203,13 +203,19 @@ export function issueSession(store, userId, meta) {
   const key = sessionKey(token);
   const now = nowIso();
   const kind = DEVICE_KINDS.includes(meta?.kind) ? meta.kind : 'desktop';
-  /* Служебный вход (сторож, скрипт) не занимает полку человека: иначе
+  /* Служебный вход (сторож, скрипт) не занимает место человека: иначе
      автоматика выбивала бы живой браузер из той же учётной записи. */
   const service = Boolean(meta?.service);
-  const displaced = service ? [] : store.dropOtherSessions(userId, key, { ip: meta?.ip, ua: meta?.ua, kind });
+  const closed = service
+    ? []
+    : store.dropOtherSessions(userId, key, { ip: meta?.ip, ua: meta?.ua, kind, device: meta?.device });
+  /* Повторный вход с той же машины закрывает её прежний сеанс молча — это не
+     «выбивание» и не повод тревожить человека уведомлением. */
+  const displaced = closed.filter((item) => !item.sameDevice);
   store.state.sessions[key] = {
     userId,
     createdAt: now,
+    lastSeen: Date.now(),
     exp: Date.now() + SESSION.ttlMs,
     ip: meta?.ip || '',
     ua: (meta?.ua || '').slice(0, 200),

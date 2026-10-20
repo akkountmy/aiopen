@@ -18,8 +18,8 @@ import {
   SIGNUP,
   TRUST_PROXY,
   chargeUsd,
-  deviceLimit,
   ensureDirs,
+  sessionLimit,
   taskLimitUsd,
 } from './src/config.mjs';
 import { describeFailure, generateTitle, runTurn } from './src/agent.mjs';
@@ -552,11 +552,9 @@ function sessionsReport() {
   }));
   return {
     at: nowIso(),
-    limits: {
-      desktop: deviceLimit('desktop'),
-      mobile: deviceLimit('mobile'),
-      app: deviceLimit('app'),
-    },
+    /* Сколько устройств аккаунт держит одновременно: закрывается только самый
+       давно не использованный сеанс, поэтому тип устройства здесь справочный. */
+    seats: sessionLimit(),
     sessions,
     kicked,
     audit,
@@ -596,13 +594,15 @@ function requireUser(req, res) {
   if (token) {
     const kicked = store.kickedInfo(sessionKey(token));
     if (kicked) {
+      const seats = sessionLimit();
       return sendJson(
         res,
         401,
         {
           error:
-            'Вход выполнен на другом устройстве того же типа — этот сеанс закрыт. ' +
-            'Одновременно можно работать на одном компьютере и одном телефоне.',
+            `Этот сеанс закрыт: у аккаунта одновременно работают не больше ${seats} устройств, ` +
+            'и на новом входе пришлось уступить место тому, где дольше всего ничего не делали. ' +
+            'Просто войдите снова — или смените пароль, если это были не вы.',
           reason: 'displaced',
           at: kicked.at,
         },
@@ -1418,12 +1418,12 @@ async function route(req, res) {
       return sendJson(res, 200, { version: assetVersion() }, { 'Cache-Control': 'no-store' });
     }
     if (pathname === '/api/health' && method === 'GET') {
-      /* сколько сеансов каждого класса устройства разрешено — видно, что
-         под одним аккаунтом компьютер, телефон и его ярлык работают одновременно */
+      /* сколько устройств аккаунт держит одновременно — видно, что ноутбук,
+         браузер телефона и его ярлык работают параллельно, не выбивая друг друга */
       return sendJson(res, 200, {
         ok: true,
         time: nowIso(),
-        sessions: { desktop: deviceLimit('desktop'), mobile: deviceLimit('mobile'), app: deviceLimit('app') },
+        sessions: { max: sessionLimit() },
         docs: await docEngines(),
         skills: listSkills().length,
       });

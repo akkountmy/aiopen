@@ -1,18 +1,18 @@
-/* Проверка правила «один аккаунт — один компьютер и один телефон» и
-   предупреждений о передаче пароля. Тест поднимает настоящий сервер на
-   свободном порту во временной папке данных, поэтому рабочие данные и Telegram
-   не затрагиваются.
+/* Проверка правила «три устройства одновременно» и предупреждений о передаче
+   пароля. Тест поднимает настоящий сервер на свободном порту во временной папке
+   данных, поэтому рабочие данные и Telegram не затрагиваются.
 
    Что проверяем:
-   - вход с ноутбука и вход с телефона живут одновременно;
-   - ярлык-приложение на телефоне — отдельная полка: компьютер, вкладка
-     телефона и ярлык работают одновременно, не выбивая друг друга;
-   - второй вход с того же класса устройства закрывает прежний сеанс этого
-     класса, но не трогает сеанс другого класса;
-   - планшет с настольным User-Agent (iPadOS) попадает в телефонную полку
-     благодаря Client Hint Sec-CH-UA-Mobile;
-   - правило то же, что и раньше, для выбитых сеансов: пометка «displaced»,
-     запись в историю входов и предупреждение администратору.
+   - на аккаунте три места: ноутбук, браузер телефона и ярлык-приложение живут
+     одновременно;
+   - четвёртый вход закрывает самый давно не использованный сеанс, а не
+     «второй такой же по типу»; остальные устройства продолжают работать;
+   - повторный вход с той же машины (та же метка dshow_device) закрывает свой
+     прежний сеанс молча, без пометки «вас выбили» и без потери чужих мест;
+   - выбитому сеансу достаётся понятное объяснение «displaced», вход попадает в
+     историю, а администратор получает предупреждение;
+   - классы устройств (компьютер, телефон, ярлык) по-прежнему записываются;
+   - выход не считается выбиванием, а знакомая машина не добавляет устройство.
 
    Запуск: node test/device-guard.mjs */
 import { spawn } from 'node:child_process';
@@ -40,7 +40,9 @@ const env = {
   DSHOW_DATA_DIR: dataDir,
   DSHOW_ADMIN_USER: 'tester',
   DSHOW_ADMIN_PASSWORD: 'Test12345',
-  /* Порог занижен специально: двух классов устройств достаточно для предупреждения. */
+  /* Три места — штатное значение; фиксируем явно, чтобы тест не зависел от машины. */
+  DSHOW_SESSIONS_MAX: '3',
+  /* Порог занижен специально: одного выбивания достаточно для предупреждения. */
   DSHOW_ALERT_DEVICES: '2',
   DSHOW_ALERT_IPS: '2',
   DSHOW_ALERT_DISPLACED: '1',
@@ -65,6 +67,8 @@ function check(name, ok, detail = '') {
   console.log(`${ok ? 'OK  ' : 'FAIL'} ${name}${detail ? ` — ${detail}` : ''}`);
 }
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 async function waitReady() {
   for (let i = 0; i < 100; i += 1) {
     try {
@@ -73,7 +77,7 @@ async function waitReady() {
     } catch {
       /* сервер ещё поднимается */
     }
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await sleep(100);
   }
   return false;
 }
@@ -136,14 +140,16 @@ async function login(ua, deviceCookie = '', extraHeaders = {}) {
 
 const asCookie = (session) => `dshow_session=${session}`;
 
+function state() {
+  return JSON.parse(fs.readFileSync(path.join(dataDir, 'index.json'), 'utf8'));
+}
+
 function sessionsInState() {
-  const index = JSON.parse(fs.readFileSync(path.join(dataDir, 'index.json'), 'utf8'));
-  return Object.values(index.sessions || {});
+  return Object.values(state().sessions || {});
 }
 
 function auditEvents() {
-  const index = JSON.parse(fs.readFileSync(path.join(dataDir, 'index.json'), 'utf8'));
-  return Object.values(index.loginAudit || {})[0]?.events || [];
+  return Object.values(state().loginAudit || {})[0]?.events || [];
 }
 
 try {
@@ -151,93 +157,94 @@ try {
   check('сервер отвечает /api/health', true);
 
   const health = await call('/api/health');
-  const slots = health.data.sessions || {};
   check(
-    'разрешено по одному сеансу на компьютер, телефон и ярлык',
-    slots.desktop === 1 && slots.mobile === 1 && slots.app === 1,
-    `desktop=${slots.desktop}, mobile=${slots.mobile}, app=${slots.app}`,
+    'аккаунту разрешено три одновременных устройства',
+    health.data.sessions?.max === 3,
+    JSON.stringify(health.data.sessions || {}),
   );
 
-  /* --- компьютер и телефон одновременно --- */
-  const desktop = await login(DESKTOP);
-  check('вход с компьютера успешен', desktop.status === 200, `HTTP ${desktop.status}`);
-  check('выдан сеанс', Boolean(desktop.session));
-  check('выдана метка устройства', Boolean(desktop.device));
+  /* --- ноутбук, телефон и ярлык: три места сразу, никто никого не выбивает --- */
+  const laptop = await login(DESKTOP);
+  check('вход с ноутбука успешен', laptop.status === 200, `HTTP ${laptop.status}`);
+  check('выдан сеанс', Boolean(laptop.session));
+  check('выдана метка устройства', Boolean(laptop.device));
 
   const phone = await login(IPHONE);
   check('вход с телефона успешен', phone.status === 200, `HTTP ${phone.status}`);
-  check('телефон получил свой сеанс', Boolean(phone.session) && phone.session !== desktop.session);
+  check('телефон получил свой сеанс', Boolean(phone.session) && phone.session !== laptop.session);
 
-  const deskMe = await call('/api/me', { cookie: asCookie(desktop.session) });
-  check('сеанс компьютера продолжает работать', deskMe.status === 200, `HTTP ${deskMe.status}`);
-  const phoneMe = await call('/api/me', { cookie: asCookie(phone.session) });
-  check('сеанс телефона работает', phoneMe.status === 200, `HTTP ${phoneMe.status}`);
-
-  const both = sessionsInState();
-  check('в памяти два активных сеанса', both.length === 2, `сеансов: ${both.length}`);
-  const kinds = both.map((item) => item.kind).sort().join(',');
-  check('классы устройств записаны', kinds === 'desktop,mobile', kinds);
-
-  /* --- второй компьютер закрывает только компьютер --- */
-  const desktop2 = await login(DESKTOP_OTHER);
-  check('второй вход с компьютера успешен', desktop2.status === 200, `HTTP ${desktop2.status}`);
-  const deskOld = await call('/api/me', { cookie: asCookie(desktop.session) });
-  check('прежний сеанс компьютера закрыт', deskOld.status === 401, `HTTP ${deskOld.status}`);
-  check('закрытый сеанс объясняет причину', deskOld.data.reason === 'displaced', String(deskOld.data.reason || ''));
-  const phoneAlive = await call('/api/me', { cookie: asCookie(phone.session) });
-  check('телефон не выбит вторым компьютером', phoneAlive.status === 200, `HTTP ${phoneAlive.status}`);
-
-  /* --- второй телефон закрывает только телефон --- */
-  const phone2 = await login(ANDROID);
-  check('второй вход с телефона успешен', phone2.status === 200, `HTTP ${phone2.status}`);
-  const phoneOld = await call('/api/me', { cookie: asCookie(phone.session) });
-  check('прежний сеанс телефона закрыт', phoneOld.status === 401, `HTTP ${phoneOld.status}`);
-  check('телефон тоже получает пометку displaced', phoneOld.data.reason === 'displaced', String(phoneOld.data.reason || ''));
-  const deskAlive = await call('/api/me', { cookie: asCookie(desktop2.session) });
-  check('компьютер не выбит вторым телефоном', deskAlive.status === 200, `HTTP ${deskAlive.status}`);
-
-  const stillTwo = sessionsInState();
-  check('сеансов по-прежнему два', stillTwo.length === 2, `сеансов: ${stillTwo.length}`);
-
-  /* --- планшет с настольным User-Agent попадает в телефонную полку --- */
-  const tablet = await login(IPAD_UA, '', { 'sec-ch-ua-mobile': '?1' });
-  check('вход с планшета успешен', tablet.status === 200, `HTTP ${tablet.status}`);
-  const androidKilled = await call('/api/me', { cookie: asCookie(phone2.session) });
-  check('планшет выбил телефон, а не компьютер', androidKilled.status === 401, `HTTP ${androidKilled.status}`);
-  const deskAfterTablet = await call('/api/me', { cookie: asCookie(desktop2.session) });
-  check('компьютер пережил вход с планшета', deskAfterTablet.status === 200, `HTTP ${deskAfterTablet.status}`);
-
-  /* --- ярлык-приложение на телефоне: третья полка --- */
   const shortcut = await login(IPHONE, '', { 'x-dshow-display': 'standalone' });
   check('вход из ярлыка-приложения успешен', shortcut.status === 200, `HTTP ${shortcut.status}`);
-  check('ярлык получил отдельный сеанс', Boolean(shortcut.session) && shortcut.session !== tablet.session);
-  const kindsNow = sessionsInState().map((item) => item.kind).sort().join(',');
-  check('три полки: компьютер, телефон, ярлык', kindsNow === 'app,desktop,mobile', kindsNow);
-  const tabletAfterApp = await call('/api/me', { cookie: asCookie(tablet.session) });
-  check('вход из ярлыка не выбивает вкладку телефона', tabletAfterApp.status === 200, `HTTP ${tabletAfterApp.status}`);
-  const deskAfterApp = await call('/api/me', { cookie: asCookie(desktop2.session) });
-  check('вход из ярлыка не выбивает компьютер', deskAfterApp.status === 200, `HTTP ${deskAfterApp.status}`);
-  const appMe = await call('/api/me', { cookie: asCookie(shortcut.session) });
-  check('сеанс ярлыка работает', appMe.status === 200, `HTTP ${appMe.status}`);
+  check('ярлык получил отдельный сеанс', Boolean(shortcut.session) && shortcut.session !== phone.session);
 
-  /* --- второй ярлык закрывает только ярлык --- */
-  const shortcut2 = await login(IPHONE, '', { 'x-dshow-display': 'standalone' });
-  check('второй вход из ярлыка успешен', shortcut2.status === 200, `HTTP ${shortcut2.status}`);
-  const shortcutOld = await call('/api/me', { cookie: asCookie(shortcut.session) });
-  check('прежний сеанс ярлыка закрыт вторым ярлыком', shortcutOld.status === 401, `HTTP ${shortcutOld.status}`);
-  const tabletAlive = await call('/api/me', { cookie: asCookie(tablet.session) });
-  check('второй ярлык не тронул вкладку телефона', tabletAlive.status === 200, `HTTP ${tabletAlive.status}`);
-  const deskAlive2 = await call('/api/me', { cookie: asCookie(desktop2.session) });
-  check('второй ярлык не тронул компьютер', deskAlive2.status === 200, `HTTP ${deskAlive2.status}`);
-  const finalKinds = sessionsInState().map((item) => item.kind).sort().join(',');
-  check('после второго ярлыка снова три сеанса', finalKinds === 'app,desktop,mobile', finalKinds);
+  const laptopMe = await call('/api/me', { cookie: asCookie(laptop.session) });
+  const phoneMe = await call('/api/me', { cookie: asCookie(phone.session) });
+  const appMe = await call('/api/me', { cookie: asCookie(shortcut.session) });
+  check(
+    'все три устройства работают одновременно',
+    laptopMe.status === 200 && phoneMe.status === 200 && appMe.status === 200,
+    `ноутбук ${laptopMe.status}, телефон ${phoneMe.status}, ярлык ${appMe.status}`,
+  );
+
+  const three = sessionsInState();
+  check('в памяти ровно три сеанса', three.length === 3, `сеансов: ${three.length}`);
+  const kinds = three.map((item) => item.kind).sort().join(',');
+  check('классы устройств записаны', kinds === 'app,desktop,mobile', kinds);
+
+  /* --- четвёртое устройство: уступает самый давний по активности --- */
+  /* Телефон и ярлык только что работали, ноутбук — нет: уступать ему. */
+  await sleep(30);
+  await call('/api/me', { cookie: asCookie(phone.session) });
+  await call('/api/me', { cookie: asCookie(shortcut.session) });
+  await sleep(30);
+  const tablet = await login(IPAD_UA, '', { 'sec-ch-ua-mobile': '?1' });
+  check('вход с четвёртого устройства успешен', tablet.status === 200, `HTTP ${tablet.status}`);
+
+  const laptopDropped = await call('/api/me', { cookie: asCookie(laptop.session) });
+  check('уступил самый давно не использованный сеанс', laptopDropped.status === 401, `HTTP ${laptopDropped.status}`);
+  check('закрытый сеанс объясняет причину', laptopDropped.data.reason === 'displaced', String(laptopDropped.data.reason || ''));
+  check(
+    'объяснение говорит про лимит устройств',
+    /не больше 3 устройств/.test(String(laptopDropped.data.error || '')),
+    String(laptopDropped.data.error || '').slice(0, 90),
+  );
+  const phoneAfter = await call('/api/me', { cookie: asCookie(phone.session) });
+  const shortcutAfter = await call('/api/me', { cookie: asCookie(shortcut.session) });
+  const tabletMe = await call('/api/me', { cookie: asCookie(tablet.session) });
+  check(
+    'остальные устройства не задеты',
+    phoneAfter.status === 200 && shortcutAfter.status === 200 && tabletMe.status === 200,
+    `телефон ${phoneAfter.status}, ярлык ${shortcutAfter.status}, планшет ${tabletMe.status}`,
+  );
+  check('сеансов по-прежнему три', sessionsInState().length === 3, `сеансов: ${sessionsInState().length}`);
+
+  /* --- повторный вход с той же машины: молча, без потери чужих мест --- */
+  const phoneAgain = await login(ANDROID, phone.device);
+  check('повторный вход с того же телефона успешен', phoneAgain.status === 200, `HTTP ${phoneAgain.status}`);
+  const phoneOld = await call('/api/me', { cookie: asCookie(phone.session) });
+  check('прежний сеанс этой же машины закрыт', phoneOld.status === 401, `HTTP ${phoneOld.status}`);
+  check(
+    'своя же машина не пугает пометкой «вас выбили»',
+    phoneOld.data.reason === undefined,
+    String(phoneOld.data.reason || 'нет пометки'),
+  );
+  const othersAlive = await Promise.all([
+    call('/api/me', { cookie: asCookie(shortcut.session) }),
+    call('/api/me', { cookie: asCookie(tablet.session) }),
+    call('/api/me', { cookie: asCookie(phoneAgain.session) }),
+  ]);
+  check(
+    'повторный вход не занял чужое место',
+    othersAlive.every((item) => item.status === 200),
+    othersAlive.map((item) => item.status).join(','),
+  );
 
   /* --- история входов и предупреждение администратору --- */
   const events = auditEvents();
-  check('история входов записана', events.length >= 5, `событий: ${events.length}`);
+  check('история входов записана', events.length >= 4, `событий: ${events.length}`);
   check('видны все три класса устройств', new Set(events.map((item) => item.kind)).size === 3);
-  check('разные метки устройств сохранены', new Set(events.map((item) => item.device)).size >= 4);
-  check('зафиксировано выбивание сеансов', events.some((item) => item.displaced >= 1));
+  check('разные метки устройств сохранены', new Set(events.map((item) => item.device)).size >= 3);
+  check('зафиксировано выбивание сеанса', events.some((item) => item.displaced >= 1));
   check('сработало предупреждение администратору', /\[guard\] подозрение/.test(log));
   check('сообщение ушло в канал уведомлений', /\[notify\]/.test(log));
 
@@ -249,9 +256,9 @@ try {
 
   /* --- знакомое устройство не добавляет новое --- */
   const devicesBefore = new Set(auditEvents().map((item) => item.device)).size;
-  const known = await login(DESKTOP, desktop2.device);
+  const known = await login(DESKTOP, phoneAgain.device);
   check('вход с прежней меткой устройства успешен', known.status === 200, `HTTP ${known.status}`);
-  check('метка устройства сохраняется', known.device === desktop2.device);
+  check('метка устройства сохраняется', known.device === phoneAgain.device);
   const devicesAfter = new Set(auditEvents().map((item) => item.device)).size;
   check(
     'знакомая машина не добавила новое устройство',
@@ -262,7 +269,7 @@ try {
   check('тест выполнился без исключений', false, String(error?.message || error));
 } finally {
   server.kill();
-  await new Promise((resolve) => setTimeout(resolve, 200));
+  await sleep(200);
   fs.rmSync(dataDir, { recursive: true, force: true });
   const failed = results.filter((item) => !item.ok);
   console.log(`\nИтог: ${results.length - failed.length}/${results.length} проверок пройдено`);
