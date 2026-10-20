@@ -27,11 +27,20 @@ export const TRUST_PROXY = process.env.DSHOW_TRUST_PROXY === '1';
  *  это удобно для тестов и для тонкой настройки облака без правки кода. */
 export const CONTEXT = {
   profile: 'medium',
-  historyTokens: Number(process.env.DSHOW_HISTORY_TOKENS || 24000),
+  /* Сколько истории уходит в модель. Большая задача — это десятки шагов с
+     файлами и расчётами, поэтому запас нужен приличный; лишнее отрезается
+     между шагами, чтобы модель не упёрлась в окно контекста. */
+  historyTokens: Number(process.env.DSHOW_HISTORY_TOKENS || 60000),
   toolResultChars: 12000,
   summaryChars: 2200,
-  keepRecentMessages: Number(process.env.DSHOW_KEEP_RECENT || 8),
-  maxSteps: 30,
+  keepRecentMessages: Number(process.env.DSHOW_KEEP_RECENT || 10),
+  /* Шагов до мягкого продолжения: дальше агент сам получает «продолжай» и
+     работает, вместо того чтобы остановиться и спросить человека. */
+  maxSteps: Number(process.env.DSHOW_MAX_STEPS || 40),
+  /* Сколько таких отрезков разрешено на одну задачу. 40 × 12 = 480 шагов —
+     с запасом на самый большой проект; упирается в это только зацикливание,
+     а не настоящая работа. */
+  maxSegments: Number(process.env.DSHOW_MAX_SEGMENTS || 12),
   maxOutputTokens: 16000,
 };
 
@@ -177,9 +186,10 @@ export function chargeUsd(tokensIn = 0, tokensOut = 0) {
  * Порог «тяжёлой» задачи: стоимость ОДНОЙ задачи. Пока задача дешевле порога,
  * она идёт молча, в фоне, без уведомлений. Когда перевалила — работа
  * приостанавливается, пользователь получает предупреждение, а администратор
- * запрос на подтверждение. Смысл именно в дорогих задачах (≈ $5 и выше),
- * а не в накопленном расходе проекта: сотня мелких задач не должна упираться
- * в лимит.
+ * запрос на подтверждение. Порог — $10 на задачу: этого хватает на большой
+ * проект (десятки документов и страниц), и до него ничего согласовывать не
+ * нужно. Смысл именно в дорогих задачах, а не в накопленном расходе проекта:
+ * сотня мелких задач не должна упираться в лимит.
  */
 function usdFromEnv(name, fallback) {
   const value = Number(process.env[name]);
@@ -187,9 +197,9 @@ function usdFromEnv(name, fallback) {
 }
 
 export const BUDGET = {
-  limitUsd: usdFromEnv('DSHOW_TASK_LIMIT_USD', 5),
+  limitUsd: usdFromEnv('DSHOW_TASK_LIMIT_USD', 10),
   /** Сколько добавляется к порогу после одобрения администратора. */
-  stepUsd: usdFromEnv('DSHOW_TASK_STEP_USD', 5),
+  stepUsd: usdFromEnv('DSHOW_TASK_STEP_USD', 10),
 };
 
 /**

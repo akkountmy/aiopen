@@ -105,9 +105,12 @@ function startApp() {
       DSHOW_DEEPSEEK_KEY: 'test-key',
       DSHOW_MODEL_BASE: `http://127.0.0.1:${STUB_PORT}`,
       DSHOW_MODEL: 'stub-model',
-      /* Крошечный бюджет заставляет вырезать историю уже на третьем ходе. */
-      DSHOW_HISTORY_TOKENS: '1',
-      DSHOW_KEEP_RECENT: '1',
+      /* Бюджет чуть меньше одной большой реплики: история переполняется только
+         к третьему ходу. Совсем крошечный бюджет (1 токен) теперь режет историю
+         ещё внутри хода — это защита от переполнения окна модели, и она мешала
+         бы проверять обрезку на границе реплик. */
+      DSHOW_HISTORY_TOKENS: '1200',
+      DSHOW_KEEP_RECENT: '2',
       DSHOW_TG_TOKEN: '',
     },
     stdio: ['ignore', 'pipe', 'pipe'],

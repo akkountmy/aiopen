@@ -1,5 +1,5 @@
 // Проверка порога «тяжёлой задачи»: платформа останавливает работу и пишет
-// администратору только тогда, когда ОДНА задача стоит дороже порога (по умолчанию $5),
+// администратору только тогда, когда ОДНА задача стоит дороже порога (по умолчанию $10),
 // и никогда не упирается в «лимит $0.00» из-за старых крошечных значений в проекте.
 //
 //   node test/budget.mjs        (поднимает заглушку модели и отдельный экземпляр сервиса)
@@ -50,7 +50,7 @@ function startStub() {
       const expensive = raw.toLowerCase().includes('дорогая');
       if (process.env.DSHOW_TEST_DEBUG) console.error(`[stub] expensive=${expensive} stream=${body.stream}`);
       const usage = expensive
-        ? { prompt_tokens: 20_000_000, completion_tokens: 10_000_000 }
+        ? { prompt_tokens: 40_000_000, completion_tokens: 20_000_000 }
         : { prompt_tokens: 1000, completion_tokens: 200 };
       /* генерация заголовка — обычный JSON, без потока */
       if (body.stream === false) {
@@ -83,8 +83,8 @@ function startApp() {
       DSHOW_DEEPSEEK_KEY: 'test-key',
       DSHOW_MODEL_BASE: `http://127.0.0.1:${STUB_PORT}`,
       DSHOW_MODEL: 'stub-model',
-      DSHOW_TASK_LIMIT_USD: '5',
-      DSHOW_TASK_STEP_USD: '5',
+      DSHOW_TASK_LIMIT_USD: '10',
+      DSHOW_TASK_STEP_USD: '10',
       DSHOW_TG_TOKEN: '',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -168,11 +168,11 @@ let app;
 
 try {
   /* ---------- 1. чистая логика порога ---------- */
-  taskLimitUsd(0.0005) === 5
-    ? ok('устаревший крошечный бюджет не опускает порог', '$0.0005 → $5')
+  taskLimitUsd(0.0005) === 10
+    ? ok('устаревший крошечный бюджет не опускает порог', '$0.0005 → $10')
     : fail('крошечный бюджет', String(taskLimitUsd(0.0005)));
-  taskLimitUsd(undefined) === 5 ? ok('пустой бюджет = порог по умолчанию', '$5') : fail('пустой бюджет', String(taskLimitUsd(undefined)));
-  taskLimitUsd(12) === 12 ? ok('одобрение администратора поднимает порог', '$12') : fail('поднятый порог', String(taskLimitUsd(12)));
+  taskLimitUsd(undefined) === 10 ? ok('пустой бюджет = порог по умолчанию', '$10') : fail('пустой бюджет', String(taskLimitUsd(undefined)));
+  taskLimitUsd(25) === 25 ? ok('одобрение администратора поднимает порог', '$25') : fail('поднятый порог', String(taskLimitUsd(25)));
 
   /* ---------- 2. дешёвая задача: молча, без запроса ---------- */
   stub = await startStub();
@@ -183,7 +183,10 @@ try {
   const login = await admin.call('/api/login', { method: 'POST', body: ADMIN });
   login.status === 200 ? ok('администратор вошёл') : fail('вход администратора', JSON.stringify(login));
 
-  const createdUser = await admin.call('/api/admin/users', { method: 'POST', body: { ...USER, role: 'user' } });
+  /* Баланс пополняем сразу: сама дорогая задача стоит около $20, а счётчик
+     списывает с баланса вдвое больше — на стартовых $20 проверка упиралась бы
+     в «закончились средства» вместо порога задачи. */
+  const createdUser = await admin.call('/api/admin/users', { method: 'POST', body: { ...USER, role: 'user', creditUsd: 200 } });
   createdUser.status === 200 ? ok('создан обычный пользователь') : fail('создание пользователя', JSON.stringify(createdUser));
 
   const user = client();
@@ -212,7 +215,7 @@ try {
     ? ok('запрос администратору не создан')
     : fail('лишний запрос', JSON.stringify(cheapRequests.map((item) => ({ spent: item.spentUsd, limit: item.limitUsd }))));
 
-  /* ---------- 3. дорогая задача: пауза и запрос с порогом $5 ---------- */
+  /* ---------- 3. дорогая задача: пауза и запрос с порогом $10 ---------- */
   const pricey = await user.call(`/api/chats/${chatId}/messages`, { method: 'POST', body: { text: 'Дорогая задача на весь бюджет' }, raw: true });
   const priceyStream = await readStream(pricey);
   const approvalEvent = priceyStream.events.find((event) => event.type === 'approval');
@@ -220,10 +223,10 @@ try {
     fail('дорогая задача', 'нет события approval');
   } else {
     ok('дорогая задача остановлена', `$${approvalEvent.approval.spentUsd}`);
-    Number(approvalEvent.approval.limitUsd) === 5
-      ? ok('в запросе порог $5 за задачу', `$${approvalEvent.approval.limitUsd}`)
+    Number(approvalEvent.approval.limitUsd) === 10
+      ? ok('в запросе порог $10 за задачу', `$${approvalEvent.approval.limitUsd}`)
       : fail('порог в запросе', String(approvalEvent.approval.limitUsd));
-    Number(approvalEvent.approval.spentUsd) > 5
+    Number(approvalEvent.approval.spentUsd) > 10
       ? ok('стоимость задачи показана честно', `$${approvalEvent.approval.spentUsd}`)
       : fail('стоимость задачи', String(approvalEvent.approval.spentUsd));
   }
@@ -235,11 +238,11 @@ try {
   const pending = (approvals.data.approvals || []).filter((item) => item.projectId === projectId && item.status === 'pending');
   pending.length === 1 ? ok('запрос виден администратору') : fail('список запросов', JSON.stringify((approvals.data.approvals || []).length));
   if (pending.length === 1) {
-    Number(pending[0].limitUsd) === 5
-      ? ok('в карточке запроса порог $5')
+    Number(pending[0].limitUsd) === 10
+      ? ok('в карточке запроса порог $10')
       : fail('порог в карточке', String(pending[0].limitUsd));
     const decided = await admin.call(`/api/admin/approvals/${pending[0].id}`, { method: 'POST', body: { action: 'approve' } });
-    decided.status === 200 && Number(decided.data.budgetUsd) > 5
+    decided.status === 200 && Number(decided.data.budgetUsd) > 10
       ? ok('одобрение поднимает порог', `$${decided.data.budgetUsd}`)
       : fail('одобрение', JSON.stringify(decided));
   }

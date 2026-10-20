@@ -7,6 +7,18 @@ import { estimateTokens, sleep, truncate } from './util.mjs';
 
 const MAX_IMAGE_PARTS = 6;
 
+/* «Продолжай» после отрезка шагов: большая задача не должна обрываться на
+   счётчике и не должна заставлять человека писать «продолжи» руками. */
+const CONTINUE_PROMPT =
+  'Продолжай выполнение задачи с того места, где остановился. Не переспрашивай и не проси ' +
+  'подтверждения — доведи работу до готового результата: файлы созданы и проверены, ответ ' +
+  'содержит итог и пути к файлам.';
+
+/* Финальная просьба, если исчерпан технический предел длины задачи. */
+const WRAP_UP_PROMPT =
+  'Инструменты больше недоступны. Коротко подведи итог: что уже сделано, какие файлы готовы ' +
+  'и что в них. Не задавай вопросов и не предлагай продолжить.';
+
 function contentText(message) {
   if (!message) return '';
   const content = message.content;
@@ -146,15 +158,41 @@ export async function simpleCompletion(messages, { maxTokens = 500, signal, effo
   return String(json?.choices?.[0]?.message?.content || '').trim();
 }
 
-function trimHistory(chat, budget) {
+/* Обрезка истории перед обращением к модели. Режем по границе «сообщение
+   пользователя» — тогда вызовы инструментов остаются вместе со своими
+   ответами. Внутри одной задачи такой границы ещё нет, и тогда режем перед
+   следующим вызовом инструментов.
+   Закреплённое сообщение (сама задача) не выбрасываем и порядок не меняем:
+   обрезаем только то, что стоит ДО него. Иначе задача оказывалась бы в начале
+   истории, а ответы на неё — после чужих реплик, и модель видела бы диалог
+   в перепутанном порядке. */
+function trimHistory(chat, budget, pinned = null) {
   const removed = [];
+  const pinIndex = pinned ? chat.history.indexOf(pinned) : -1;
   let total = chat.history.reduce((sum, m) => sum + messageCost(m), 0);
   let guard = 0;
-  while (total > budget && chat.history.length > CONTEXT.keepRecentMessages && guard < 200) {
+  while (total > budget && chat.history.length > CONTEXT.keepRecentMessages && guard < 400) {
     guard++;
     let cut = 1;
     while (cut < chat.history.length && chat.history[cut].role !== 'user') cut++;
-    if (cut >= chat.history.length) break;
+    if (cut >= chat.history.length) {
+      cut = -1;
+      for (let i = 1; i < chat.history.length; i++) {
+        const message = chat.history[i];
+        if (message.role === 'assistant' && Array.isArray(message.tool_calls) && message.tool_calls.length) {
+          cut = i;
+          break;
+        }
+      }
+      if (cut < 0) break;
+    }
+    /* Дальше закреплённого сообщения не заходим: всё, что после задачи, — это
+       её собственные шаги, их порядок менять нельзя. */
+    if (pinIndex >= 0) {
+      if (cut > pinIndex) cut = pinIndex;
+      if (cut <= 0) break;
+    }
+    if (chat.history.length - cut < CONTEXT.keepRecentMessages) break;
     const slice = chat.history.splice(0, cut);
     for (const message of slice) {
       total -= messageCost(message);
@@ -227,11 +265,20 @@ export async function runTurn({
   chat.history.push(turnMessage);
 
   const toolDefs = await availableToolDefs();
+  /* Задача целиком закрепляется в истории: обрезка контекста её не съедает. */
+  const taskMessage = turnMessage;
+  const segmentSize = Math.max(1, Number(CONTEXT.maxSteps) || 30);
+  const stepLimit = segmentSize * Math.max(1, Number(CONTEXT.maxSegments) || 1);
   let finalText = '';
   let steps = 0;
+  let finished = false;
 
-  while (steps < CONTEXT.maxSteps) {
+  while (!finished && steps < stepLimit) {
     steps++;
+    /* Длинная задача не должна упираться в окно контекста: лишнюю историю
+       отрезаем между шагами, а не только в начале хода. Задача закреплена,
+       поэтому агент всегда видит, что от него требуется. */
+    trimHistory(chat, CONTEXT.historyTokens, taskMessage);
     const system = systemPrompt({ projectName, memory: chat.memory, userName, question: userText, facts, skillsText });
     const messages = [{ role: 'system', content: system }, ...chat.history];
 
@@ -298,6 +345,7 @@ export async function runTurn({
 
     if (!result.toolCalls.length) {
       chat.history.push({ role: 'assistant', content: result.text || '' });
+      finished = true;
       break;
     }
 
@@ -311,7 +359,6 @@ export async function runTurn({
       })),
     };
     chat.history.push(assistantMessage);
-    chat.history.push(...[]);
 
     for (const call of assistantMessage.tool_calls) {
       let args = {};
@@ -385,12 +432,48 @@ export async function runTurn({
       if (signal.aborted) throw Object.assign(new Error('aborted'), { name: 'AbortError' });
     }
     if (signal.aborted) throw Object.assign(new Error('aborted'), { name: 'AbortError' });
+    /* Отрезок шагов закончился, а работа ещё идёт: человека не спрашиваем —
+       агент получает «продолжай» и ведёт задачу дальше сам. Для интерфейса это
+       просто «работаю…», никаких действий в ленте не появляется. */
+    if (steps % segmentSize === 0 && steps < stepLimit) {
+      chat.history.push({ role: 'user', content: CONTINUE_PROMPT });
+      emit({ type: 'progress', step: steps, limit: stepLimit });
+    }
   }
 
-  if (steps >= CONTEXT.maxSteps) {
-    const note = '\n\n_Достигнут предел шагов для одной задачи — уточните, что продолжить._';
-    finalText += note;
-    emit({ type: 'delta', text: note });
+  /* Предел исчерпан — в жизни это почти всегда зацикливание, а не настоящая
+     работа. Не заставляем человека писать «продолжи»: просим короткий итог
+     без инструментов. */
+  if (!finished) {
+    try {
+      const system = systemPrompt({ projectName, memory: chat.memory, userName, question: userText, facts, skillsText });
+      const result = await requestCompletion(
+        {
+          model: MODEL.name,
+          messages: [
+            { role: 'system', content: system },
+            ...chat.history,
+            { role: 'user', content: WRAP_UP_PROMPT },
+          ],
+          max_tokens: CONTEXT.maxOutputTokens,
+          reasoning_effort: MODEL.effort,
+        },
+        {
+          signal,
+          onDelta: (text) => emit({ type: 'delta', text }),
+          onReasoning: () => emit({ type: 'reasoning' }),
+        },
+      );
+      if (result.usage) {
+        usage.tokensIn += result.usage.prompt_tokens || 0;
+        usage.tokensOut += result.usage.completion_tokens || 0;
+      }
+      finalText += result.text || '';
+      chat.history.push({ role: 'assistant', content: result.text || '' });
+      finished = true;
+    } catch {
+      /* итог не получился — остаётся всё, что уже сказано в ленте */
+    }
   }
 
   return { text: finalText, usage, tools: toolsUsed, steps, memory: chat.memory };
