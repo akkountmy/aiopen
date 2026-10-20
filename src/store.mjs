@@ -12,7 +12,7 @@ import {
 } from './config.mjs';
 import { MEMORY_LIMITS, normalizeFact } from './memory.mjs';
 import { hashPassword, sessionKind, verifyPassword } from './security.mjs';
-import { atomicWrite, nowIso, readJson, uid } from './util.mjs';
+import { atomicWrite, nowIso, readJson, uid, uniqueFileName } from './util.mjs';
 
 /* Насколько перекрытие слов должно быть большим, чтобы новый факт считался
    уточнением старого (тогда старый заменяется, а не добавляется рядом). */
@@ -122,6 +122,7 @@ class Store {
     this.loaded = true;
     this.pruneSessions();
     this.migrate();
+    this.migrateUploadsIntoRoot();
 
     if (this.state.users.length === 0) {
       let record = null;
@@ -273,6 +274,57 @@ class Store {
   save() {
     if (!this.loaded) return;
     atomicWrite(INDEX_FILE, JSON.stringify(this.state, null, 2));
+  }
+
+  /* Когда-то вложения из диалогов складывались в подпапку uploads — из-за неё
+     в «Файлах проекта» появлялась отдельная папка, и файлы проекта лежали в
+     двух местах. Теперь у проекта одна общая папка: старые файлы переносим
+     наверх под их настоящими именами (ничего не затирая), записи вложений
+     направляем на новое место, пустую папку убираем. */
+  migrateUploadsIntoRoot() {
+    let moved = 0;
+    let changed = false;
+    for (const project of this.state.projects) {
+      const dir = this.workspaceDir(project.id);
+      const legacy = path.join(dir, 'uploads');
+      let entries = [];
+      try {
+        if (!fs.statSync(legacy).isDirectory()) continue;
+        entries = fs.readdirSync(legacy, { withFileTypes: true });
+      } catch {
+        continue;
+      }
+      /* Имя из вложения точнее, чем имя файла на диске: там был служебный
+         префикс вроде «4f21c9_». */
+      const byPath = new Map();
+      for (const attachment of Object.values(this.state.attachments || {})) {
+        if (!attachment || attachment.projectId !== project.id) continue;
+        if (attachment.relPath) byPath.set(attachment.relPath, attachment);
+      }
+      for (const entry of entries) {
+        if (!entry.isFile()) continue;
+        const legacyRel = `uploads/${entry.name}`;
+        const attachment = byPath.get(legacyRel);
+        const name = uniqueFileName(dir, (attachment && attachment.name) || entry.name);
+        try {
+          fs.renameSync(path.join(legacy, entry.name), path.join(dir, name));
+        } catch {
+          continue;
+        }
+        moved += 1;
+        if (attachment) {
+          attachment.relPath = name;
+          changed = true;
+        }
+      }
+      try {
+        if (fs.readdirSync(legacy).length === 0) fs.rmdirSync(legacy);
+      } catch {
+        /* папка занята или уже удалена — не повод падать */
+      }
+    }
+    if (changed) this.save();
+    if (moved) console.log(`[store] файлов из папки uploads перенесено в общую папку проектов: ${moved}`);
   }
 
   pruneSessions() {

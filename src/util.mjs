@@ -40,6 +40,20 @@ export function safeName(name, fallback = 'file') {
   return cleaned.slice(0, 180) || fallback;
 }
 
+/* Свободное имя в папке: «отчёт.pdf», «отчёт (2).pdf», «отчёт (3).pdf»…
+   Вложение из диалога и файл из панели лежат в одной общей папке проекта —
+   одинаковые имена не должны затирать друг друга. */
+export function uniqueFileName(dir, name) {
+  const wanted = safeName(name);
+  if (!fs.existsSync(path.join(dir, wanted))) return wanted;
+  const parsed = path.parse(wanted);
+  for (let index = 2; index < 1000; index += 1) {
+    const candidate = `${parsed.name} (${index})${parsed.ext}`;
+    if (!fs.existsSync(path.join(dir, candidate))) return candidate;
+  }
+  return `${parsed.name} ${Date.now()}${parsed.ext}`;
+}
+
 export function formatBytes(n) {
   if (!Number.isFinite(n) || n < 0) return '0 Б';
   const units = ['Б', 'КБ', 'МБ', 'ГБ'];

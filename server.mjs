@@ -51,7 +51,7 @@ import { store } from './src/store.mjs';
 import { listTree, resolveSafe } from './src/tools.mjs';
 import { listSkills } from './src/skills.mjs';
 import { pipeZip } from './src/zip.mjs';
-import { nowIso, safeName, uid } from './src/util.mjs';
+import { nowIso, safeName, uid, uniqueFileName } from './src/util.mjs';
 import { describeImage } from './src/vision.mjs';
 import { webSearch } from './src/search.mjs';
 
@@ -896,8 +896,12 @@ async function handleUpload(req, res, user) {
   const mime = String(req.headers['content-type'] || 'application/octet-stream');
   const id = uid('a_');
   const cleanName = safeName(rawName).slice(0, 120) || 'file';
-  const relPath = `uploads/${id.slice(-6)}_${cleanName}`;
-  const full = resolveSafe(store.workspaceDir(project.id), relPath);
+  /* Вложение из диалога лежит в той же общей папке проекта, что и файлы из
+     панели: отдельной папки uploads больше нет, а одинаковые имена не
+     затирают друг друга. */
+  const workspaceDir = store.workspaceDir(project.id);
+  const relPath = uniqueFileName(workspaceDir, cleanName);
+  const full = resolveSafe(workspaceDir, relPath);
   const declared = Number(req.headers['content-length'] || 0);
   if (!(await ensureDiskRoom(res, declared))) return;
   const size = await receiveToFile(req, LIMITS.maxAttachmentBytes, full);
@@ -1736,7 +1740,8 @@ async function route(req, res) {
       }
       if (parts[3] === 'upload' && method === 'POST') {
         const rawName = decodeURIComponent(String(req.headers['x-filename'] || 'file'));
-        const target = url.searchParams.get('path') || `uploads/${safeName(rawName)}`;
+        /* Без явного пути файл ложится в общую папку проекта. */
+        const target = url.searchParams.get('path') || uniqueFileName(workspace, rawName);
         const full = resolveSafe(workspace, target);
         if (!(await ensureDiskRoom(res, Number(req.headers['content-length'] || 0)))) return;
         const size = await receiveToFile(req, LIMITS.maxAttachmentBytes, full);
