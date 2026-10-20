@@ -4420,10 +4420,15 @@ body.resizing {
     flex: 1 1 auto;
   }
   /* Таблица на телефоне: ячейки плотнее — в экран входит больше колонок, а
-     остальные достаются прокруткой внутри окна. */
+     остальные достаются прокруткой внутри окна. Строка не переносится: как в
+     Excel, читаем в сторону, а не столбиком из одного слова. */
   .pv-table th,
   .pv-table td {
     padding: 6px 8px;
+  }
+  .pv-kind-sheet .pv-table th,
+  .pv-kind-sheet .pv-table td {
+    white-space: nowrap;
   }
   .pv-h1 {
     font-size: 19px;
