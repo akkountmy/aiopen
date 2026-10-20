@@ -201,6 +201,29 @@ svg {
   animation: slide 1.1s ease-in-out infinite;
 }
 
+/* Сервис не ответил: вместо формы входа — короткое объяснение и повтор. */
+.boot-note {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  max-width: 320px;
+  margin-top: 6px;
+  padding: 0 22px;
+  text-align: center;
+}
+
+.boot-note p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text-2);
+}
+
+.boot-note .btn {
+  min-width: 132px;
+}
+
 @keyframes slide {
   0% {
     transform: translateX(-110%);

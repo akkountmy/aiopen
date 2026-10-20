@@ -67,9 +67,20 @@ export const LIMITS = {
   proofreadChars: 24000,
 };
 
+/* Срок жизни входа можно задать переменной окружения — это нужно и облаку,
+   и проверкам, которые не могут ждать месяц. */
+function sessionDaysFromEnv(value, fallback) {
+  const n = Number(value);
+  return (Number.isFinite(n) && n > 0 ? n : fallback) * 24 * 60 * 60 * 1000;
+}
+
+/* Сколько живёт вход. Срок скользящий: пока человек заходит, он продлевается и
+   на сервере, и в браузере (см. currentUser в server.mjs). Тридцать дней — это
+   «открыл ярлык через месяц отпуска и остался внутри»; раньше было семь, и
+   у приложения с домашнего экрана ровно через неделю просили пароль. */
 export const SESSION = {
   cookie: 'dshow_session',
-  ttlMs: 7 * 24 * 60 * 60 * 1000,
+  ttlMs: sessionDaysFromEnv(process.env.DSHOW_SESSION_DAYS, 30),
   sliding: true,
 };
 

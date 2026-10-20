@@ -454,10 +454,25 @@ try {
       return svg ? { viewBox: svg.getAttribute('viewBox'), color: getComputedStyle(holder).color } : null;
     };
     const rows = [...document.querySelectorAll('.project')].map((project) => ({ active: project.classList.contains('active'), ...rowIcon(project) }));
+    /* Значок в шапке «Файлы проекта» и в кнопке-ящике на телефоне: раскрытая
+       папка из набора Harness — сетка 16, заливка, один контур. */
+    const folder = (svg) => {
+      if (!svg) return null;
+      const path = svg.querySelector('path');
+      return {
+        viewBox: svg.getAttribute('viewBox'),
+        fill: getComputedStyle(svg).fill,
+        stroke: getComputedStyle(svg).stroke,
+        paths: svg.querySelectorAll('path').length,
+        opens: Boolean(path) && path.getAttribute('d').startsWith('M5.19629'),
+      };
+    };
     return {
       button: btn ? { viewBox: btn.getAttribute('viewBox'), fill: getComputedStyle(btn).fill, stroke: getComputedStyle(btn).stroke } : null,
       active: rows.find((row) => row.active) || null,
       other: rows.find((row) => !row.active) || null,
+      filesTitle: folder(document.querySelector('.files-title svg')),
+      filesToggle: folder(document.querySelector('#filesBtn svg')),
     };
   })()`);
   icons.button && icons.button.viewBox === '0 0 16 16' && icons.button.fill !== 'none' && icons.button.stroke === 'none'
@@ -469,6 +484,10 @@ try {
   icons.active && icons.other && icons.active.color !== icons.other.color
     ? ok('значок открытого проекта заметнее закрытых', `${icons.active.color} против ${icons.other.color}`)
     : fail('яркость значка открытого проекта', JSON.stringify({ active: icons.active, other: icons.other }));
+  const openFolder = (icon) => Boolean(icon) && icon.viewBox === '0 0 16 16' && icon.paths === 1 && icon.opens;
+  openFolder(icons.filesTitle) && icons.filesTitle.fill !== 'none' && icons.filesTitle.stroke === 'none' && openFolder(icons.filesToggle)
+    ? ok('значок «Файлы проекта» — раскрытая папка в наборе Harness', `сетка ${icons.filesTitle.viewBox}, заливка ${icons.filesTitle.fill}`)
+    : fail('значок «Файлы проекта»', JSON.stringify({ title: icons.filesTitle, toggle: icons.filesToggle }));
 
   const wide = await evaluate(`(() => {
     const main = document.querySelector('.main');

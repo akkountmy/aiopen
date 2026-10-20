@@ -139,19 +139,35 @@ function updateBalance(value) {
    Раньше плашка вставала внизу по центру: она перекрывала поле ввода и закрывала
    текст, который человек в этот момент печатал. Теперь она сверху, живёт 5 секунд
    и закрывается щелчком. */
-function toast(message, type = 'error') {
-  const root = $('#toastRoot');
-  if (!root) return;
-  const node = el('div', `toast ${type}`, message);
-  node.addEventListener('click', () => node.remove());
-  root.appendChild(node);
-  /* Больше трёх плашек не держим: старое убираем, чтобы экран не застило. */
-  while (root.childElementCount > 3) root.firstElementChild.remove();
-  setTimeout(() => {
+const toastTimers = new Map();
+
+function toastTimer(node) {
+  clearTimeout(toastTimers.get(node));
+  const timer = setTimeout(() => {
     node.style.opacity = '0';
     node.style.transition = 'opacity .2s ease';
     setTimeout(() => node.remove(), 220);
   }, 5200);
+  toastTimers.set(node, timer);
+}
+
+function toast(message, type = 'error') {
+  const root = $('#toastRoot');
+  if (!root) return;
+  /* Одна и та же новость не должна вставать стопкой: если такая плашка уже
+     висит, продлеваем ей жизнь вместо второй копии. */
+  const alive = [...root.children].find((node) => node.dataset.text === message && node.classList.contains(type));
+  if (alive) {
+    toastTimer(alive);
+    return;
+  }
+  const node = el('div', `toast ${type}`, message);
+  node.dataset.text = message;
+  node.addEventListener('click', () => node.remove());
+  root.appendChild(node);
+  /* Больше трёх плашек не держим: старое убираем, чтобы экран не застило. */
+  while (root.childElementCount > 3) root.firstElementChild.remove();
+  toastTimer(node);
 }
 
 /* ------------------------------ markdown ------------------------------ */
@@ -372,6 +388,26 @@ async function api(path, options = {}) {
 
 /* ------------------------------ auth ------------------------------ */
 
+/* Ник запоминаем на этом устройстве: вход обычно живёт сам, но если сеанс всё
+   же закончился, человек вводит только пароль — искать ник заново не нужно. */
+const LOGIN_NAME_KEY = 'dshow.lastLogin';
+
+function rememberLoginName(username) {
+  try {
+    if (username) localStorage.setItem(LOGIN_NAME_KEY, username);
+  } catch {
+    /* Приватный режим: память недоступна — обойдёмся без подсказки. */
+  }
+}
+
+function rememberedLoginName() {
+  try {
+    return localStorage.getItem(LOGIN_NAME_KEY) || '';
+  } catch {
+    return '';
+  }
+}
+
 function showAuth() {
   state.streaming = false;
   state.user = null;
@@ -379,7 +415,11 @@ function showAuth() {
   $('#app').classList.add('hidden');
   $('#boot').classList.add('hidden');
   $('#auth').classList.remove('hidden');
-  setTimeout(() => $('#loginUser').focus(), 40);
+  /* Уже знакомому устройству подставляем ник и ставим курсор в пароль. */
+  const userField = $('#loginUser');
+  const known = rememberedLoginName();
+  if (known && !userField.value) userField.value = known;
+  setTimeout(() => (userField.value ? $('#loginPass') : userField).focus(), 40);
 }
 
 function hideAuth() {
@@ -414,6 +454,7 @@ async function onLogin(event) {
       body: { username, password },
     });
     $('#loginPass').value = '';
+    rememberLoginName(username);
     await startApp(payload);
   } catch (error) {
     errorBox.textContent = error.message || 'Не удалось войти';
@@ -485,8 +526,10 @@ function switchAuthForm(mode) {
   $('#signupForm').classList.toggle('hidden', !signup);
   /* Заголовка в карточке входа нет: её верх занимает логотип. */
   $('#signupError').textContent = '';
+  const userField = $('#loginUser');
+  if (!signup && !userField.value) userField.value = rememberedLoginName();
   if (signup) setTimeout(() => $('#signupUser').focus(), 30);
-  else setTimeout(() => $('#loginUser').focus(), 30);
+  else setTimeout(() => (userField.value ? $('#loginPass') : userField).focus(), 30);
 }
 
 /* ------------------------------ app init ------------------------------ */
@@ -4872,17 +4915,67 @@ function registerServiceWorker() {
 
 /* ------------------------------ boot ------------------------------ */
 
-(async function boot() {
+/* Первый запрос при открытии. Сервис может не ответить в трёх случаях: короткий
+   перезапуск контейнера после обновления, мигающая сеть на телефоне и вход
+   действительно закончился. Показывать форму входа в первых двух случаях нельзя:
+   человек с ярлыком-приложением решит, что его выбросило, и пойдёт искать ник и
+   пароль, хотя вход цел. Поэтому сначала несколько тихих повторов, и только
+   потом — объяснение с кнопкой «Повторить». Форма входа остаётся только для
+   настоящего 401. */
+const BOOT_RETRY_DELAYS = [800, 1600, 3200, 5000];
+let bootPending = false;
+let bootRunning = false;
+
+function bootWaitState(visible, text) {
+  const note = $('#bootNote');
+  if (!note) return;
+  const label = $('#bootNoteText');
+  if (visible && text && label) label.textContent = text;
+  note.classList.toggle('hidden', !visible);
+}
+
+async function bootAttempt() {
   try {
     const payload = await api('/api/me');
     await startApp(payload);
     $('#boot').classList.add('hidden');
+    return true;
   } catch (error) {
-    if (!error.unauthorized) {
+    /* 401 и «сеанс закрыт» уже показали экран входа — повторять нечего. */
+    if (error.unauthorized) {
       $('#boot').classList.add('hidden');
-      showAuth();
+      return true;
     }
+    return false;
   }
+}
+
+async function bootStart() {
+  if (bootRunning) return;
+  bootRunning = true;
+  bootPending = false;
+  bootWaitState(false);
+  let opened = false;
+  for (let attempt = 0; attempt <= BOOT_RETRY_DELAYS.length; attempt += 1) {
+    opened = await bootAttempt();
+    if (opened) break;
+    if (attempt === BOOT_RETRY_DELAYS.length) break;
+    await sleep(BOOT_RETRY_DELAYS[attempt]);
+  }
+  bootRunning = false;
+  if (opened) return;
+  bootPending = true;
+  bootWaitState(
+    true,
+    navigator.onLine === false
+      ? 'Нет связи с интернетом. Вход сохранён — как только сеть вернётся, всё откроется само.'
+      : 'Сервис не отвечает: вероятно, обновление или короткий перезапуск. Вход сохранён — повторять его не нужно.',
+  );
+}
+
+(async function boot() {
+  $('#bootRetry')?.addEventListener('click', () => bootStart());
+  await bootStart();
   syncSignupAvailability();
   registerServiceWorker();
   /* Телефон вернулся из сна, вкладку открыли снова, сеть восстановилась —
@@ -4890,11 +4983,19 @@ function registerServiceWorker() {
      подтягиваем свежие проекты, диалоги и файлы. */
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) return;
+    if (bootPending) {
+      bootStart();
+      return;
+    }
     resumeLiveRuns();
     syncFromServer();
     checkAppVersion();
   });
   window.addEventListener('online', () => {
+    if (bootPending) {
+      bootStart();
+      return;
+    }
     resumeLiveRuns();
     syncFromServer();
   });

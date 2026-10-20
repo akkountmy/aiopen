@@ -785,6 +785,34 @@ try {
   reLogin ? ok('вход с новым паролем работает') : fail('вход с новым паролем', 'не пустило');
 
   // Возвращаем администратора и убираем за собой.
+  /* Недоступный сервис (перезапуск контейнера, обрыв сети) не должен выглядеть
+     как выход из аккаунта: вместо формы входа — объяснение и кнопка «Повторить».
+     Проверяем и то, что после повтора человек попадает внутрь без пароля. */
+  const failMe = (message) => {
+    if (message.method !== 'Fetch.requestPaused') return;
+    const { requestId } = message.params;
+    const isMe = /\/api\/me(\?|$)/.test(message.params.request.url);
+    if (isMe) cdp.send('Fetch.failRequest', { requestId, errorReason: 'ConnectionRefused' });
+    else cdp.send('Fetch.continueRequest', { requestId });
+  };
+  await cdp.send('Fetch.enable', { patterns: [{ urlPattern: '*/api/me*' }] });
+  cdp.on(failMe);
+  await goto(BASE + '/');
+  const bootNoteShown = await waitFor(`!document.getElementById('bootNote').classList.contains('hidden')`, 20000);
+  const authWhileDown = await evaluate(`!document.getElementById('auth').classList.contains('hidden')`);
+  bootNoteShown && !authWhileDown
+    ? ok('при недоступном сервисе нет формы входа — предложено повторить')
+    : fail('экран при недоступном сервисе', { bootNoteShown, authWhileDown });
+  await cdp.send('Fetch.disable');
+  await evaluate(`document.getElementById('bootRetry').click(); true`);
+  const backInside = await waitFor(`!document.getElementById('app').classList.contains('hidden')`, 15000);
+  const stillNoAuth = await evaluate(`document.getElementById('auth').classList.contains('hidden')`);
+  backInside && stillNoAuth
+    ? ok('«Повторить» возвращает в сервис без повторного входа')
+    : fail('повтор после сбоя', { backInside, stillNoAuth });
+  /* Неудачные запросы во время этой проверки — ожидаемые, в общий счёт не идут. */
+  consoleErrors.length = 0;
+
   await logoutApi();
   await login(USER, PASS);
   await evaluate(`(async () => {

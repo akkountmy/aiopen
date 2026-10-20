@@ -582,7 +582,11 @@ function clientIp(req) {
   return req.socket.remoteAddress || '';
 }
 
-function currentUser(req) {
+/* Скользящий срок жизни входа. Продлевать мало на сервере: у cookie в браузере
+   свой Max-Age, и без нового Set-Cookie браузер стирает её ровно через срок,
+   отсчитанный при входе, — ярлык-приложение посреди работы показывает экран
+   входа. Поэтому при продлении cookie ставится заново, с полным сроком. */
+function currentUser(req, res) {
   const cookies = parseCookies(req.headers.cookie);
   const token = cookies[SESSION.cookie];
   if (!token) return null;
@@ -592,12 +596,15 @@ function currentUser(req) {
   const session = store.state.sessions[key];
   if (session && session.exp - Date.now() < SESSION.ttlMs / 2) {
     store.renewSession(key, SESSION.ttlMs);
+    if (res && !res.headersSent && !res.getHeader('Set-Cookie')) {
+      res.setHeader('Set-Cookie', sessionCookie(token, SESSION.ttlMs, TRUST_PROXY));
+    }
   }
   return user;
 }
 
 function requireUser(req, res) {
-  const user = currentUser(req);
+  const user = currentUser(req, res);
   if (user) return user;
   const token = parseCookies(req.headers.cookie)[SESSION.cookie];
   if (token) {

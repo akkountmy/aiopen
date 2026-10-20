@@ -55,12 +55,17 @@ export function parseCookies(header) {
   return out;
 }
 
+/* SameSite=Lax, а не Strict: ярлык-приложение открывают не только с домашнего
+   экрана, но и по ссылке из другого приложения (Telegram, заметки, почта).
+   При Strict браузер не посылает cookie на такой первый переход, и человек
+   видит экран входа, хотя вход цел. Lax закрывает то же самое для чужих POST,
+   но не ломает обычный переход по ссылке. */
 export function sessionCookie(token, maxAgeMs = SESSION.ttlMs, secure = false) {
   const attrs = [
     `${SESSION.cookie}=${encodeURIComponent(token)}`,
     'Path=/',
     'HttpOnly',
-    'SameSite=Strict',
+    'SameSite=Lax',
     `Max-Age=${Math.floor(maxAgeMs / 1000)}`,
   ];
   if (secure) attrs.push('Secure');
@@ -68,7 +73,7 @@ export function sessionCookie(token, maxAgeMs = SESSION.ttlMs, secure = false) {
 }
 
 export function clearSessionCookie(secure = false) {
-  const attrs = [`${SESSION.cookie}=`, 'Path=/', 'HttpOnly', 'SameSite=Strict', 'Max-Age=0'];
+  const attrs = [`${SESSION.cookie}=`, 'Path=/', 'HttpOnly', 'SameSite=Lax', 'Max-Age=0'];
   if (secure) attrs.push('Secure');
   return attrs.join('; ');
 }
@@ -80,7 +85,7 @@ export function deviceCookie(value, maxAgeMs = DEVICE.cookieMs, secure = false) 
     `${DEVICE.cookie}=${encodeURIComponent(value)}`,
     'Path=/',
     'HttpOnly',
-    'SameSite=Strict',
+    'SameSite=Lax',
     `Max-Age=${Math.floor(maxAgeMs / 1000)}`,
   ];
   if (secure) attrs.push('Secure');
