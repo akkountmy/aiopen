@@ -1624,6 +1624,16 @@ body.resizing {
   border-bottom-color: var(--accent-strong);
 }
 
+/* Ссылка на файл проекта открывает окно просмотра сервиса, а не новую вкладку:
+   пунктир отличает её от обычной ссылки. */
+.md a.msg-file {
+  border-bottom-style: dashed;
+}
+
+.md a.msg-file:hover {
+  border-bottom-style: solid;
+}
+
 .md ul,
 .md ol {
   margin: 0 0 12px;

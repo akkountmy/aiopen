@@ -175,20 +175,108 @@ function toast(message, type = 'error') {
 const copyStore = new Map();
 let copySeq = 0;
 
+/* Файл проекта, упомянутый в ответе, открывается кликом в окне просмотра —
+   как двойной щелчок в панели «Файлы проекта». Адрес собираем здесь, а не в
+   момент рендера: проект можно сменить, не перерисовывая переписку. */
+const MD_FILE_EXTS = 'html?|pdf|docx?|xlsx?|pptx?|csv|tsv|md|txt|json|ya?ml|xml|png|jpe?g|webp|gif|svg|zip';
+const MD_FILE_ONE = new RegExp(`^[^\\s/\\\\:*?"'<>|()«»]+\\.(?:${MD_FILE_EXTS})$`, 'i');
+const MD_FILE_MANY = new RegExp(
+  `^[^\\s/\\\\:*?"'<>|()«»]+(?:/[^\\s/\\\\:*?"'<>|()«»]+)*\\.(?:${MD_FILE_EXTS})$`,
+  'i',
+);
+
+/* Зоны доменов, которые встречаются в ответах: без списка «отчёт.html» и
+   «app.js» тоже стали бы адресами. */
+const MD_TLDS =
+  'ru|su|by|kz|ua|uz|am|ge|az|com|net|org|io|dev|app|ai|tech|site|online|store|pro|info|biz|cloud|space|xyz|me|mail|page|shop|click|website|digital|media|world|club|live|link|top|news|blog|рф';
+
+const MD_HOST_RE = new RegExp(
+  `(^|[\\s(«"'\\[<])((?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+(?:${MD_TLDS})(?::\\d{2,5})?(?:\\/[^\\s<>"'«»()\\[\\]]*)?)`,
+  'gi',
+);
+
+const MD_FILE_RE = new RegExp(
+  `(^|[\\s(«"'\\[<])((?:[^\\s/\\\\:*?"'<>|()«»]+/)*[^\\s/\\\\:*?"'<>|()«»]+\\.(?:${MD_FILE_EXTS}))(?=$|[\\s),.;:!?»"'\\]<])`,
+  'gi',
+);
+
+function htmlUnescape(value) {
+  return String(value ?? '')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&');
+}
+
+/* Ссылка на файл проекта: относительный путь внутри выбранного проекта. */
+function projectFileHref(relPath) {
+  const projectId = filesProjectId();
+  const clean = String(htmlUnescape(relPath) || '').replace(/^\.?\//, '');
+  if (!projectId || !clean) return '#';
+  return `/api/projects/${encodeURIComponent(projectId)}/file?path=${encodeURIComponent(clean)}`;
+}
+
 function inlineMd(text) {
   const codes = [];
+  const links = [];
+  const holdLink = (html) => {
+    const id = `\u0002${links.length}\u0002`;
+    links.push(html);
+    return id;
+  };
+  const externalLink = (label, url) =>
+    holdLink(`<a class="msg-link" href="${url}" target="_blank" rel="noopener noreferrer">${label}</a>`);
+  const fileLink = (label, path) =>
+    holdLink(
+      `<a class="msg-link msg-file" href="${projectFileHref(path)}" data-file-path="${path}" title="Открыть в просмотре сервиса">${label}</a>`,
+    );
+
   let src = text.replace(/`([^`\n]+)`/g, (_, code) => {
+    /* Имя файла в обратных кавычках — тоже ссылка: в ответах ассистента так
+       чаще всего и называют созданную страницу («index.html»). */
+    if (MD_FILE_MANY.test(code.trim())) return fileLink(code, code.trim());
     const id = `\u0001${codes.length}\u0001`;
     codes.push(code);
     return id;
   });
+
+  /* [текст](адрес): адрес с протоколом, почта или файл проекта. */
+  src = src.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (whole, label, href) => {
+    if (/^https?:\/\//i.test(href)) return externalLink(label, href);
+    if (/^mailto:/i.test(href)) return holdLink(`<a class="msg-link" href="${href}">${label}</a>`);
+    const clean = href.replace(/^\.?\//, '');
+    if (MD_FILE_MANY.test(clean)) return fileLink(label, clean);
+    if (MD_FILE_ONE.test(clean)) return fileLink(label, clean);
+    return whole;
+  });
+
+  /* Знаки препинания в конце адреса принадлежат фразе, а не ссылке:
+     «открой https://example.com, там всё» — запятая остаётся текстом. */
+  const trimUrlTail = (url) => url.replace(/[.,;:!?…]+$/, '');
+
+  /* Адрес с протоколом в обычном тексте. */
+  src = src.replace(/(^|[\s(«"])(https?:\/\/[^\s<)\]]+)/g, (m, pre, url) => {
+    const clean = trimUrlTail(url);
+    return `${pre}${externalLink(clean, clean)}${url.slice(clean.length)}`;
+  });
+
+  /* «example.ru/путь» и «www.example.ru» без протокола — дописываем https://. */
+  src = src.replace(MD_HOST_RE, (m, pre, host) => {
+    const clean = trimUrlTail(host);
+    return `${pre}${externalLink(clean, `https://${clean}`)}${host.slice(clean.length)}`;
+  });
+
+  /* Имя файла проекта в обычном тексте: страница.html, docs/отчёт.pdf. */
+  src = src.replace(MD_FILE_RE, (m, pre, path) => `${pre}${fileLink(path, path)}`);
+
   src = src
     .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
     .replace(/__([^_]+)__/g, '<strong>$1</strong>')
     .replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, '$1<em>$2</em>')
-    .replace(/~~([^~]+)~~/g, '<del>$1</del>')
-    .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
-  src = src.replace(/(^|[\s(])(https?:\/\/[^\s<)\]]+)/g, (m, pre, url) => `${pre}<a href="${url}" target="_blank" rel="noopener noreferrer">${url}</a>`);
+    .replace(/~~([^~]+)~~/g, '<del>$1</del>');
+
+  src = src.replace(/\u0002(\d+)\u0002/g, (_, idx) => links[Number(idx)]);
   src = src.replace(/\u0001(\d+)\u0001/g, (_, idx) => `<code>${codes[Number(idx)]}</code>`);
   return src;
 }
@@ -4914,6 +5002,25 @@ $('#micBtn').addEventListener('click', toggleDictation);
 $('#dictationCancel').addEventListener('click', () => stopDictation(true));
 $('#spellBtn').addEventListener('click', checkSpelling);
 applyTheme(currentTheme(), false);
+
+/* Файл проекта, названный ассистентом в ответе, открывается в окне просмотра
+   сервиса. Слушаем на всём документе: такие же ссылки бывают в просмотре
+   markdown-файла. Ctrl/Shift/средняя кнопка — обычное поведение браузера:
+   ссылка открывается новой вкладкой, файл отдаётся как есть. */
+document.addEventListener('click', (event) => {
+  const fileLink = event.target.closest('[data-file-path]');
+  if (!fileLink) return;
+  if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+  const relPath = fileLink.dataset.filePath || '';
+  if (!relPath) return;
+  event.preventDefault();
+  if (!filesProjectId()) {
+    toast('Сначала выберите проект слева');
+    return;
+  }
+  fileLink.setAttribute('href', projectFileHref(relPath));
+  openFilePreview({ path: relPath, name: relPath.split('/').pop() });
+});
 
 $('#thread').addEventListener('click', async (event) => {
   const button = event.target.closest('[data-copy-code]');
