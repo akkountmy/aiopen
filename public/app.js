@@ -65,9 +65,6 @@ const state = {
   liveStreams: new Map(),
   filesOpen: true,
   filesDrawerOpen: false,
-  /* Проект, чьи файлы показывает правая панель. Пусто — панель идёт за
-     активным проектом; выбор в заголовке панели ставит сюда id явно. */
-  filesProjectId: '',
   filesPath: '.',
   filesLoading: false,
   dragOut: false,
@@ -571,9 +568,8 @@ async function startApp(payload) {
     state.expanded.add(uiProject.id);
     state.activeProjectId = uiProject.id;
   }
-  /* Панель файлов показывает файлы проекта диалога, пока проект не выбран
-     вручную в её заголовке. */
-  state.filesProjectId = state.activeProjectId || '';
+  /* Панель файлов показывает файлы проекта диалога: отдельного выбора в её
+     заголовке нет, поэтому активный проект — единственный источник. */
   syncFilesProjectLabel();
   /* Задачи, которые шли в момент перезагрузки страницы: подхватываем их сразу,
      чтобы работа выглядела непрерывной. */
@@ -604,14 +600,13 @@ function activeProject() {
   return state.projects.find((project) => project.id === state.activeProjectId) || null;
 }
 
-/* Правая панель показывает файлы одного проекта, а диалог может быть открыт в
-   другом. Заголовок панели — кнопка выбора проекта: пока человек ничего не
-   выбрал, панель идёт за активным проектом; выбранный вручную проект живёт до
-   следующего переключения диалога или проекта. */
+/* Правая панель всегда показывает файлы активного проекта — того, который
+   открыт в панели «Проекты» слева. Отдельного выбора в заголовке нет: два
+   источника проекта (панель слева и заголовок справа) расходились, и файлы
+   «пропадали» после очередной сверки с сервером. */
 function filesProjectId() {
-  const wanted = state.filesProjectId || state.activeProjectId || '';
-  if (wanted && state.projects.some((project) => project.id === wanted)) return wanted;
-  return state.activeProjectId || '';
+  const id = state.activeProjectId || '';
+  return id && state.projects.some((project) => project.id === id) ? id : '';
 }
 
 function filesProject() {
@@ -619,50 +614,21 @@ function filesProject() {
   return state.projects.find((project) => project.id === id) || null;
 }
 
-/* Подпись кнопки-заголовка: имя проекта, чьи файлы видны в панели. */
+/* Заголовок панели — подпись, а не кнопка. Имя проекта видно во всплывающей
+   подсказке: сама подпись остаётся неизменной и стоит по центру блока. */
 function syncFilesProjectLabel() {
-  const button = $('#filesProjectBtn');
+  const title = $('#filesProjectTitle');
   const label = $('#filesProjectName');
   if (!label) return;
+  label.textContent = 'Файлы проекта';
   const project = filesProject();
-  label.textContent = project?.name || 'Файлы проекта';
-  if (button) {
-    button.title = project
-      ? `Файлы проекта «${project.name}». Нажмите, чтобы выбрать другой проект`
-      : 'Выбрать проект, чьи файлы показывать';
-    button.setAttribute('aria-label', button.title);
-  }
+  if (title) title.title = project ? `Файлы проекта «${project.name}»` : 'Файлы проекта';
 }
 
-/* Переключение диалога или проекта возвращает панель к проекту диалога. */
+/* Переключение диалога или проекта просто освежает подпись: файлы панели уже
+   принадлежат активному проекту. */
 function followActiveProject() {
-  state.filesProjectId = state.activeProjectId || '';
   syncFilesProjectLabel();
-}
-
-/* Выбор проекта в заголовке панели: список строится в том же порядке, что и
-   папки слева, — по времени создания. */
-function openFilesProjectMenu() {
-  const anchor = $('#filesProjectBtn');
-  if (!anchor) return;
-  const current = filesProjectId();
-  const items = state.projects.map((project) => ({
-    label: project.name,
-    icon: project.id === current ? ICONS.check : '',
-    action: () => {
-      anchor.setAttribute('aria-expanded', 'false');
-      if (project.id === filesProjectId()) return;
-      state.filesProjectId = project.id;
-      state.filesPath = '.';
-      syncFilesProjectLabel();
-      loadFiles('.');
-    },
-  }));
-  if (!items.length) items.push({ label: 'Пока нет проектов', action: () => {} });
-  openContextMenu(anchor, items);
-  /* Состояние кнопки выставляем после открытия: openContextMenu сначала
-     закрывает прежние меню и сбрасывает признак раскрытия. */
-  anchor.setAttribute('aria-expanded', 'true');
 }
 
 function workflowOf(project) {
@@ -1452,7 +1418,9 @@ function renderSidebarQuietly() {
    ничего не перерисовываем — иначе прокрутка списка сбрасывалась бы каждые
    несколько секунд. */
 async function refreshFilesQuietly() {
-  const projectId = state.activeProjectId;
+  /* Проект берём оттуда же, откуда его берёт панель: иначе фоновая сверка
+     приносила файлы другого проекта и подменяла список под рукой. */
+  const projectId = filesProjectId();
   if (!projectId || !state.filesOpen) return;
   let data;
   try {
@@ -1460,7 +1428,7 @@ async function refreshFilesQuietly() {
   } catch {
     return; /* нет связи — остаётся то, что уже нарисовано */
   }
-  if (projectId !== state.activeProjectId) return;
+  if (projectId !== filesProjectId() || state.filesPath !== (data.path || '.')) return;
   const items = data.items || [];
   if (filesSignature(items) === filesSignature(state.files)) return;
   state.files = items;
@@ -1504,19 +1472,11 @@ async function syncFromServer() {
       state.chat = null;
       state.filesPath = '.';
       state.files = [];
-      state.filesProjectId = state.activeProjectId || '';
       syncFilesProjectLabel();
       if (first) state.expanded.add(first.id);
       renderThread();
     } else if (state.activeProjectId) {
       state.expanded.add(state.activeProjectId);
-    }
-    /* Проект, выбранный в заголовке панели файлов, мог быть удалён с другого
-       устройства — возвращаем панель к проекту диалога. */
-    if (state.filesProjectId && !state.projects.some((project) => project.id === state.filesProjectId)) {
-      state.filesProjectId = state.activeProjectId || '';
-      state.filesPath = '.';
-      syncFilesProjectLabel();
     }
     /* Диалог удалён с другого устройства — вкладка не должна показывать призрак. */
     if (
@@ -2239,6 +2199,20 @@ function isTouchUi() {
   );
 }
 
+/* Телефон или компьютер — от этого зависит текст подсказок. Мобильную систему
+   узнаём по тому же User-Agent, что и ярлык на домашний экран; узкий
+   тач-экран тоже считаем телефоном, даже если система представилась
+   настольной (так делает iPadOS). */
+function isPhoneUi() {
+  return Boolean(homeScreenPlatform()) || (isTouchUi() && window.matchMedia('(max-width: 860px)').matches);
+}
+
+/* Куда попадёт скачанный файл — для подсказок «он откроется на телефоне /
+   на компьютере». */
+function onPhoneWord() {
+  return isPhoneUi() ? 'телефоне' : 'компьютере';
+}
+
 /* Внешние Word, Excel и PowerPoint сервис больше не вызывает — ни на телефоне,
    ни на компьютере. Раньше документ уходил в них по протоколу
    ms-word:ofe|u|<ссылка>, программа сама скачивала файл из интернета, и после
@@ -2295,10 +2269,21 @@ const PREVIEW_APPS = [
   ['LibreOffice Viewer', 'бесплатный просмотрщик для Android.'],
 ];
 
-/* Подсказка для форматов, которые телефон сам не рисует: что поставить, чтобы
-   открыть файл, — вместо ссылки «открыть в чужом мессенджере». */
+/* Подсказка под документом: на телефоне — какие приложения поставить, на
+   компьютере — что файл надо скачать и открыть в установленной программе.
+   Текст про телефон на настольной версии сбивал с толку. */
 function officeHintBody() {
   const wrap = el('div', 'file-hint');
+  if (!isPhoneUi()) {
+    wrap.appendChild(
+      el(
+        'p',
+        '',
+        'Здесь документ открыт только для чтения. Чтобы открыть и править его, нажмите «Скачать» — файл сохранится в «Загрузки» и откроется в Word, Excel или PowerPoint на компьютере.',
+      ),
+    );
+    return wrap;
+  }
   wrap.appendChild(
     el('p', '', 'Телефон не открывает файлы Word, Excel и PowerPoint сам. Бесплатные приложения, которые их читают:'),
   );
@@ -2387,7 +2372,9 @@ async function mountPdfPreview(container, url) {
     window.addEventListener('resize', onResize);
     await draw();
   } catch (error) {
-    status.textContent = 'Не удалось показать PDF. Скачайте файл — он откроется в приложении для PDF.';
+    status.textContent = isPhoneUi()
+      ? 'Не удалось показать PDF. Скачайте файл — он откроется в приложении для PDF на телефоне.'
+      : 'Не удалось показать PDF. Скачайте файл — он откроется в программе для PDF на компьютере.';
     status.classList.add('preview-status-error');
   }
 }
@@ -2725,7 +2712,7 @@ function mountHtmlPreview(container, item) {
     status.remove();
     frame.classList.add('is-ready');
   });
-  frame.src = `/api/projects/${state.activeProjectId}/file-page?path=${encodeURIComponent(item.path)}`;
+  frame.src = `/api/projects/${filesProjectId()}/file-page?path=${encodeURIComponent(item.path)}`;
   container.appendChild(frame);
 }
 
@@ -2734,10 +2721,18 @@ async function mountDocPreview(container, item) {
   container.appendChild(status);
   let data;
   try {
-    data = await api(`/api/projects/${state.activeProjectId}/file-preview?path=${encodeURIComponent(item.path)}`);
+    data = await api(`/api/projects/${filesProjectId()}/file-preview?path=${encodeURIComponent(item.path)}`);
   } catch (error) {
     status.remove();
-    container.appendChild(pvNotice(`${error.message}. Скачайте файл — он откроется в приложении.`));
+    /* Ошибка чаще всего значит, что файл уже удалён или переименован. Текст
+       подсказывает, куда он попадёт после «Скачать», — так же, как ниже. */
+    container.appendChild(
+      pvNotice(
+        isPhoneUi()
+          ? `${error.message}. Скачайте файл — он откроется в приложении на телефоне.`
+          : `${error.message}. Скачайте файл — он откроется в программе на компьютере.`,
+      ),
+    );
     container.appendChild(officeHintBody());
     return;
   }
@@ -2775,14 +2770,20 @@ async function mountDocPreview(container, item) {
     for (const warning of data.warnings || []) container.appendChild(pvNotice(warning));
     return;
   }
-  container.appendChild(pvNotice('Из этого файла не удалось прочитать содержимое — скачайте его, чтобы открыть в приложении.'));
+  container.appendChild(
+    pvNotice(
+      isPhoneUi()
+        ? 'Из этого файла не удалось прочитать содержимое — скачайте его, чтобы открыть в приложении на телефоне.'
+        : 'Из этого файла не удалось прочитать содержимое — скачайте его, чтобы открыть в программе на компьютере.',
+    ),
+  );
   for (const warning of data.warnings || []) container.appendChild(pvNotice(warning));
   container.appendChild(officeHintBody());
 }
 
 function openFilePreview(item) {
   /* Та же защита от двойного тапа, что и у скачивания. */
-  const key = `${state.activeProjectId}:${item.path}`;
+  const key = `${filesProjectId()}:${item.path}`;
   const now = Date.now();
   if (key === openFilePreview.lastKey && now - openFilePreview.lastAt < 600) return;
   openFilePreview.lastKey = key;
@@ -2800,7 +2801,8 @@ function openFilePreview(item) {
       el(
         'p',
         'pv-hint',
-        'Документ открыт в просмотре сервиса. Чтобы править его, скачайте файл кнопкой «Скачать» — он откроется в Word, Excel или PowerPoint на вашем компьютере.',
+        'Документ открыт в просмотре сервиса. Чтобы править его, скачайте файл кнопкой «Скачать» — он откроется в Word, Excel или PowerPoint на вашем ' +
+          onPhoneWord() + '.',
       ),
     );
   }
@@ -2911,9 +2913,6 @@ let menuAnchor = null;
 function closeMenus() {
   menuAnchor = null;
   $$('.menu').forEach((menu) => menu.remove());
-  /* Кнопка-заголовок панели файлов объявляет себя раскрытой, пока меню открыто. */
-  const filesButton = $('#filesProjectBtn');
-  if (filesButton) filesButton.setAttribute('aria-expanded', 'false');
 }
 
 /* Панель, из которой вызвана карточка или меню: слева «Проекты», справа «Файлы
@@ -3495,13 +3494,9 @@ async function deleteProject(project, anchor = null) {
         updateCrumbs();
       }
     }
-    /* Панель показывала файлы удалённого проекта — возвращаем её к активному. */
-    if (state.filesProjectId === project.id) {
-      state.filesProjectId = state.activeProjectId || '';
-      state.filesPath = '.';
-      syncFilesProjectLabel();
-      if (state.filesOpen) loadFiles('.');
-    }
+    /* Если проект был активным, панель уже перешла к живому; удаление чужого
+       проекта на панель не влияет. */
+    syncFilesProjectLabel();
     renderSidebar();
   } catch (error) {
     toast(error.message);
@@ -3917,7 +3912,6 @@ function resetClientState() {
   state.chat = null;
   state.attachments = [];
   state.filesPath = '.';
-  state.filesProjectId = '';
   state.filesDrawerOpen = false;
   state.filesLoading = false;
   /* Запомненное состояние панели принадлежит прошлому аккаунту — не переносим. */
@@ -4583,9 +4577,8 @@ $('#backdrop').addEventListener('click', () => {
   $('#app').classList.remove('sidebar-open');
   closeFilesDrawer();
 });
-/* Заголовок панели «Файлы проекта» — кнопка выбора проекта: раскрывает список
-   проектов, и в панели появляются файлы выбранного. */
-$('#filesProjectBtn').addEventListener('click', () => openFilesProjectMenu());
+/* Заголовок панели «Файлы проекта» — подпись, а не кнопка: проект выбирается
+   слева, и файлы всегда принадлежат ему. */
 /* ------------------------------ panel resize ------------------------------ */
 /* Полная версия: ширину панели проектов и панели файлов можно тянуть мышью
    за разделитель, ширины запоминаются. На телефоне панели — выезжающие ящики,

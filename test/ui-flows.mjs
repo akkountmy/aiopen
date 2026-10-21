@@ -11,6 +11,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { Document, Packer, Paragraph, TextRun, HeadingLevel } from 'docx';
+import ExcelJS from 'exceljs';
 
 const BASE = process.env.DSHOW_BASE || 'http://127.0.0.1:3131';
 const USER = process.env.DSHOW_USER || 'admin';
@@ -20,6 +21,9 @@ const NEW_USER = `flow_${STAMP}`;
 const NEW_PASS = 'Flow-pass-2026';
 const FILE_NAME = `flows-${STAMP}.txt`;
 const DOCX_NAME = `office-${STAMP}.docx`;
+const XLSX_NAME = `sheet-${STAMP}.xlsx`;
+const HTML_NAME = `page-${STAMP}.html`;
+const PAGE_MARK = 'маркер-' + STAMP;
 
 /* Настоящий docx: окно просмотра показывает документ разметкой, а не текстом,
    поэтому проверять его нужно на файле, который действительно открывает Word. */
@@ -35,6 +39,22 @@ async function realDocx() {
     ],
   });
   return Packer.toBuffer(doc);
+}
+
+/* Настоящая книга Excel: окно просмотра должно показать таблицу с числами,
+   а не «файл не найден» из чужого проекта. */
+async function realXlsx() {
+  const book = new ExcelJS.Workbook();
+  const sheet = book.addWorksheet('Смета');
+  sheet.addRow(['Статья', 'Сумма']);
+  sheet.addRow(['Материалы', 12500]);
+  sheet.addRow(['Работа', 32000]);
+  return Buffer.from(await book.xlsx.writeBuffer());
+}
+
+/* HTML-страница проекта: открывается в рамке окна просмотра. */
+function projectPage() {
+  return `<!doctype html><html lang="ru"><head><meta charset="utf-8"><title>Страница проекта</title></head><body><h1>Страница проекта</h1><p>маркер-${STAMP}</p></body></html>`;
 }
 
 const CHROME_CANDIDATES = [
@@ -642,6 +662,64 @@ try {
         previewClosed && panelBefore && panelAfter
           ? ok('закрытие окна просмотра возвращает к панели «Файлы проекта»')
           : fail('возврат к файлам после просмотра', { previewClosed, panelBefore, panelAfter });
+
+        /* Excel и HTML открываются в том же окне, что и Word: содержимое
+           читается из проекта, открытого в панели. Раньше запрос уходил к
+           «активному» проекту, и для проекта из панели окно писало «Файл не
+           найден» — теперь панель и активный проект совпадают всегда. */
+        await setInputFile('#filesPanelInput', XLSX_NAME, await realXlsx());
+        const xlsxUploaded = await waitFor(
+          `[...document.querySelectorAll('.file-row .f-name')].some(n => n.textContent === ${JSON.stringify(XLSX_NAME)})`,
+          10000,
+        );
+        if (xlsxUploaded) {
+          await doubleClickFileName(XLSX_NAME);
+          const xlsxOpened = await waitFor(`!!document.querySelector('.file-preview-modal')`, 8000);
+          const xlsxRendered = await evaluate(`(() => {
+            const box = document.querySelector('.file-preview');
+            if (!box) return null;
+            return {
+              sheets: box.querySelectorAll('.pv-sheets').length,
+              tables: box.querySelectorAll('.pv-table').length,
+              notices: [...box.querySelectorAll('.pv-notice, .preview-status')].map((n) => n.textContent.trim()),
+              text: box.textContent.slice(0, 400),
+            };
+          })()`);
+          xlsxOpened && xlsxRendered && xlsxRendered.tables > 0 && /Материалы/.test(xlsxRendered.text)
+            ? ok('Excel открывается в окне просмотра с содержимым таблицы')
+            : fail('просмотр Excel', JSON.stringify({ xlsxOpened, xlsxRendered }));
+          await evaluate(`document.querySelector('.file-preview-modal .modal-close')?.click()`);
+          await waitFor(`!document.querySelector('.file-preview-modal')`, 6000);
+        } else {
+          fail('загрузка Excel', 'файл не появился в панели');
+        }
+
+        await setInputFile('#filesPanelInput', HTML_NAME, projectPage());
+        const htmlUploaded = await waitFor(
+          `[...document.querySelectorAll('.file-row .f-name')].some(n => n.textContent === ${JSON.stringify(HTML_NAME)})`,
+          10000,
+        );
+        if (htmlUploaded) {
+          await doubleClickFileName(HTML_NAME);
+          const htmlOpened = await waitFor(`!!document.querySelector('.file-preview iframe.preview-frame')`, 8000);
+          const frameSrc = await evaluate(
+            `(document.querySelector('.file-preview iframe.preview-frame') || {}).src || ''`,
+          );
+          const pageCheck = frameSrc
+            ? await evaluate(`(async () => {
+                const res = await fetch(${JSON.stringify(frameSrc)});
+                const body = await res.text();
+                return { ok: res.ok, status: res.status, marker: body.includes(${JSON.stringify(PAGE_MARK)}) };
+              })()`)
+            : null;
+          htmlOpened && pageCheck && pageCheck.ok && pageCheck.marker
+            ? ok('HTML-страница открывается в рамке окна просмотра')
+            : fail('просмотр HTML', JSON.stringify({ htmlOpened, frameSrc, pageCheck }));
+          await evaluate(`document.querySelector('.file-preview-modal .modal-close')?.click()`);
+          await waitFor(`!document.querySelector('.file-preview-modal')`, 6000);
+        } else {
+          fail('загрузка HTML', 'файл не появился в панели');
+        }
 
         /* «Файлы проекта» принадлежат выбранному проекту: после переключения
            в списке не должно остаться файлов прошлого проекта. */

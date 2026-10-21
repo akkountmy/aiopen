@@ -2133,13 +2133,13 @@ body.resizing {
 }
 
 /* Заголовок панели оформлен тем же блоком, что кнопка «Новый проект» слева:
-   та же высота, рамка, фон, скругление и иконка папки. Это не подпись, а
-   кнопка выбора проекта: она раскрывает список и показывает файлы выбранного
-   проекта, поэтому у неё есть шеврон и курсор-указатель. */
+   та же высота, рамка, фон, скругление и иконка папки. Но это подпись, а не
+   кнопка: файлы всегда принадлежат проекту, открытому слева, поэтому выбора
+   здесь нет — иконка и текст стоят по центру, курсора-указателя и шеврона нет. */
 .files-title {
   display: flex;
   align-items: center;
-  justify-content: flex-start;
+  justify-content: center;
   gap: 8px;
   flex: 1;
   min-width: 0;
@@ -2152,21 +2152,9 @@ body.resizing {
   font-size: var(--fs-14);
   font-weight: 500;
   line-height: var(--lh-22);
-  cursor: pointer;
-  text-align: left;
-}
-
-.files-title:hover {
-  background: var(--layer-hover);
-}
-
-.files-title[aria-expanded='true'] {
-  background: var(--layer-3);
-}
-
-.files-title:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
+  cursor: default;
+  text-align: center;
+  user-select: none;
 }
 
 .files-title svg {
@@ -2174,17 +2162,6 @@ body.resizing {
   height: 17px;
   flex: none;
   color: var(--text-2);
-}
-
-/* Шеврон выбора прижат к правому краю: по нему видно, что это выпадающий список. */
-.files-title svg.chev {
-  width: 14px;
-  height: 14px;
-  margin-left: auto;
-  color: var(--text-4);
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.6;
 }
 
 .files-title span {
