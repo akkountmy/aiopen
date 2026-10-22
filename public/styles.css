@@ -4506,4 +4506,15 @@ body.resizing {
   }
 }
 
+/* --------------------------- уведомления --------------------------- */
 
+.push-panel {
+  display: grid;
+  gap: 12px;
+}
+
+.push-head {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}

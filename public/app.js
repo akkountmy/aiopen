@@ -44,6 +44,7 @@ const ICONS = {
   theme:
     '<svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="3.6"/><path d="M10 2.4v1.8M10 15.8v1.8M2.4 10h1.8M15.8 10h1.8M4.6 4.6l1.3 1.3M14.1 14.1l1.3 1.3M15.4 4.6l-1.3 1.3M5.9 14.1l-1.3 1.3"/></svg>',
   eye: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M2.5 10s2.9-4.5 7.5-4.5S17.5 10 17.5 10s-2.9 4.5-7.5 4.5S2.5 10 2.5 10z"/><circle cx="10" cy="10" r="1.9"/></svg>',
+  bell: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3a4 4 0 00-4 4v3.2L4.6 13h10.8L14 10.2V7a4 4 0 00-4-4z"/><path d="M8.2 15.4a1.9 1.9 0 003.6 0"/></svg>',
 };
 
 const WHALE_SVG =
@@ -71,6 +72,8 @@ const state = {
   expanded: new Set(),
   collapsedWorkflows: new Set(),
   lastTitle: '',
+  /* Уведомления: поддержка браузера, разрешение и подписка этого устройства. */
+  push: { supported: false, permission: 'default', subscribed: false, subscriptions: 0, publicKey: '' },
 };
 
 function el(tag, cls, text) {
@@ -3486,6 +3489,11 @@ function openUserMenu(event) {
       icon: ICONS.eye,
       action: () => memoryModal(),
     },
+    {
+      label: 'Уведомления',
+      icon: ICONS.bell,
+      action: () => notificationsModal(),
+    },
   ];
   if (isAdmin) {
     items.push(
@@ -5152,6 +5160,419 @@ document.addEventListener('paste', (event) => {
   if (files.length) uploadFiles(files);
 });
 
+/* ------------------------- уведомления ------------------------- */
+
+/* Уведомления работают через push-службу браузера: сервер отправляет сообщение,
+   сервис-воркер показывает его, даже когда приложение закрыто. Разрешение
+   спрашивается только по кнопке — из обработчика действия человека. */
+const PUSH_FLAG = 'dshow-push-enabled-v1';
+/* Сколько устройств у аккаунта; список показывает, где включены уведомления. */
+let pushDevices = [];
+/* Включение идёт не мгновенно: браузер регистрируется в своей push-службе.
+   Пока оно не закончилось, повторный клик должен ждать тот же результат,
+   а не заводить вторую подписку. */
+let pushEnabling = null;
+
+function pushSupported() {
+  return Boolean(
+    typeof Notification !== 'undefined' &&
+      'serviceWorker' in navigator &&
+      'PushManager' in window &&
+      window.isSecureContext,
+  );
+}
+
+/* Ключ VAPID приходит с сервера в base64url — браузеру нужен массив байт. */
+function urlBase64ToBytes(base64) {
+  const normal = String(base64 || '').replace(/-/g, '+').replace(/_/g, '/');
+  const padded = normal + '='.repeat((4 - (normal.length % 4)) % 4);
+  const raw = atob(padded);
+  const bytes = new Uint8Array(raw.length);
+  for (let index = 0; index < raw.length; index += 1) bytes[index] = raw.charCodeAt(index);
+  return bytes;
+}
+
+/* Готовый воркер: ждём активации не дольше восьми секунд, иначе окно
+   уведомлений висело бы на телефоне в ожидании, которого не будет. */
+function serviceWorkerReady(timeoutMs = 8000) {
+  if (!('serviceWorker' in navigator)) return Promise.resolve(null);
+  return Promise.race([
+    navigator.serviceWorker.ready,
+    new Promise((resolve) => setTimeout(() => resolve(null), timeoutMs)),
+  ]).catch(() => null);
+}
+
+async function pushRegistration() {
+  if (!pushSupported()) return null;
+  try {
+    return (await navigator.serviceWorker.getRegistration()) || null;
+  } catch {
+    return null;
+  }
+}
+
+async function refreshPushState() {
+  const supported = pushSupported();
+  const permission = supported ? Notification.permission : 'unsupported';
+  const registration = supported ? await pushRegistration() : null;
+  let subscribed = false;
+  if (registration) {
+    try {
+      subscribed = Boolean(await registration.pushManager.getSubscription());
+    } catch {
+      subscribed = false;
+    }
+  }
+  let server = {};
+  try {
+    server = await api('/api/push/state');
+  } catch {
+    /* Сеть пропала — показываем хотя бы состояние браузера. */
+  }
+  pushDevices = Array.isArray(server.devices) ? server.devices : [];
+  state.push = {
+    supported,
+    permission,
+    subscribed,
+    publicKey: server.publicKey || '',
+    subscriptions: Number(server.subscriptions) || 0,
+  };
+  return state.push;
+}
+
+/* Браузер иногда думает над подпиской долго: у него своя регистрация в
+   push-службе. Ждём не бесконечно, но и не обрываем на полуслове. */
+function withPushTimeout(promise, ms, message) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      const error = new Error(message);
+      error.timeout = true;
+      reject(error);
+    }, ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
+async function enablePush() {
+  if (pushEnabling) return pushEnabling;
+  pushEnabling = enablePushOnce().finally(() => {
+    pushEnabling = null;
+  });
+  return pushEnabling;
+}
+
+async function enablePushOnce() {
+  if (!pushSupported()) throw new Error('Этот браузер не умеет показывать уведомления');
+  let permission = Notification.permission;
+  if (permission === 'default') permission = await Notification.requestPermission();
+  if (permission !== 'granted') {
+    throw new Error('Разрешение не выдано. Включите уведомления для сайта в настройках браузера.');
+  }
+  let registration = await pushRegistration();
+  if (!registration) {
+    try {
+      await navigator.serviceWorker.register('/sw.js');
+      registration = await serviceWorkerReady();
+    } catch {
+      registration = null;
+    }
+  }
+  if (!registration) throw new Error('Сервис-воркер не запустился — обновите страницу и повторите');
+  const server = await api('/api/push/state');
+  let subscription = await registration.pushManager.getSubscription().catch(() => null);
+  if (!subscription) {
+    try {
+      subscription = await withPushTimeout(
+        registration.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlBase64ToBytes(server.publicKey),
+        }),
+        60000,
+        'Браузер не ответил за минуту — нажмите «Включить» ещё раз',
+      );
+    } catch (error) {
+      if (error?.timeout) throw error;
+      throw new Error(`Браузер не дал подписаться: ${error?.message || 'неизвестная ошибка'}`);
+    }
+  }
+  await api('/api/push/subscribe', { method: 'POST', body: { subscription: subscription.toJSON() } });
+  try {
+    localStorage.setItem(PUSH_FLAG, '1');
+  } catch {
+    /* Без хранилища просто не запомним, что включали — включим заново. */
+  }
+  return refreshPushState();
+}
+
+async function disablePush() {
+  const registration = await pushRegistration();
+  const subscription = registration ? await registration.pushManager.getSubscription().catch(() => null) : null;
+  if (subscription) {
+    /* Сначала сервер, потом браузер: если сервер не ответил, подписка остаётся
+       и уведомления придут снова — это лучше, чем молча потерять устройство. */
+    await api('/api/push/unsubscribe', { method: 'POST', body: { endpoint: subscription.endpoint } });
+    await subscription.unsubscribe().catch(() => {});
+  }
+  try {
+    localStorage.removeItem(PUSH_FLAG);
+  } catch {
+    /* ignore */
+  }
+  return refreshPushState();
+}
+
+function pushWanted() {
+  try {
+    return localStorage.getItem(PUSH_FLAG) === '1';
+  } catch {
+    return false;
+  }
+}
+
+/* Бейдж на иконке приложения — как у обычных мессенджеров: цифра «есть новое».
+   Снимаем, когда человек вернулся в приложение. */
+function clearAppBadge() {
+  try {
+    navigator.clearAppBadge?.();
+  } catch {
+    /* API нет — нечего снимать */
+  }
+  try {
+    navigator.serviceWorker?.controller?.postMessage({ type: 'dsh-clear-badge' });
+  } catch {
+    /* ignore */
+  }
+}
+
+/* Клик по уведомлению: воркер передаёт окну, какой диалог открыть. */
+function onServiceWorkerMessage(event) {
+  const data = event?.data || {};
+  if (data.type !== 'dsh-open') return;
+  clearAppBadge();
+  const chatId = String(data.chatId || '');
+  if (chatId) {
+    openChat(chatId);
+    return;
+  }
+  try {
+    const chat = new URLSearchParams(String(data.url || '').split('?')[1] || '').get('chat');
+    if (chat) openChat(chat);
+  } catch {
+    /* ссылка не разобралась — остаёмся в текущем диалоге */
+  }
+}
+
+/* Открытие по ссылке из уведомления при закрытом приложении: /?chat=<id>. */
+function openChatFromUrl() {
+  try {
+    const params = new URLSearchParams(location.search);
+    const chatId = params.get('chat');
+    if (!chatId || !state.user) return;
+    params.delete('chat');
+    const query = params.toString();
+    history.replaceState(null, '', `${location.pathname}${query ? `?${query}` : ''}${location.hash}`);
+    openChat(chatId);
+  } catch {
+    /* адресная строка недоступна — ничего страшного */
+  }
+}
+
+async function initPush() {
+  if (!pushSupported()) return;
+  const registration = await serviceWorkerReady();
+  if (!registration) return;
+  try {
+    await refreshPushState();
+  } catch {
+    /* состояние уточним при открытии окна уведомлений */
+  }
+  /* Уведомления уже включали на этом устройстве — держим подписку живой:
+     после обновления воркера или чистки подписок браузером её нужно оформить
+     заново, иначе человек молча перестанет получать сообщения. */
+  if (pushWanted() && Notification.permission === 'granted') {
+    try {
+      await enablePush();
+    } catch {
+      /* не мешаем работе приложения: включить можно вручную в меню */
+    }
+  }
+  navigator.serviceWorker.addEventListener('message', onServiceWorkerMessage);
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) clearAppBadge();
+  });
+  window.addEventListener('focus', clearAppBadge);
+}
+
+function pushParagraph(text) {
+  const node = el('p', 'push-text', text);
+  return node;
+}
+
+async function notificationsModal() {
+  let status;
+  try {
+    status = await refreshPushState();
+  } catch {
+    toast('Не удалось узнать состояние уведомлений');
+    return;
+  }
+  const body = el('div', 'push-panel');
+  const head = el('div', 'push-head');
+  const icon = el('span', 'push-icon');
+  icon.innerHTML = ICONS.bell;
+  const headText = el('div', 'push-head-text');
+  headText.appendChild(el('div', 'push-title', status.subscribed ? 'Уведомления включены' : 'Уведомления выключены'));
+  headText.appendChild(
+    el(
+      'div',
+      'push-sub',
+      status.subscriptions
+        ? `Устройств подключено: ${status.subscriptions}`
+        : 'Это устройство пока не подключено',
+    ),
+  );
+  head.append(icon, headText);
+  body.appendChild(head);
+
+  const close = { label: 'Понятно', kind: 'primary' };
+
+  if (!status.supported) {
+    body.appendChild(pushParagraph('Этот браузер не умеет показывать уведомления от приложений.'));
+    if (homeScreenPlatform() === 'ios') {
+      body.appendChild(
+        pushParagraph('На iPhone и iPad уведомления приходят только в приложении, добавленном на экран «Домой»:'),
+      );
+      const steps = el('ol', 'a2hs-steps');
+      for (const step of HOME_SCREEN_STEPS.ios) steps.appendChild(el('li', '', step));
+      body.appendChild(steps);
+      body.appendChild(pushParagraph('Добавьте ярлык, откройте его и включите уведомления в этом же меню.'));
+    } else {
+      body.appendChild(
+        pushParagraph('Откройте сервис в Chrome, Edge, Safari или Firefox — там уведомления работают.'),
+      );
+    }
+    openModal({ title: 'Уведомления', subtitle: 'Как в обычном приложении', body, actions: [close] });
+    return;
+  }
+
+  if (status.permission === 'denied') {
+    body.appendChild(
+      pushParagraph(
+        'Браузер запретил уведомления для этого сайта. Разрешите их в настройках: нажмите значок замка рядом с адресом → «Уведомления» → «Разрешить», затем обновите страницу.',
+      ),
+    );
+    openModal({ title: 'Уведомления', subtitle: 'Как в обычном приложении', body, actions: [close] });
+    return;
+  }
+
+  if (!status.subscribed) {
+    body.appendChild(
+      pushParagraph('Включите — и узнаете о готовой задаче, даже если приложение закрыто или телефон в кармане.'),
+    );
+    const list = el('ul', 'push-list');
+    for (const line of [
+      'задача готова — с началом ответа;',
+      'задача прервалась с ошибкой;',
+      'задача ждёт подтверждения администратора.',
+    ]) {
+      list.appendChild(el('li', '', line));
+    }
+    body.appendChild(list);
+    if (homeScreenPlatform() === 'ios' && !openedAsApp()) {
+      body.appendChild(pushParagraph('На iPhone уведомления работают у ярлыка с домашнего экрана — добавьте его заранее.'));
+    }
+    body.appendChild(pushParagraph('Уведомление не появится, если приложение прямо сейчас открыто на экране: ответ и так виден в диалоге.'));
+    openModal({
+      title: 'Уведомления',
+      subtitle: 'Как в обычном приложении',
+      body,
+      actions: [
+        { label: 'Не сейчас' },
+        {
+          label: 'Включить',
+          kind: 'primary',
+          onClick: async () => {
+            /* Подписку оформляет браузер, и на медленной сети это не мгновенно:
+               показываем, что работа идёт, чтобы окно не выглядело зависшим. */
+            const statusLine = document.querySelector('#modalRoot .push-sub');
+            if (statusLine) statusLine.textContent = 'Оформляем подписку — обычно это пара секунд…';
+            const slowTimer = setTimeout(() => {
+              if (statusLine?.isConnected) statusLine.textContent = 'Браузер отвечает медленно — ещё ждём…';
+            }, 12000);
+            try {
+              await enablePush();
+              toast('Уведомления включены', 'ok');
+            } catch (error) {
+              toast(error?.message || 'Не удалось включить уведомления');
+            } finally {
+              clearTimeout(slowTimer);
+            }
+            await notificationsModal();
+            return false;
+          },
+        },
+      ],
+    });
+    return;
+  }
+
+  body.appendChild(
+    pushParagraph(
+      'Проверьте доставку: уведомление должно появиться в центре уведомлений телефона или компьютера. Если приложение открыто на экране, проверка промолчит — сверните его.',
+    ),
+  );
+  if (pushDevices.length) {
+    const list = el('ul', 'push-list');
+    for (const device of pushDevices) {
+      const added = device.addedAt ? new Date(device.addedAt).toLocaleDateString('ru-RU') : '';
+      list.appendChild(el('li', '', `${device.device || 'Устройство'}${added ? ` · с ${added}` : ''}`));
+    }
+    body.appendChild(list);
+  }
+  openModal({
+    title: 'Уведомления',
+    subtitle: 'Как в обычном приложении',
+    body,
+    actions: [
+      {
+        label: 'Выключить',
+        onClick: async () => {
+          try {
+            await disablePush();
+            toast('Уведомления выключены');
+          } catch (error) {
+            toast(error?.message || 'Не удалось выключить уведомления');
+          }
+          await notificationsModal();
+          return false;
+        },
+      },
+      {
+        label: 'Проверить',
+        kind: 'primary',
+        onClick: async () => {
+          try {
+            const result = await api('/api/push/test', { method: 'POST', body: {} });
+            toast(result.sent ? 'Отправлено: смотрите центр уведомлений' : 'Сервер не смог доставить уведомление', result.sent ? 'ok' : 'error');
+          } catch (error) {
+            toast(error?.message || 'Не удалось отправить проверку');
+          }
+          return false;
+        },
+      },
+    ],
+  });
+}
+
 /* ---------------------- ярлык на домашний экран ---------------------- */
 
 /* Подсказка «поставьте ярлык» — ровно один раз на телефон и только в браузере:
@@ -5221,10 +5642,14 @@ function offerHomeScreenOnce() {
   openModal({ title: 'Добавить на домашний экран', body, actions: [{ label: 'Понятно', kind: 'primary' }] });
 }
 
-/* Воркер нужен только ради установки ярлыка как приложения (см. /sw.js): кэша
-   в нём нет, обновления подхватываются сразу. */
+/* Воркер нужен ради установки ярлыка как приложения (см. /sw.js) и
+   push-уведомлений: кэша в нём нет, обновления подхватываются сразу. */
 function registerServiceWorker() {
-  if (!('serviceWorker' in navigator) || location.protocol !== 'https:') return;
+  if (!('serviceWorker' in navigator)) return;
+  /* https — боевой адрес; localhost считается защищённым, поэтому там воркер
+     тоже можно проверять при разработке. */
+  const local = ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname);
+  if (location.protocol !== 'https:' && !local) return;
   navigator.serviceWorker.register('/sw.js').catch(() => {
     /* Без воркера сайт работает как раньше: ярлык просто станет закладкой. */
   });
@@ -5295,6 +5720,11 @@ async function bootStart() {
   await bootStart();
   syncSignupAvailability();
   registerServiceWorker();
+/* Приложение открыли по ссылке из уведомления — сразу нужный диалог. */
+  openChatFromUrl();
+  /* Уведомления и бейдж: подписка этого устройства и переход из уведомления. */
+  void initPush();
+  clearAppBadge();
   /* Телефон вернулся из сна, вкладку открыли снова, сеть восстановилась —
      догоняем задачи, которые всё это время шли на сервере, и заодно
      подтягиваем свежие проекты, диалоги и файлы. */

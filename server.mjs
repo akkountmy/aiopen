@@ -28,6 +28,7 @@ import { detectKind, extractDocumentText, kindLabel } from './src/docparse.mjs';
 import { previewDocument } from './src/docpreview.mjs';
 import { projectFilesBrief } from './src/filebrief.mjs';
 import { docEngines } from './src/doc/index.mjs';
+import { pushState, pushToUser, subscribe as pushSubscribe, unsubscribe as pushUnsubscribe } from './src/push.mjs';
 import { approvalMessage, notifyAdmin, suspicionMessage } from './src/notify.mjs';
 import { issueOpenLink, resolveOpenLink, asciiFileName, OPEN_PREFIX } from './src/openlink.mjs';
 import { proofreadText } from './src/proofread.mjs';
@@ -735,6 +736,52 @@ function raiseBudgetApproval({ user, project, chat, spentUsd }) {
   return approval;
 }
 
+/* Текст уведомления: markdown-разметку убираем, длинные ответы обрезаем —
+   в центре уведомлений помещается две строки, остальное человек прочитает
+   в приложении. */
+function pushSnippet(text, limit = 160) {
+  const flat = String(text || '')
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+    .replace(/[#*_`>|]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!flat) return '';
+  return flat.length > limit ? `${flat.slice(0, limit - 1).trimEnd()}…` : flat;
+}
+
+/**
+ * Уведомление в ярлык-приложение о конце работы. Уходит на все устройства
+ * пользователя; если приложение прямо сейчас открыто на экране, сервис-воркер
+ * его не показывает — человек и так видит ответ в диалоге.
+ */
+function notifyRunPush({ user, project, chat, status, text = '', errorText = '', approval = null }) {
+  if (!user?.id || status === 'stopped') return;
+  const chatTitle = chat?.title && chat.title !== 'Новый диалог' ? chat.title : '';
+  const where = chatTitle || project?.name || 'DSH Open';
+  let title = where;
+  let body = '';
+  let kind = status;
+  if (approval) {
+    kind = 'approval';
+    body = 'Нужно подтверждение: задача приостановлена до ответа администратора.';
+  } else if (status === 'error') {
+    body = `Задача прервалась: ${pushSnippet(errorText, 120) || 'подробности в приложении'}`;
+  } else {
+    body = pushSnippet(text, 160) || 'Задача готова.';
+  }
+  const url = chat?.id ? `/?chat=${encodeURIComponent(chat.id)}` : '/';
+  pushToUser(user.id, {
+    title,
+    body,
+    url,
+    kind,
+    chatId: chat?.id || null,
+    projectId: project?.id || null,
+    tag: chat?.id ? `chat-${chat.id}` : 'dsh',
+  }).catch((error) => console.warn('[push] отправка не удалась:', error?.message || error));
+}
+
 function bootstrapPayload(user) {
   /* Записи прежних версий создавались без владельца: отдаём их тому, кто вошёл
      первым, иначе раздельные истории сделали бы их невидимыми для всех. */
@@ -1280,6 +1327,9 @@ async function executeRun(run, job) {
     }
     stream.emit({ type: 'done', usage: outcome.usage, tools: outcome.tools.length, balanceUsd });
     finishRun(run, 'done');
+    /* Работа закончилась, а приложение может быть закрыто или свёрнуто —
+       отправляем уведомление на все устройства пользователя. */
+    notifyRunPush({ user, project, chat, status: 'done', text: assistantText, approval: budgetInfo });
   } catch (error) {
     const aborted = error?.name === 'AbortError' || controller.signal.aborted;
     const message = aborted ? 'Остановлено' : describeFailure(error);
@@ -1292,6 +1342,14 @@ async function executeRun(run, job) {
     store.saveChat(chat.id, { messages: chat.messages, history: chat.history, memory: chat.memory });
     stream.emit({ type: 'error', message, aborted });
     finishRun(run, aborted ? 'stopped' : 'error');
+    notifyRunPush({
+      user,
+      project,
+      chat,
+      status: aborted ? 'stopped' : 'error',
+      text: assistantText,
+      errorText: message,
+    });
   }
 }
 
@@ -1498,6 +1556,36 @@ async function route(req, res) {
 
     if (pathname === '/api/me' && method === 'GET') return sendJson(res, 200, bootstrapPayload(user));
     if (pathname === '/api/bootstrap' && method === 'GET') return sendJson(res, 200, bootstrapPayload(user));
+
+    /* --- уведомления в ярлык-приложение --- */
+    if (pathname === '/api/push/state' && method === 'GET') {
+      return sendJson(res, 200, pushState(user.id), { 'Cache-Control': 'no-store' });
+    }
+    if (pathname === '/api/push/subscribe' && method === 'POST') {
+      const body = await readJsonBody(req);
+      const result = pushSubscribe(user, body.subscription, req.headers['user-agent']);
+      if (!result.ok) return sendError(res, 400, result.error);
+      return sendJson(res, 200, { ok: true, subscriptions: result.subscriptions });
+    }
+    if (pathname === '/api/push/unsubscribe' && method === 'POST') {
+      const body = await readJsonBody(req);
+      const result = pushUnsubscribe(user, body.endpoint);
+      if (!result.ok) return sendError(res, 400, result.error);
+      return sendJson(res, 200, { ok: true, subscriptions: result.subscriptions });
+    }
+    if (pathname === '/api/push/test' && method === 'POST') {
+      /* Пробное уведомление: единственный способ проверить, что телефон и
+         компьютер действительно принимают пуши, не дожидаясь конца задачи. */
+      const result = await pushToUser(user.id, {
+        title: 'DSH Open',
+        body: 'Уведомления работают: так придёт сообщение о готовой задаче.',
+        url: '/',
+        kind: 'test',
+        tag: 'dsh-test',
+      });
+      if (!result.total) return sendError(res, 409, 'Сначала включите уведомления на этом устройстве');
+      return sendJson(res, 200, { ok: result.sent > 0, ...result });
+    }
 
     if (pathname === '/api/transcribe' && method === 'POST') {
       const gate = transcribeHits.check(user.id);
