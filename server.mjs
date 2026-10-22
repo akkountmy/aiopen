@@ -35,6 +35,8 @@ import { transcribeAudio } from './src/asr.mjs';
 import { detectKind, extractDocumentText, kindLabel } from './src/docparse.mjs';
 import { previewDocument } from './src/docpreview.mjs';
 import { projectFilesBrief } from './src/filebrief.mjs';
+import { buildProjectContext } from './src/projectcontext.mjs';
+import { BACKUP_DEFAULTS, backupsDir, listBackups, snapshotState, startAutoBackup } from './src/backup.mjs';
 import { docEngines } from './src/doc/index.mjs';
 import { approvalMessage, notifyAdmin, suspicionMessage } from './src/notify.mjs';
 import { issueOpenLink, resolveOpenLink, asciiFileName, OPEN_PREFIX } from './src/openlink.mjs';
@@ -1351,6 +1353,21 @@ async function executeRun(run, job) {
     const userText = [text, ctx.text].filter(Boolean).join('\n\n');
     stream.emit({ type: 'start' });
 
+    /* Прошлые диалоги этого же проекта: короткая выжимка, чтобы новый разговор
+       продолжал работу, а не начинался с чистого листа. Сбой здесь не должен
+       ломать ход — контекст проекта вещь полезная, но не обязательная. */
+    let projectContext = '';
+    try {
+      projectContext = buildProjectContext({
+        chats: store.chatsFor(project.id),
+        currentChatId: chat.id,
+        load: (id) => store.getChat(id),
+        question: userText,
+      });
+    } catch (error) {
+      console.error('[context]', error?.message || error);
+    }
+
     const outcome = await runTurn({
       workspace: store.workspaceDir(project.id),
       /* Передаём сам объект чата: runTurn дописывает историю и обновляет
@@ -1360,6 +1377,7 @@ async function executeRun(run, job) {
       projectName: project.name,
       userName: user.displayName || user.username,
       userText,
+      projectContext,
       filesBrief,
       images: ctx.images,
       emit: stream.emit,
@@ -2585,6 +2603,53 @@ async function route(req, res) {
       if (!admin) return;
       return sendJson(res, 200, await storageReport());
     }
+    /* Резервные копии состояния: список, снимок по кнопке и выгрузка архива. */
+    if (pathname === '/api/admin/backups' && method === 'GET') {
+      const admin = requireAdmin(req, res);
+      if (!admin) return;
+      return sendJson(res, 200, {
+        backups: listBackups(),
+        automatic: process.env.DSHOW_BACKUPS !== '0',
+        keep: BACKUP_DEFAULTS.keep,
+      });
+    }
+    if (pathname === '/api/admin/backups' && method === 'POST') {
+      const admin = requireAdmin(req, res);
+      if (!admin) return;
+      try {
+        const result = snapshotState();
+        console.log(`[backup] по кнопке администратора: ${result.id}, диалогов ${result.chats}`);
+        return sendJson(res, 200, { ok: true, backup: result, backups: listBackups() });
+      } catch (error) {
+        return sendError(res, 500, `Не удалось сделать копию: ${error.message}`);
+      }
+    }
+    if (pathname === '/api/admin/backups/download' && method === 'GET') {
+      const admin = requireAdmin(req, res);
+      if (!admin) return;
+      const id = String(url.searchParams.get('id') || '');
+      const backup = listBackups().find((item) => item.id === id);
+      if (!backup) return sendError(res, 404, 'Копия не найдена');
+      const dir = path.join(backupsDir(), backup.id);
+      const files = [];
+      const walk = (base, rel) => {
+        for (const entry of fs.readdirSync(base, { withFileTypes: true })) {
+          if (entry.name.startsWith('.')) continue;
+          const full = path.join(base, entry.name);
+          const name = rel ? `${rel}/${entry.name}` : entry.name;
+          if (entry.isDirectory()) walk(full, name);
+          else files.push({ name, path: full });
+        }
+      };
+      walk(dir, backup.id);
+      res.writeHead(200, {
+        'Content-Type': 'application/zip',
+        'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(`dshow-backup-${backup.id}.zip`)}`,
+        ...SECURITY_HEADERS,
+      });
+      return await pipeZip(res, files);
+    }
+
     if (pathname === '/api/admin/approvals' && method === 'GET') {
       const admin = requireAdmin(req, res);
       if (!admin) return;
@@ -2650,6 +2715,10 @@ server.listen(PORT, HOST, () => {
 /* Планировщик «Дашборда» поднимается вместе с сервисом. Выключается
    переменной окружения: это нужно проверкам, которым не нужен фоновой тик. */
 if (process.env.DSHOW_DASHBOARD !== '0') startDashboardScheduler();
+
+/* Суточные копии состояния: даже если проект удалят по ошибке или файл индекса
+   побьётся, переписки и структура вернутся. Выключается DSHOW_BACKUPS=0. */
+if (process.env.DSHOW_BACKUPS !== '0') startAutoBackup();
 
 process.on('SIGINT', () => {
   console.log('\nОстановка…');

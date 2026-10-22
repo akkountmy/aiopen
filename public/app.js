@@ -4420,6 +4420,72 @@ function pushSeenText(value) {
   return date.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
 }
 
+/* --- резервные копии ---
+   Копии состояния: переписки и структура проектов. Файлы проектов живут в томе
+   отдельно и выгружаются кнопкой «Скачать архив», а вот случайно удалённый
+   проект или испорченный индекс раньше восстановить было нечем. Здесь видно,
+   когда сделана последняя копия, и можно снять её вручную перед рискованным
+   действием. */
+function backupWhen(item) {
+  const iso = item.createdAt || `${item.id}T00:00:00`;
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return item.id;
+  return date.toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+async function renderBackups(container) {
+  let data = null;
+  try {
+    data = await api('/api/admin/backups');
+  } catch {
+    return;
+  }
+  const wrap = el('div', 'backup-block');
+  wrap.appendChild(el('div', 'admin-section-title', 'Резервные копии диалогов'));
+  const last = data.backups?.[0];
+  const schedule = data.automatic
+    ? `Копии делаются автоматически раз в сутки, хранится до ${data.keep} штук.`
+    : 'Автоматические копии выключены — снимайте их вручную.';
+  const summary = last
+    ? `Последняя копия: ${backupWhen(last)} · диалогов ${last.chats} · ${fmtSize(last.bytes)}.`
+    : 'Копий ещё нет: первая появится в течение минуты после запуска сервиса.';
+  wrap.appendChild(el('div', 'backup-hint', `${schedule} ${summary}`));
+
+  const actions = el('div', 'backup-actions');
+  const makeBtn = el('button', 'btn', 'Сделать копию сейчас');
+  makeBtn.type = 'button';
+  makeBtn.addEventListener('click', async () => {
+    makeBtn.disabled = true;
+    try {
+      await api('/api/admin/backups', { method: 'POST' });
+      toast('Резервная копия готова', 'ok');
+      await renderBackups(container);
+    } catch (error) {
+      toast(error.message);
+      makeBtn.disabled = false;
+    }
+  });
+  actions.appendChild(makeBtn);
+  wrap.appendChild(actions);
+
+  if (data.backups?.length) {
+    const list = el('div', 'backup-list');
+    for (const item of data.backups.slice(0, 5)) {
+      const row = el('div', 'backup-row');
+      row.appendChild(el('div', 'backup-date', backupWhen(item)));
+      row.appendChild(el('div', 'backup-sub', `${item.chats} ${plural(item.chats, 'диалог', 'диалога', 'диалогов')} · ${fmtSize(item.bytes)}`));
+      const link = el('a', 'btn', 'Скачать');
+      link.href = `/api/admin/backups/download?id=${encodeURIComponent(item.id)}`;
+      link.setAttribute('download', '');
+      row.appendChild(link);
+      list.appendChild(row);
+    }
+    wrap.appendChild(list);
+  }
+  /* Место в панели забронировано заранее — меняем только содержимое. */
+  container.replaceChildren(wrap);
+}
+
 function renderPushBroadcast(body, users) {
   body.appendChild(el('div', 'admin-section-title', 'Рассылка уведомлений'));
   const card = el('div', 'push-broadcast');
@@ -4729,6 +4795,11 @@ function renderAdmin(body, users, overview, approvals = [], refresh = null) {
   renderApprovals(body, approvals, refresh);
 
   renderPushBroadcast(body, users);
+
+  /* Место под копии бронируем сразу, а заполняем после ответа сервера. */
+  const backupHolder = el('div');
+  body.appendChild(backupHolder);
+  void renderBackups(backupHolder);
 
   const list = el('div');
   for (const user of users) {

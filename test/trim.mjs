@@ -253,7 +253,8 @@ test('автосжатие: сводка в памяти и полный тек�
   assert.ok(asked.length > 0, 'модель должна получить срезанный текст');
   assert.match(chat.memory, /CSV/);
   assert.ok(result.spill, 'срезанная часть должна быть выгружена');
-  assert.match(chat.memory, /\.trims\//);
+  assert.match(result.spill, /^\.history\//, 'срез разговора лежит в отдельной папке');
+  assert.match(chat.memory, /\.history\//);
   const full = fs.readFileSync(path.join(workspace, result.spill), 'utf8');
   assert.match(full, /Вопрос 0/);
   assert.equal(stats.historySummaries, 1);
@@ -291,6 +292,69 @@ test('память чата не растёт без предела', async () =
     config,
   });
   assert.ok(chat.memory.length <= 620, `память слишком большая: ${chat.memory.length}`);
+});
+
+test('при переполнении памяти новая сводка и ссылка на файл остаются', async () => {
+  /* Раньше память обрезалась с конца — то есть первыми пропадали свежая сводка
+     и ссылка на полный текст среза, а оставалось самое старое. */
+  const previous = `старая память: ${'детали прошлых шагов '.repeat(60)}`;
+  const chat = { history: makeHistory(20), memory: previous };
+  const result = await compressHistory({
+    chat,
+    workspace,
+    budget: 1200,
+    keepRecent: 5,
+    memoryChars: 600,
+    summarize: async () => 'НОВАЯ СВОДКА про бюджет',
+    config,
+  });
+  assert.match(chat.memory, /НОВАЯ СВОДКА/, 'свежая сводка потерялась');
+  assert.match(chat.memory, /\.history\//, 'ссылка на полный текст потерялась');
+  assert.ok(chat.memory.length <= 600, `память выросла сверх бюджета: ${chat.memory.length}`);
+  assert.ok(!chat.memory.includes('…[сокращено]'), 'старая обрезка с хвоста вернулась');
+  /* Старая память не выброшена: она целиком лежит в файле, ссылка на него есть. */
+  assert.ok(result.memoryFile, 'нет файла с прежней памятью');
+  const archived = fs.readFileSync(path.join(workspace, result.memoryFile), 'utf8');
+  assert.match(archived, /детали прошлых шагов/);
+  assert.match(archived, /НОВАЯ СВОДКА/);
+});
+
+test('пока память влезает, прошлое и новое хранятся вместе', async () => {
+  const chat = { history: makeHistory(20), memory: 'прошлая договорённость: бренд «Ромашка»' };
+  await compressHistory({
+    chat,
+    workspace,
+    budget: 1200,
+    keepRecent: 5,
+    memoryChars: 4000,
+    summarize: async () => 'новая договорённость: бюджет 200 000 ₽',
+    config,
+  });
+  assert.match(chat.memory, /Ромашка/);
+  assert.match(chat.memory, /200 000/);
+  assert.ok(chat.memory.indexOf('Ромашка') < chat.memory.indexOf('200 000'), 'порядок «старое → новое» нарушен');
+});
+
+test('чистка выгрузок инструментов не удаляет срезы истории', async () => {
+  const localWs = path.join(tmpRoot, 'ws-history');
+  fs.mkdirSync(localWs, { recursive: true });
+  const chat = { history: makeHistory(10), memory: null };
+  const saved = await compressHistory({
+    chat,
+    workspace: localWs,
+    budget: 1500,
+    keepRecent: 6,
+    summarize: async () => 'сводка',
+    config,
+  });
+  assert.match(saved.spill, /^\.history\//);
+  /* Много коротких выгрузок инструментов с крошечным лимитом: чистится только .trims. */
+  for (let index = 0; index < 5; index++) {
+    spillText({ workspace: localWs, label: `test${index}`, text: `текст ${index}`, config: { ...config, maxSpillFiles: 2 } });
+  }
+  const historyFiles = fs.readdirSync(path.join(localWs, '.history'));
+  assert.ok(historyFiles.length >= 1, 'срез истории удалён вместе с выгрузками инструментов');
+  assert.ok(fs.existsSync(path.join(localWs, saved.spill)), 'файл среза истории пропал');
 });
 
 test('счётчики считают экономию и описываются словами', () => {

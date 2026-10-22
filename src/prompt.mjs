@@ -222,7 +222,7 @@ export function expertBlocks(question) {
   return matched.slice(0, 2).map((mode) => ({ id: mode.id, lines: mode.lines }));
 }
 
-export function systemPrompt({ projectName, memory, userName, question, facts = [], skillsText = '', filesBrief = '', task = null }) {
+export function systemPrompt({ projectName, memory, projectContext = '', userName, question, facts = [], skillsText = '', filesBrief = '', task = null }) {
   const experts = expertBlocks(question);
   /* Память отбирается по теме вопроса: при сотне фактов в подсказку идут
      относящиеся к делу и свежие, а не первые попавшиеся. */
@@ -246,6 +246,7 @@ export function systemPrompt({ projectName, memory, userName, question, facts = 
     '— Большие файлы (лендинг, длинный HTML, отчёт) создавай частями: write_file с первой частью 4–8 КБ, затем append_file с остальными. Одним вызовом не пиши больше ~8 КБ — ответ может обрезаться.',
     '— Файл из блока «Файлы проекта» открывается у пользователя в окне просмотра самого сервиса: двойной щелчок на компьютере или тап на телефоне. Word, Excel и PowerPoint снаружи не запускаются — так документ открывается без окна безопасности Office. Скажи, что файл открывается в просмотре, а для правки его можно скачать кнопкой «Скачать»: тогда он откроется в Word, Excel или PowerPoint на компьютере. Не придумывай ссылок, localhost, адресов вида file:/// и не обещай, что документ сразу откроется в Word.',
     '— Длинный ответ инструмента приходит сокращённым: в начале стоит строка «Результат сокращён» с размерами, а полный текст лежит в папке `.trims/` проекта — открой его read_file, если нужны детали. Путь пиши как есть, без префикса проекта.',
+    '— Если разговор длинный, его старая часть приходит как «память предыдущих обсуждений» со ссылкой на файл в `.history/` проекта: это дословная стенограмма срезанной части. Сомневаешься в деталях — прочитай её read_file, не выдумывай.',
     '— Приложенные изображения уже распознаны: используй готовый текст и описание. Если нужен более подробный разбор — analyze_image.',
     '— Приложенные документы уже извлечены в контекст. Если нужно заглянуть в другую часть большого документа — read_document и read_file.',
     ...FILE_RULES,
@@ -263,6 +264,7 @@ export function systemPrompt({ projectName, memory, userName, question, facts = 
   ];
   if (memoryBlock) lines.push('', memoryBlock);
   if (taskBlock) lines.push('', taskBlock);
+  if (projectContext) lines.push('', projectContext);
   if (memory) {
     lines.push('', 'Память предыдущих обсуждений (краткое содержание):', memory);
   }

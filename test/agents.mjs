@@ -132,6 +132,27 @@ test('инструмент spawn_agent объявлен для модели', ()
   assert.ok(def.function.parameters.required.includes('tasks'));
 });
 
+test('контекст проекта попадает в системное сообщение', async () => {
+  reset();
+  behavior = () => ({ kind: 'text', text: 'готово' });
+  await runTurn(
+    baseTurn({
+      projectContext: 'Прошлые диалоги этого проекта:\n— «Лендинг» (20.10): готов файл landing.html',
+    }),
+  );
+  const system = requests[0]?.system || '';
+  assert.match(system, /Прошлые диалоги этого проекта/, 'контекст проекта не дошёл до модели');
+  assert.match(system, /landing\.html/);
+});
+
+test('без прошлых диалогов блок контекста проекта не появляется', async () => {
+  reset();
+  behavior = () => ({ kind: 'text', text: 'готово' });
+  await runTurn(baseTurn());
+  const system = requests[0]?.system || '';
+  assert.ok(!system.includes('Прошлые диалоги этого проекта'), 'пустой блок контекста всё равно попал в подсказку');
+});
+
 test('субагенты работают и отчёт попадает в историю', async () => {
   reset();
   behavior = ({ isSubagent }) => {
@@ -302,9 +323,9 @@ test('тяжёлая история сжимается со сводкой в п
 
   assert.ok(chat.history.length < before, 'история не сжалась');
   assert.match(String(chat.memory || ''), /Сводка/, 'сводка не попала в память');
-  assert.match(String(chat.memory || ''), /\.trims\//, 'в памяти нет ссылки на срезанную часть');
+  assert.match(String(chat.memory || ''), /\.history\//, 'в памяти нет ссылки на срезанную часть');
   assert.ok(outcome.trim.historyDrops >= 1);
-  const historyFiles = fs.readdirSync(path.join(workspace, '.trims')).filter((name) => name.includes('history'));
+  const historyFiles = fs.readdirSync(path.join(workspace, '.history'));
   assert.ok(historyFiles.length >= 1, 'срезанная история не выгружена');
 });
 

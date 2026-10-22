@@ -47,8 +47,15 @@ export const TRIM_DEFAULTS = {
   /* Есть ли вообще смысл сжимать: мельче 5% выигрыша — не трогаем текст. */
   minShrinkRatio: 0.05,
   spillDir: '.trims',
-  /* Старые выгрузки чистим, чтобы папка проекта не росла бесконечно. */
+  /* Старые выгрузки результатов инструментов чистим, чтобы папка проекта не
+     росла бесконечно. Это восстановимые данные: инструмент можно вызвать снова. */
   maxSpillFiles: 60,
+  /* Срезы истории диалога — не восстановимые данные, поэтому лежат отдельно от
+     выгрузок инструментов и чистятся по объёму, а не по числу файлов: пока в
+     папке есть место, разговор можно перечитать целиком. */
+  historyDir: '.history',
+  maxHistoryFiles: 400,
+  maxHistoryBytes: 32 * 1024 * 1024,
   /* Ниже этого автосжатие истории не о чем рассказывать модели. */
   minHistoryChars: 2500,
 };
@@ -183,19 +190,35 @@ function spillStamp(date = new Date()) {
   );
 }
 
-function pruneSpills(dir, limit) {
+function pruneSpills(dir, limit, maxBytes = 0) {
   try {
     const entries = fs
       .readdirSync(dir, { withFileTypes: true })
       .filter((entry) => entry.isFile())
-      .map((entry) => ({ name: entry.name, full: path.join(dir, entry.name), time: fs.statSync(path.join(dir, entry.name)).mtimeMs }))
+      .map((entry) => {
+        const full = path.join(dir, entry.name);
+        let stat = { mtimeMs: 0, size: 0 };
+        try {
+          stat = fs.statSync(full);
+        } catch {
+          /* файл исчез между readdir и stat — считаем пустым */
+        }
+        return { name: entry.name, full, time: stat.mtimeMs, size: stat.size };
+      })
       .sort((a, b) => a.time - b.time);
-    for (let index = 0; index < entries.length - limit; index++) {
+    /* Сначала по количеству, затем по суммарному объёму: удаляем самое старое.
+       limit = 0 — без ограничения. */
+    let total = entries.reduce((sum, entry) => sum + entry.size, 0);
+    let count = entries.length;
+    for (const entry of entries) {
+      if (count <= limit && (!maxBytes || total <= maxBytes)) break;
       try {
-        fs.unlinkSync(entries[index].full);
+        fs.unlinkSync(entry.full);
       } catch {
         /* файл уже удалён — не повод падать */
       }
+      count -= 1;
+      total -= entry.size;
     }
   } catch {
     /* папки нет — чистить нечего */
@@ -206,18 +229,24 @@ function pruneSpills(dir, limit) {
  * Полный текст во временный файл проекта. Возвращает путь относительно корня
  * проекта (его можно отдать модели) или null, если записать не удалось:
  * обрезка не должна ломать инструмент.
+ *
+ * history: true — это срез самого разговора, а не ответ инструмента: он ложится
+ * в отдельную папку (settings.historyDir), которую не задевает чистка
+ * результатов инструментов.
  */
-export function spillText({ workspace, label = 'result', text, config = {} }) {
+export function spillText({ workspace, label = 'result', text, config = {}, history = false }) {
   const settings = config.spillDir ? config : resolveTrimConfig(config);
   if (!workspace || typeof text !== 'string' || !text) return null;
   try {
-    const dir = path.join(workspace, settings.spillDir);
+    const dirName = history ? settings.historyDir || '.history' : settings.spillDir;
+    const dir = path.join(workspace, dirName);
     fs.mkdirSync(dir, { recursive: true });
     const safeLabel = String(label || 'result').replace(/[^a-zA-Z0-9_.-]/g, '').slice(0, 24) || 'result';
     const name = `${spillStamp()}-${safeLabel}-${crypto.randomBytes(3).toString('hex')}.txt`;
     fs.writeFileSync(path.join(dir, name), text, 'utf8');
-    pruneSpills(dir, settings.maxSpillFiles);
-    return `${settings.spillDir}/${name}`;
+    if (history) pruneSpills(dir, settings.maxHistoryFiles ?? 400, settings.maxHistoryBytes || 0);
+    else pruneSpills(dir, settings.maxSpillFiles);
+    return `${dirName}/${name}`;
   } catch {
     return null;
   }
@@ -423,6 +452,44 @@ export function renderRemoved(removed) {
 }
 
 /**
+ * Обрезает память по бюджету, но не с хвоста, как раньше: в конце памяти стоят
+ * ссылки на полные тексты, и именно они терялись первыми. Ссылки сохраняем
+ * целиком, а сокращаем только начало — сводку.
+ */
+function clampMemory(text, limit) {
+  if (text.length <= limit) return text;
+  const lines = text.split('\n');
+  const pointers = [];
+  while (lines.length > 1) {
+    const last = lines[lines.length - 1];
+    if (last.includes('.history/') || last.includes('.trims/')) pointers.unshift(lines.pop());
+    else break;
+  }
+  const tail = pointers.join('\n');
+  const headBudget = Math.max(200, limit - tail.length - 2);
+  const head = `${lines.join('\n').slice(0, headBudget).trimEnd()}…`;
+  return `${head}\n${tail}`;
+}
+
+/**
+ * Собирает память диалога: старая память + свежая сводка. Если всё вместе не
+ * влезает в бюджет, старая часть не выбрасывается, а целиком уезжает в файл
+ * `.history/…`, а в памяти остаётся новая сводка и ссылка на этот файл. Так
+ * разговор не теряет детали даже после многократного сжатия.
+ */
+function composeMemory({ previous, fresh, limit, workspace, config, result }) {
+  const base = String(previous || '').trim();
+  if (!base) return clampMemory(fresh, limit);
+  if (base.length + fresh.length + 1 <= limit) return `${base}\n${fresh}`;
+  const archived = spillText({ workspace, label: 'memory', text: `${base}\n${fresh}`, config, history: true });
+  if (result) result.memoryFile = archived;
+  const pointer = archived
+    ? `Более ранние части разговора (полностью): ${archived} — открой read_file, если нужны детали.`
+    : '';
+  return clampMemory([fresh, pointer].filter(Boolean).join('\n'), limit);
+}
+
+/**
  * Автосжатие: вместо молчаливой потери старой части разговора она уходит в
  * файл проекта, а в память чата попадает короткая сводка. Если модель
  * недоступна, кладём детерминированную выжимку — контекст не пропадает.
@@ -450,14 +517,14 @@ export async function compressHistory({
 }) {
   const settings = resolveTrimConfig(config);
   const removed = dropHistory(chat?.history, { budget, keepRecent, pinned });
-  const result = { removed: removed.length, chars: 0, spill: null, summarized: false, fallback: false };
+  const result = { removed: removed.length, chars: 0, spill: null, memoryFile: null, summarized: false, fallback: false };
   if (!removed.length) return result;
 
   const text = renderRemoved(removed);
   result.chars = text.length;
   if (stats) stats.historyDrops += 1;
 
-  const spill = spillText({ workspace, label: 'history', text, config: settings });
+  const spill = spillText({ workspace, label: 'history', text, config: settings, history: true });
   result.spill = spill;
 
   if (text.length < settings.minHistoryChars) return result;
@@ -477,14 +544,18 @@ export async function compressHistory({
   } else {
     result.fallback = true;
     if (stats) stats.historyFallbacks += 1;
+    /* Выжимка без модели: не 900 знаков с начала, а начало + конец среза —
+       так лучше видно, чем разговор закончился. */
     const flat = text.replace(/\s+/g, ' ').trim();
-    summary = `Ранее в разговоре (сжато): ${flat.slice(0, 900)}${flat.length > 900 ? '…' : ''}`;
+    const head = flat.slice(0, 700);
+    const tail = flat.length > 1200 ? flat.slice(-420) : '';
+    summary = `Ранее в разговоре (сжато): ${head}${tail ? ` … ${tail}` : flat.length > 700 ? '…' : ''}`;
   }
 
-  const pointer = spill ? ` Полный текст срезанной части: ${spill}` : '';
-  const merged = `${chat.memory ? `${chat.memory}\n` : ''}${summary}${pointer}`;
+  const pointer = spill ? `Полный текст срезанной части: ${spill}` : '';
+  const fresh = [summary, pointer].filter(Boolean).join('\n');
   const limit = Math.max(400, Number(memoryChars) || 2200);
-  chat.memory = merged.length > limit ? `${merged.slice(0, limit - 20)}\n…[сокращено]` : merged;
+  chat.memory = composeMemory({ previous: chat.memory, fresh, limit, workspace, config: settings, result });
   return result;
 }
 

@@ -1,4 +1,4 @@
-import { CONTEXT, ESCALATION, MODEL, REVIEW, costUsd } from './config.mjs';
+﻿import { CONTEXT, ESCALATION, MODEL, REVIEW, costUsd } from './config.mjs';
 import { getDeepSeekKey } from './keys.mjs';
 import { chooseProfile } from './model.mjs';
 import { summaryPrompt, systemPrompt } from './prompt.mjs';
@@ -310,6 +310,8 @@ export async function runTurn({
   projectName,
   userName,
   userText,
+  /* Выжимка прошлых диалогов проекта: новый чат не начинает с чистого листа. */
+  projectContext = '',
   filesBrief = '',
   images = [],
   emit,
@@ -480,7 +482,7 @@ export async function runTurn({
         if (signal.aborted) throw Object.assign(new Error('aborted'), { name: 'AbortError' });
       }
     }
-    const system = systemPrompt({ projectName, memory: chat.memory, userName, question: userText, facts, skillsText, filesBrief, task: chat.task });
+    const system = systemPrompt({ projectName, projectContext, memory: chat.memory, userName, question: userText, facts, skillsText, filesBrief, task: chat.task });
     const messages = [{ role: 'system', content: system }, ...chat.history];
 
     const result = await callModel(
@@ -671,7 +673,7 @@ export async function runTurn({
   if (!finished) {
     chat.task = updateTaskState(chat.task, { userText, tools: toolsUsed, steps });
     try {
-      const system = systemPrompt({ projectName, memory: chat.memory, userName, question: userText, facts, skillsText, filesBrief, task: chat.task });
+      const system = systemPrompt({ projectName, projectContext, memory: chat.memory, userName, question: userText, facts, skillsText, filesBrief, task: chat.task });
       /* Карточка задачи в финальном сообщении помогает итогу быть по делу:
          модель называет готовые файлы, а не пересказывает процесс. */
       const card = taskSummaryLine(chat.task);
