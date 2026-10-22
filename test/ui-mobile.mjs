@@ -308,6 +308,39 @@ try {
   headerIcons.every((icon) => icon.fill === 'none')
     ? ok('все значки шапки контурные, заливки нет')
     : fail('заливка в значках шапки', JSON.stringify(headerIcons.filter((icon) => icon.fill !== 'none')));
+  const dashLabel = await evaluate(`(() => {
+    const btn = document.getElementById('dashboardBtn');
+    const label = btn.querySelector('.dash-btn-label');
+    return { text: btn.innerText.trim(), label: label ? getComputedStyle(label).display : 'нет в разметке' };
+  })()`);
+  dashLabel.text === '' && dashLabel.label !== 'inline'
+    ? ok('у «Дашборда» на телефоне только значок')
+    : fail('подпись у «Дашборда» на телефоне', JSON.stringify(dashLabel));
+
+  // 3.4. Кнопка-меню подсвечена, когда проект открыт: тот же фон, что у кнопки
+  //      «Дашборд» в открытом состоянии, — по ней видно, что список проектов
+  //      не пустой и открытый проект лежит именно там.
+  const burger = await evaluate(`(() => {
+    const node = document.getElementById('sidebarToggle');
+    const style = getComputedStyle(node);
+    return {
+      active: node.classList.contains('active'),
+      pressed: node.getAttribute('aria-pressed'),
+      bg: style.backgroundColor,
+      project: (document.querySelector('.project.active .p-name') || {}).textContent || null,
+    };
+  })()`);
+  burger.active && burger.pressed === 'true' && burger.project
+    ? ok('кнопка-меню подсвечена при открытом проекте', `проект «${burger.project}»`)
+    : fail('подсветка кнопки-меню', JSON.stringify(burger));
+  await evaluate(`document.getElementById('dashboardBtn').click()`);
+  const dashPainted = await waitFor(`document.getElementById('dashboardBtn').classList.contains('active')`);
+  const dashBg = dashPainted ? await evaluate(`getComputedStyle(document.getElementById('dashboardBtn')).backgroundColor`) : '';
+  await evaluate(`document.getElementById('dashboardBtn').click()`);
+  await waitFor(`!document.getElementById('app').classList.contains('dash-open')`);
+  dashBg && dashBg === burger.bg
+    ? ok('подсветка кнопки-меню такого же цвета, как у активного «Дашборда»', dashBg)
+    : fail('цвет подсветки кнопки-меню', JSON.stringify({ menu: burger.bg, dash: dashBg }));
 
   // 3.3. Меню профиля сворачивается от нажатия в любом другом месте сервиса:
   //      раньше слушали только mousedown, а на телефоне касание в ленту или

@@ -517,6 +517,26 @@ try {
     ? ok('значки шапки одного размера и одного штриха', `${icons.headerIcons.length} значка по ${headerSizes[0]} px, штрих ${headerStrokes[0]}`)
     : fail('значки шапки разной толщины', JSON.stringify(icons.headerIcons));
 
+  /* «Дашборд» на компьютере — только значок, без подписи: кнопка стоит в ряду
+     таких же квадратных значков и не шире соседей. */
+  const dashState = await evaluate(`(() => {
+    const btn = document.getElementById('dashboardBtn');
+    const label = btn.querySelector('.dash-btn-label');
+    const icon = document.getElementById('themeToggle');
+    const box = (node) => Math.round(node.getBoundingClientRect().width);
+    return {
+      text: btn.innerText.trim(),
+      label: label ? getComputedStyle(label).display : 'нет в разметке',
+      width: box(btn),
+      iconWidth: box(icon),
+      height: Math.round(btn.getBoundingClientRect().height),
+      title: btn.title,
+    };
+  })()`);
+  dashState.text === '' && dashState.label !== 'inline' && dashState.width === dashState.iconWidth && dashState.title
+    ? ok('«Дашборд» на компьютере — только значок', `${dashState.width} px, как у соседних кнопок`)
+    : fail('подпись у кнопки «Дашборд»', JSON.stringify(dashState));
+
   /* 12.7. Заголовок «Файлы проекта» — подпись, а не кнопка выбора проекта:
      файлы всегда принадлежат проекту, открытому слева, и панель идёт за ним.
      Раньше ручной выбор в заголовке расходился с активным проектом, и фоновая

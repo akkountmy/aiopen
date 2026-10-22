@@ -900,6 +900,17 @@ function workflowNode(workflow) {
   return node;
 }
 
+/* Кнопка-меню в шапке подсвечивается, когда проект выбран: по ней видно, что
+   в ящике проектов есть открытый проект, — так же, как подсвечена кнопка
+   «Дашборд», пока открыт дашборд. */
+function syncSidebarToggle() {
+  const burger = $('#sidebarToggle');
+  if (!burger) return;
+  const hasProject = Boolean(state.activeProjectId);
+  burger.classList.toggle('active', hasProject);
+  burger.setAttribute('aria-pressed', String(hasProject));
+}
+
 function renderSidebar() {
   const root = $('#projectList');
   root.innerHTML = '';
@@ -915,9 +926,12 @@ function renderSidebar() {
   /* Запоминаем, что именно нарисовано: тихая синхронизация сравнивает подпись
      и не трогает панель без изменений. */
   sidebarSignature = sidebarKey(state.projects, state.workflows);
+  syncSidebarToggle();
 }
 
 function updateCrumbs() {
+  /* Подсветка кнопки-меню не зависит от того, что показано в колонке диалога. */
+  syncSidebarToggle();
   const project = activeProject();
   const projectName = project?.name || '';
   const chatTitle = state.chat?.title || '';
