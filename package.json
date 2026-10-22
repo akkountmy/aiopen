@@ -26,5 +26,8 @@
     "pdfkit": "^0.20.2",
     "pptxgenjs": "^4.0.1",
     "web-push": "^3.6.7"
+  },
+  "optionalDependencies": {
+    "playwright": "^1.48.0"
   }
 }

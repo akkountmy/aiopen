@@ -13,6 +13,7 @@ import { imageInfo } from './doc/image-info.mjs';
 import { describeImage } from './vision.mjs';
 import { fetchUrl, webSearch, readPage, fetchMany, crawlSite, searchMany } from './search.mjs';
 import { runJavascript } from './jsruntime.mjs';
+import { browserAvailable, checkPage, describePage } from './browser.mjs';
 import { escapeHtml, formatBytes, safeName, truncate } from './util.mjs';
 import { writeZip } from './zip.mjs';
 
@@ -905,6 +906,27 @@ export const TOOL_DEFS = [
   {
     type: 'function',
     function: {
+      name: 'check_page',
+      description:
+        'Открыть страницу в настоящем браузере и посмотреть на неё глазами: скриншот в проект, ошибки консоли, незагруженные файлы, горизонтальная прокрутка на нужной ширине. Годится и для живого сайта по ссылке, и для собранного файла проекта (укажи путь, например index.html).',
+      parameters: {
+        type: 'object',
+        properties: {
+          url: { type: 'string', description: 'Адрес https://… или путь к файлу проекта.' },
+          width: { type: 'integer', description: 'Ширина окна, 320–2400. По умолчанию 1280.' },
+          height: { type: 'integer', description: 'Высота окна, 320–2400. По умолчанию 900.' },
+          full_page: { type: 'boolean', description: 'Снимать страницу целиком, а не первый экран.' },
+          screenshot: { type: 'string', description: 'Куда положить скриншот в проекте. По умолчанию screens/page-<ширина>.png.' },
+          wait_ms: { type: 'integer', description: 'Подождать после загрузки, мс, до 20000.' },
+          timeout_ms: { type: 'integer', description: 'Предел ожидания страницы, мс, до 90000.' },
+        },
+        required: ['url'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'run_python',
       description:
         'Выполнить Python-код в папке проекта (если Python установлен; в облаке его нет — тогда используй run_js).',
@@ -1335,6 +1357,7 @@ export const TOOL_LABELS = {
   read_page: 'Чтение страницы',
   fetch_many: 'Загрузка ссылок',
   crawl: 'Обход сайта',
+  check_page: 'Проверка страницы в браузере',
   run_python: 'Расчёты',
   run_js: 'Расчёты',
   spawn_agent: 'Субагенты',
@@ -1385,6 +1408,8 @@ export function toolSummary(name, args) {
     }
     case 'crawl':
       return args.url || '';
+    case 'check_page':
+      return `${args.url || ''}${args.width ? ` · ${args.width} px` : ''}`;
     case 'analyze_data':
       return `${args.path || ''}${args.mode ? ` · ${args.mode}` : ''}`;
     case 'find_in_files':
@@ -1432,6 +1457,7 @@ const WRITE_TARGETS = {
   create_word: ['path'],
   create_pptx: ['path'],
   create_pdf: ['path'],
+  check_page: ['screenshot'],
 };
 
 /**
@@ -1501,10 +1527,14 @@ export function pythonAvailable() {
   return pythonChecked;
 }
 
-/** Инструменты, доступные в текущем окружении: без run_python, если Python не установлен. */
+/** Инструменты, доступные в текущем окружении: без run_python, если Python не
+ * установлен, и без check_page, если нет браузера (в облаке его нет). */
 export async function availableToolDefs() {
-  const withPython = await pythonAvailable();
-  return withPython ? TOOL_DEFS : TOOL_DEFS.filter((tool) => tool.function.name !== 'run_python');
+  const [withPython, withBrowser] = await Promise.all([pythonAvailable(), browserAvailable()]);
+  let defs = TOOL_DEFS;
+  if (!withPython) defs = defs.filter((tool) => tool.function.name !== 'run_python');
+  if (!withBrowser) defs = defs.filter((tool) => tool.function.name !== 'check_page');
+  return defs;
 }
 
 export async function executeTool(name, args, ctx) {
@@ -1787,6 +1817,27 @@ export async function executeTool(name, args, ctx) {
       return {
         text: `Обход ${result.start}: страниц ${result.pages.length}, найдено ссылок ${result.found}\n\n${body}`,
         meta: { pages: result.pages.length, found: result.found },
+      };
+    }
+    case 'check_page': {
+      const result = await checkPage(args.url, {
+        root,
+        width: Number(args.width) || 1280,
+        height: Number(args.height) || 900,
+        fullPage: Boolean(args.full_page),
+        screenshot: String(args.screenshot || ''),
+        waitMs: Number(args.wait_ms) || 0,
+        timeoutMs: Number(args.timeout_ms) || 30000,
+      });
+      return {
+        text: describePage(result),
+        meta: {
+          status: result.status,
+          screenshot: result.screenshot,
+          overflow: result.overflow,
+          consoleErrors: result.consoleErrors.length,
+          resourceErrors: result.resourceErrors.length,
+        },
       };
     }
     case 'run_python': {

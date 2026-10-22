@@ -1,8 +1,13 @@
-# Сервис в контейнере: Node 20 + Python 3.
+# Сервис в контейнере: Node 20 + Python 3 + браузер Chromium.
 #
 # Зачем Python: инструмент run_python включается автоматически, когда сервис
 # находит интерпретатор. В облаке Amvera образа нет — там чистый nodejs, и
 # run_python просто не показывается модели. В контейнере он есть.
+#
+# Зачем Chromium: инструмент check_page проверяет собранную страницу живьём —
+# скриншот, ошибки консоли, горизонтальная прокрутка на 390/768/1440 px.
+# Playwright стоит в optionalDependencies: без браузера сервис работает как
+# раньше, инструмент просто не появляется в наборе.
 #
 # Сборка и запуск:
 #   docker build -t dsh-open-web .
@@ -24,7 +29,9 @@ ENV NODE_ENV=production \
     DSHOW_HOST=0.0.0.0 \
     DSHOW_PORT=3123 \
     DSHOW_DATA_DIR=/data \
-    DSHOW_TRUST_PROXY=1
+    DSHOW_TRUST_PROXY=1 \
+    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
+    PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 
 # python3 — для run_python; tini — корректная остановка по SIGTERM;
 # ca-certificates — исходящие HTTPS-запросы (поиск, загрузка страниц).
@@ -44,6 +51,13 @@ WORKDIR /app
 COPY package.json package-lock.json* ./
 RUN if [ -f package-lock.json ]; then npm ci --omit=dev; else npm install --omit=dev; fi \
  && npm cache clean --force
+
+# Chromium ставим отдельным слоем: системные библиотеки под него тянет
+# --with-deps. Браузеры лежат в /ms-playwright и должны быть читаемы
+# пользователю node, под которым работает сервис.
+RUN npx playwright install --with-deps chromium \
+ && chmod -R a+rX /ms-playwright \
+ && rm -rf /var/lib/apt/lists/* /tmp/*
 
 COPY . .
 
