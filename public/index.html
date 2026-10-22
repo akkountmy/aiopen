@@ -22,6 +22,11 @@
     <link rel="stylesheet" href="/styles.css?v=__ASSET_VERSION__" />
   </head>
   <body>
+    <!-- iOS 26 больше не берёт цвет полосы состояния из theme-color: он ищет
+         fixed-элемент у верхнего края (WebKit 301756). Ящики уезжают за экран,
+         и полоса остаётся без источника цвета — сереет и белеет с задержкой.
+         Эта полоска всегда даёт системе цвет страницы. -->
+    <div class="status-tint" aria-hidden="true"></div>
     <div id="boot" class="boot">
       <img class="boot-mark" src="/favicon.svg" alt="" width="34" height="34" />
       <div class="boot-bar"><span></span></div>
@@ -113,28 +118,86 @@
           </div>
           <div class="topbar-right">
             <span id="balanceChip" class="balance-chip hidden" aria-label="Баланс"></span>
-            <button id="userChip" class="user-chip user-chip-top" type="button" title="Учётная запись">
-              <svg class="account-glyph" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="7" r="3.2" /><path d="M4.5 16.2c.9-2.7 3-4.2 5.5-4.2s4.6 1.5 5.5 4.2" /></svg>
+            <!-- Профиль стоит в шапке первым, за ним — переключатель темы,
+                 «Дашборд» и папка. На телефоне от «Дашборда» остаётся только
+                 значок, чтобы шапка не расползлась, а ник уходит в
+                 раскрывающийся список: кнопка профиля остаётся квадратом, как
+                 соседи, и ряд значков справа держит одинаковый шаг. -->
+            <button id="userChip" class="user-chip user-chip-top" type="button" title="Учётная запись" aria-haspopup="menu">
+              <!-- Ник идёт первым, значок человечка — за ним: так подпись
+                   читается как имя учётной записи, а рисунок только подтверждает
+                   её. На узком экране подпись прячет CSS, и то же имя
+                   показывается в начале меню профиля (см. userMenuHead в
+                   app.js). Стрелка меню остаётся последней, у правого края. -->
               <span class="user-meta">
                 <span id="userName" class="user-name"></span>
               </span>
+              <svg class="account-glyph" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="7" r="3.2" /><path d="M4.5 16.2c.9-2.7 3-4.2 5.5-4.2s4.6 1.5 5.5 4.2" /></svg>
               <svg class="chev" viewBox="0 0 20 20" aria-hidden="true"><path d="M6 8l4 4 4-4" /></svg>
             </button>
             <button id="themeToggle" class="btn btn-ghost btn-icon theme-toggle" type="button" title="Светлая тема" aria-label="Переключить тему">
               <svg class="icon-moon" viewBox="0 0 20 20" aria-hidden="true"><path d="M16 11.5A6.5 6.5 0 018.5 4a6.5 6.5 0 107.5 7.5z" /></svg>
               <svg class="icon-sun hidden" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="3.6" /><path d="M10 2v1.8M10 16.2V18M2 10h1.8M16.2 10H18M4.3 4.3l1.3 1.3M14.4 14.4l1.3 1.3M15.7 4.3l-1.3 1.3M5.6 14.4l-1.3 1.3" /></svg>
             </button>
+            <button id="dashboardBtn" class="btn btn-ghost dash-btn" type="button" title="Дашборд: постоянные задания" aria-label="Дашборд" aria-pressed="false">
+              <svg class="dash-btn-ico" viewBox="0 0 20 20" aria-hidden="true"><rect x="3.2" y="3.2" width="5.6" height="5.6" rx="1.5" /><rect x="11.2" y="3.2" width="5.6" height="5.6" rx="1.5" /><rect x="3.2" y="11.2" width="5.6" height="5.6" rx="1.5" /><rect x="11.2" y="11.2" width="5.6" height="5.6" rx="1.5" /></svg>
+              <span class="dash-btn-label">Дашборд</span>
+            </button>
             <!-- Панель «Файлы проекта» открыта всегда, поэтому значка папки на
                  большом экране нет: кнопка нужна только до 1100 px, где панель
                  становится выезжающим ящиком. -->
             <button id="filesBtn" class="btn btn-ghost btn-icon files-toggle" type="button" title="Файлы проекта" aria-label="Файлы проекта">
-              <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 6.1a1.6 1.6 0 0 1 1.6-1.6h2.86c.52 0 1.01.25 1.32.67l.78 1.06c.31.42.8.67 1.32.67h4.52A1.6 1.6 0 0 1 17 8.5v6.1a1.8 1.8 0 0 1-1.8 1.8H4.8A1.8 1.8 0 0 1 3 14.6z" /></svg>
+              <!-- Та же раскрытая папка, что в заголовке панели «Файлы проекта»:
+                   одна иконка на кнопку и на панель, чтобы не читались как два
+                   разных раздела. -->
+              <svg class="ico-solid" viewBox="0 0 16 16" aria-hidden="true"><path d="M5.19629 1.57104C5.81144 1.5711 6.38623 1.8786 6.72754 2.39038L7.19922 3.09839C7.28454 3.22635 7.42824 3.30344 7.58203 3.30347H12.1699C13.5039 3.30348 14.5859 4.38548 14.5859 5.71948V6.62671C15.2694 7.02689 15.6605 7.85012 15.4385 8.68726L14.3848 12.658C14.1037 13.7164 13.1449 14.4527 12.0498 14.4529H2.91699C1.51651 14.4529 0.451662 13.2814 0.501954 11.9519V3.98706C0.501954 2.65305 1.58396 1.57104 2.91797 1.57104H5.19629ZM3.7793 7.75562C3.30994 7.75562 2.89883 8.07153 2.77832 8.52515L1.91602 11.7722C1.74167 12.4291 2.23734 13.073 2.91699 13.073H12.0498C12.5191 13.0728 12.9304 12.757 13.0508 12.3035L14.1045 8.33374C14.1819 8.04202 13.9619 7.756 13.6602 7.75562H3.7793ZM2.91797 2.9519C2.34625 2.9519 1.88281 3.41534 1.88281 3.98706V7.2937C2.33068 6.7269 3.02249 6.37476 3.7793 6.37476H13.2051V5.71948C13.2051 5.14777 12.7416 4.68434 12.1699 4.68433H7.58203C6.96675 4.6843 6.39209 4.37595 6.05078 3.86401L5.5791 3.15601C5.49379 3.02821 5.34995 2.95196 5.19629 2.9519H2.91797Z" /></svg>
             </button>
           </div>
         </header>
 
+        <!-- ---------------------------------- дашборд --------------------------------
+             Шесть постоянных заданий. Экран занимает место диалога: пока он открыт,
+             лента сообщений и поле ввода скрыты (см. .app.dash-open в styles.css). -->
+        <section id="dashboardView" class="dash hidden" aria-label="Дашборд">
+          <div class="dash-scroll">
+            <div class="dash-inner">
+              <header class="dash-head">
+                <div class="dash-head-text">
+                  <h1 class="dash-title">Дашборд</h1>
+                  <p class="dash-sub">Законы, налоги, деньги компании, кадры, закупки и рынок. Агент сам готовит отчёт по расписанию — в отдельном диалоге, с файлами.</p>
+                </div>
+                <div class="dash-head-actions">
+                  <button id="dashEnableAll" class="btn btn-quiet dash-all-btn" type="button">Включить всё</button>
+                  <button id="dashRefresh" class="btn btn-ghost btn-icon" type="button" title="Обновить" aria-label="Обновить">
+                    <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M16 6.5A6.5 6.5 0 105 16M16 3v4h-4" /></svg>
+                  </button>
+                </div>
+              </header>
+              <div id="dashNotice" class="dash-notice hidden" role="status"></div>
+              <div id="dashGrid" class="dash-grid" aria-busy="true"></div>
+              <p class="dash-foot">
+                Отчёт создаётся в проекте, выбранном в настройках задания (по умолчанию — первый проект).
+                Каждый запуск расходует баланс так же, как обычный запрос. Запуски, пропущенные из-за простоя
+                сервиса, не догоняются — следующее сработает по расписанию.
+              </p>
+            </div>
+          </div>
+        </section>
+
         <div class="scroll" id="scroll">
           <div class="thread" id="thread"></div>
+        </div>
+
+        <!-- Прозрачная колонка прокрутки: стоит у правого края ленты по её
+             середине. Показывается только тогда, когда лента действительно
+             прокручивается (класс .on ставит app.js). -->
+        <div class="scroll-jump" id="scrollJump" role="group" aria-label="Прокрутка диалога" aria-hidden="true">
+          <button id="scrollUp" type="button" title="Вверх" aria-label="Прокрутить диалог вверх" aria-disabled="true">
+            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 12.5L10 7.5l5 5" /></svg>
+          </button>
+          <button id="scrollDown" type="button" title="Вниз" aria-label="Прокрутить диалог вниз" aria-disabled="true">
+            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 7.5l5 5 5-5" /></svg>
+          </button>
         </div>
 
         <div class="composer-wrap">

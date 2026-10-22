@@ -44,7 +44,26 @@ const ICONS = {
   theme:
     '<svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="3.6"/><path d="M10 2.4v1.8M10 15.8v1.8M2.4 10h1.8M15.8 10h1.8M4.6 4.6l1.3 1.3M14.1 14.1l1.3 1.3M15.4 4.6l-1.3 1.3M5.9 14.1l-1.3 1.3"/></svg>',
   eye: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M2.5 10s2.9-4.5 7.5-4.5S17.5 10 17.5 10s-2.9 4.5-7.5 4.5S2.5 10 2.5 10z"/><circle cx="10" cy="10" r="1.9"/></svg>',
-  bell: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3a4 4 0 00-4 4v3.2L4.6 13h10.8L14 10.2V7a4 4 0 00-4-4z"/><path d="M8.2 15.4a1.9 1.9 0 003.6 0"/></svg>',
+  /* Значки шести блоков «Дашборда»: весы (законы), чек (налоги), столбцы
+     (финансы), куб лота (закупки), глобус (рынок). Нарисованы в той же сетке
+     20 и той же толщиной, что остальные иконки, поэтому в шапке карточки и в
+     списке выглядят как один набор. */
+  scale:
+    '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3.4v13M6.6 16.4h6.8"/><path d="M4.1 6.6h11.8"/><path d="M4.1 6.6L2.3 11.2h3.6zM15.9 6.6l-1.8 4.6h3.6z"/></svg>',
+  receipt:
+    '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5.4 3.4h9.2v13.2l-1.9-1.2-1.6 1.2-1.3-1.2-1.3 1.2-1.6-1.2-1.5 1.2z"/><path d="M7.4 7.2h5.2M7.4 10h5.2"/></svg>',
+  chart:
+    '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3.4 16.6h13.2"/><path d="M6.2 16.6V9.8M10 16.6V4.9M13.8 16.6v-4.4"/></svg>',
+  lot: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3.4l6.6 3.5L10 10.4 3.4 6.9z"/><path d="M3.4 6.9v6.2L10 16.6l6.6-3.5V6.9"/><path d="M10 10.4v6.2"/></svg>',
+  globe:
+    '<svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="6.6"/><path d="M3.4 10h13.2"/><path d="M10 3.4c3.4 3.7 3.4 9.5 0 13.2M10 3.4c-3.4 3.7-3.4 9.5 0 13.2"/></svg>',
+  sliders:
+    '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3.4 6.4h13.2M3.4 13.6h13.2"/><circle cx="7.6" cy="6.4" r="1.7"/><circle cx="12.4" cy="13.6" r="1.7"/></svg>',
+  play: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M7.2 5.2l7.6 4.8-7.6 4.8z"/></svg>',
+  calendar:
+    '<svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3.4" y="4.6" width="13.2" height="12" rx="1.6"/><path d="M3.4 8.4h13.2M7 3.4v2.4M13 3.4v2.4"/></svg>',
+  refresh:
+    '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M16.2 6.6A6.6 6.6 0 105 16.2M16.2 3.6v3.4h-3.4"/></svg>',
 };
 
 const WHALE_SVG =
@@ -74,7 +93,14 @@ const state = {
   lastTitle: '',
   /* Уведомления: поддержка браузера, разрешение и подписка этого устройства. */
   push: { supported: false, permission: 'default', subscribed: false, subscriptions: 0, publicKey: '' },
+  /* «Дашборд»: шесть постоянных заданий и их настройки. loaded — чтобы не
+     запрашивать список заново при каждом открытии экрана. */
+  dashboard: emptyDashboardState(),
 };
+
+function emptyDashboardState() {
+  return { loaded: false, loading: false, tasks: [], tz: 'Europe/Minsk', nextRunAt: null, canAutoRun: false, balanceUsd: 0 };
+}
 
 function el(tag, cls, text) {
   const node = document.createElement(tag);
@@ -455,13 +481,14 @@ async function api(path, options = {}) {
      разбору ошибки. */
   if (response.status === 401 && !anonymous) {
     showAuth();
-    /* Сеанс мог быть закрыт новым входом с другого устройства — объясняем это
-       прямо на экране входа, чтобы выход не выглядел случайным сбоем. */
+    /* Сеанс мог закончиться по сроку или потому, что в этом же браузере вошли
+       заново — объясняем это прямо на экране входа, чтобы выход не выглядел
+       случайным сбоем. Число одновременных устройств больше не ограничено. */
     const notice =
       data.reason === 'displaced' && data.error
         ? data.error
         : data.reason === 'displaced'
-          ? 'Этот сеанс закрыт: одновременно на аккаунте работает ограниченное число устройств. Войдите снова.'
+          ? 'Этот сеанс закрыт — войдите снова.'
           : '';
     const box = $('#loginError');
     if (box) box.textContent = notice;
@@ -626,6 +653,9 @@ function switchAuthForm(mode) {
 /* ------------------------------ app init ------------------------------ */
 
 async function startApp(payload) {
+  /* При открытии ярлыка показываем стартовый экран, при обычной перезагрузке
+     возвращаем открытый диалог. */
+  const freshOpen = openedFresh();
   /* Панель файлов, открытую до перезагрузки, запоминаем до сброса состояния:
      resetClientState затирает память вкладки. */
   const savedUi = readFilesUi();
@@ -636,7 +666,13 @@ async function startApp(payload) {
   state.workflows = payload.workflows || [];
   hideAuth();
   $('#boot').classList.add('hidden');
-  $('#userName').textContent = state.user.displayName || state.user.username;
+  const accountName = state.user.displayName || state.user.username;
+  $('#userName').textContent = accountName;
+  /* На телефоне и в приложении-ярлыке подпись у профиля спрятана — имя живёт
+     в раскрывающемся списке, поэтому у самой кнопки оно остаётся в подсказке
+     и в подписи для чтения с экрана. */
+  $('#userChip').title = `Учётная запись: ${accountName}`;
+  $('#userChip').setAttribute('aria-label', `Учётная запись: ${accountName}`);
   renderBalance();
   if (!state.projects.length) {
     try {
@@ -647,18 +683,20 @@ async function startApp(payload) {
     }
   }
   const first = state.projects[0];
-  state.expanded.clear();
-  if (first) {
-    state.expanded.add(first.id);
-    state.activeProjectId = first.id;
-  }
-  /* Проект, в котором человек работал: его же и открываем, иначе после
-     перезагрузки панель файлов вернулась бы к чужой папке. */
+  /* Проект, в котором человек работал в момент закрытия: сначала наша
+     постоянная память, затем открытая панель файлов, и только потом первый
+     проект. Проект мог быть удалён с другого устройства — такую запись
+     пропускаем. */
+  const lastProject = lastProjectId();
+  const lastProjectAlive = lastProject && state.projects.some((project) => project.id === lastProject);
   const uiProject = savedUi ? state.projects.find((project) => project.id === savedUi.projectId) : null;
-  if (uiProject) {
-    state.expanded.add(uiProject.id);
-    state.activeProjectId = uiProject.id;
+  const preferredProjectId = (lastProjectAlive ? lastProject : '') || uiProject?.id || first?.id || '';
+  state.expanded.clear();
+  if (preferredProjectId) {
+    state.expanded.add(preferredProjectId);
+    state.activeProjectId = preferredProjectId;
   }
+  rememberProject(state.activeProjectId);
   /* Панель файлов показывает файлы проекта диалога: отдельного выбора в её
      заголовке нет, поэтому активный проект — единственный источник. */
   syncFilesProjectLabel();
@@ -666,14 +704,22 @@ async function startApp(payload) {
      чтобы работа выглядела непрерывной. */
   for (const run of payload.runs || []) trackRun(run.id, run.chatId);
   renderSidebar();
-  /* Открываем диалог с живой задачей, иначе последний открытый, иначе первый
-     в проекте — после перезагрузки человек возвращается туда, где работал. */
-  const runningChat = (payload.runs || []).find((run) => findChatProject(run.chatId));
-  const remembered = lastChatId();
-  const target =
-    runningChat?.chatId || (remembered && findChatProject(remembered) ? remembered : '') || activeProject()?.chats?.[0]?.id || '';
-  if (target) await openChat(target);
-  else renderThread();
+  if (freshOpen) {
+    /* Стартовый экран: поле ввода и подсказки, но без автоматически открытого
+       диалога — человек сам решит, продолжить прошлый разговор или начать новый. */
+    state.chat = null;
+    state.activeChatId = null;
+    renderThread();
+  } else {
+    /* Перезагрузка страницы: открываем диалог с живой задачей, иначе последний
+       открытый, иначе первый в проекте — человек возвращается туда, где работал. */
+    const runningChat = (payload.runs || []).find((run) => findChatProject(run.chatId));
+    const remembered = lastChatId();
+    const target =
+      runningChat?.chatId || (remembered && findChatProject(remembered) ? remembered : '') || activeProject()?.chats?.[0]?.id || '';
+    if (target) await openChat(target);
+    else renderThread();
+  }
   updateCrumbs();
   watchWideBlocks();
   /* Панель «Файлы проекта», открытая до перезагрузки, возвращается открытой:
@@ -683,6 +729,9 @@ async function startApp(payload) {
   if (state.activeProjectId) syncFilesPanel({ reload: !restoredUi });
   /* Черновик возвращаем, если страница сама обновилась до новой версии. */
   restoreDraft();
+  /* Уведомления включаются сами после входа: человек ничего не настраивает. */
+  pushRegistered = false;
+  void ensurePush();
   checkAppVersion();
   $('#input').focus();
 }
@@ -719,6 +768,7 @@ function syncFilesProjectLabel() {
 /* Переключение диалога или проекта просто освежает подпись: файлы панели уже
    принадлежат активному проекту. */
 function followActiveProject() {
+  rememberProject(state.activeProjectId);
   syncFilesProjectLabel();
 }
 
@@ -932,6 +982,9 @@ function renderSidebar() {
 function updateCrumbs() {
   /* Подсветка кнопки-меню не зависит от того, что показано в колонке диалога. */
   syncSidebarToggle();
+  /* Экран «Дашборд» сам держит заголовок в крошке: перерисовка диалога в фоне
+     не должна подменять его названием чата. */
+  if (dashboardOpen()) return;
   const project = activeProject();
   const projectName = project?.name || '';
   const chatTitle = state.chat?.title || '';
@@ -964,9 +1017,47 @@ function findChatProject(chatId) {
   return state.projects.find((project) => (project.chats || []).some((chat) => chat.id === chatId)) || null;
 }
 
+/* Последний проект, в котором человек работал. В отличие от открытого диалога,
+   он нужен и тогда, когда в момент закрытия приложения человек стоял на
+   стартовом экране: запоминаем проект при каждом переключении, а не только
+   вместе с диалогом. */
+const LAST_PROJECT_KEY = 'dshow.lastProject';
+
+function rememberProject(projectId) {
+  if (!state.user || !projectId) return;
+  try {
+    localStorage.setItem(LAST_PROJECT_KEY, projectId);
+  } catch {
+    /* Приватный режим браузера — не критично. */
+  }
+}
+
+function lastProjectId() {
+  try {
+    return localStorage.getItem(LAST_PROJECT_KEY) || '';
+  } catch {
+    return '';
+  }
+}
+
+/* Ярлык-приложение открыли заново или страницу просто обновили? При
+   перезагрузке возвращаем человека в открытый диалог, а при новом запуске
+   показываем стартовый экран в последнем проекте. */
+function openedFresh() {
+  try {
+    const nav = performance.getEntriesByType?.('navigation')?.[0];
+    if (nav?.type) return nav.type === 'navigate';
+    if (performance.navigation) return performance.navigation.type === 0;
+  } catch {
+    /* остаёмся на безопасном варианте — как при новом запуске */
+  }
+  return true;
+}
+
 async function openChat(chatId) {
   /* Переключение во время ответа теперь разрешено: работа идёт на сервере, а
      вкладка просто показывает другой диалог и возвращается к потоку позже. */
+  hideDashboard();
   try {
     const data = await api(`/api/chats/${chatId}`);
     state.chat = data.chat;
@@ -1040,6 +1131,96 @@ function scrollToBottom(force = false) {
   }
 }
 
+/* Стрелки прокрутки у правого края ленты. Колонка показывается, только когда
+   ленте есть куда листать, и гаснет у верхнего и нижнего края — нажатие на
+   неактивную стрелку ничего не делает, но фокус с кнопки не слетает. */
+let syncScrollJump = () => {};
+
+function initScrollJump() {
+  const scroller = $('#scroll');
+  const jump = $('#scrollJump');
+  const up = $('#scrollUp');
+  const down = $('#scrollDown');
+  if (!scroller || !jump || !up || !down) return;
+
+  const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+  let frame = 0;
+  let placedTop = '';
+
+  const measure = () => ({
+    max: Math.max(0, scroller.scrollHeight - scroller.clientHeight),
+    top: scroller.scrollTop,
+  });
+
+  /* Центр колонки — центр именно ленты, а не всей колонки приложения: сверху
+     шапка, снизу поле ввода, и их высоты меняются (ввод растёт, клавиатура
+     поднимается). Поэтому положение считается по фактическим прямоугольникам. */
+  function place() {
+    const main = jump.offsetParent;
+    if (!(main instanceof HTMLElement)) return;
+    const box = scroller.getBoundingClientRect();
+    if (box.height < 1) return;
+    const mainBox = main.getBoundingClientRect();
+    const value = `${Math.round(box.top - mainBox.top + box.height / 2)}px`;
+    if (value !== placedTop) {
+      placedTop = value;
+      jump.style.top = value;
+    }
+  }
+
+  function sync() {
+    frame = 0;
+    place();
+    const { max, top } = measure();
+    const scrollable = max > 24;
+    jump.classList.toggle('on', scrollable);
+    jump.inert = !scrollable;
+    jump.setAttribute('aria-hidden', scrollable ? 'false' : 'true');
+    const atTop = !scrollable || top <= 1;
+    const atBottom = !scrollable || top >= max - 1;
+    up.classList.toggle('is-off', atTop);
+    down.classList.toggle('is-off', atBottom);
+    up.setAttribute('aria-disabled', String(atTop));
+    down.setAttribute('aria-disabled', String(atBottom));
+  }
+
+  function schedule() {
+    if (!frame) frame = requestAnimationFrame(sync);
+  }
+
+  function step(direction) {
+    const { max, top } = measure();
+    if (max <= 24) return;
+    /* Одна страница — чуть меньше видимой высоты, чтобы у следующего экрана
+       оставалась зацепка: последняя строка предыдущего остаётся на виду. */
+    const page = Math.max(140, Math.round(scroller.clientHeight * 0.82));
+    const target = Math.max(0, Math.min(max, top + direction * page));
+    if (target === top) return;
+    scroller.scrollTo({ top: target, behavior: reduceMotion.matches ? 'instant' : 'smooth' });
+  }
+
+  up.addEventListener('click', () => step(-1));
+  down.addEventListener('click', () => step(1));
+  scroller.addEventListener('scroll', schedule, { passive: true });
+  window.addEventListener('resize', schedule);
+
+  if ('ResizeObserver' in window) {
+    const observer = new ResizeObserver(schedule);
+    observer.observe(scroller);
+    if ($('#thread')) observer.observe($('#thread'));
+  }
+  if ('MutationObserver' in window && $('#thread')) {
+    new MutationObserver(schedule).observe($('#thread'), {
+      childList: true,
+      subtree: true,
+      characterData: true,
+    });
+  }
+
+  syncScrollJump = schedule;
+  sync();
+}
+
 function renderEmpty() {
   const thread = $('#thread');
   thread.innerHTML = '';
@@ -1047,12 +1228,14 @@ function renderEmpty() {
   empty.innerHTML = `
     <div class="empty-mark">${WHALE_SVG}</div>
     <h2 class="empty-title">Чем помочь?</h2>
-    <p class="empty-sub">Поставьте задачу — файлы, расчёты и поиск подключу сам.</p>
-    <div class="suggestions">
-      <button class="suggestion" data-prompt="Проанализируй таблицу из файлов проекта и сделай краткий вывод с ключевыми числами.">Разобрать таблицу и найти главное</button>
-      <button class="suggestion" data-prompt="Распознай текст на изображениях проекта и собери из него структурированный документ.">Распознать текст со скриншотов</button>
-      <button class="suggestion" data-prompt="Подготовь отчёт в Word и Excel по данным проекта, с таблицами и выводами.">Сделать отчёт Word и Excel</button>
-      <button class="suggestion" data-prompt="Найди актуальную информацию по теме в интернете, проверь по первоисточникам и оформи ссылки.">Найти и проверить информацию</button>
+    <p class="empty-sub">Выберите подсказку или напишите задачу.</p>
+    <div class="suggestions" aria-label="Возможности ассистента">
+      <button class="suggestion" type="button" data-prompt="Подготовь отчёт в Word и Excel по данным проекта: таблицы, расчёты и выводы.">Word и Excel</button>
+      <button class="suggestion" type="button" data-prompt="Сделай презентацию по материалам проекта: слайды с тезисами, цифрами и выводами.">Презентация</button>
+      <button class="suggestion" type="button" data-prompt="Разбери файлы проекта: выдели главное, ключевые цифры и возможные ошибки.">Разбор файлов</button>
+      <button class="suggestion" type="button" data-prompt="Распознай текст на скриншотах или фото проекта и собери его в аккуратный документ.">Фото в текст</button>
+      <button class="suggestion" type="button" data-prompt="Найди актуальные данные по теме в интернете, проверь по первоисточникам и оформи ссылки.">Поиск в интернете</button>
+      <button class="suggestion" type="button" data-prompt="Собери готовую страницу сайта или 3D-схему по описанию, с адаптацией под телефон.">Сайт или 3D</button>
     </div>`;
   empty.addEventListener('click', (event) => {
     const button = event.target.closest('[data-prompt]');
@@ -1950,6 +2133,21 @@ function closeSidebar() {
   $('#app').classList.remove('sidebar-open');
 }
 
+/* Ящик «Проекты» открывается кнопкой-меню и свайпом вправо на телефоне.
+   Панель файлов при этом закрываем: два затемнения поверх друг друга не
+   нужны, а открытым должен остаться ровно один ящик. */
+function openSidebarDrawer() {
+  closeMenus();
+  closePopover();
+  if (state.filesDrawerOpen) closeFilesDrawer();
+  $('#app').classList.add('sidebar-open');
+}
+
+function toggleSidebarDrawer() {
+  if ($('#app').classList.contains('sidebar-open')) closeSidebar();
+  else openSidebarDrawer();
+}
+
 /* Панель «Файлы проекта» — постоянный правый блок: на широком экране её
    нельзя закрыть (ничего в разметке этого и не обещает). До 1100 px ширина
    экрана мала, поэтому панель превращается в выезжающий ящик, который
@@ -2019,10 +2217,16 @@ function syncFilesPanel({ reload = false } = {}) {
   }
 }
 
+function openFilesDrawer({ reload = true } = {}) {
+  if (!filesNarrow() || state.filesDrawerOpen) return;
+  state.filesDrawerOpen = true;
+  syncFilesPanel({ reload });
+}
+
 function toggleFilesDrawer() {
   if (!filesNarrow()) return;
-  state.filesDrawerOpen = !state.filesDrawerOpen;
-  syncFilesPanel({ reload: state.filesDrawerOpen });
+  if (state.filesDrawerOpen) closeFilesDrawer();
+  else openFilesDrawer();
 }
 
 function closeFilesDrawer() {
@@ -3071,16 +3275,17 @@ function anchorBlockRight(anchor) {
   return rect.right - padding;
 }
 
-function openContextMenu(anchor, items) {
+function openContextMenu(anchor, items, head = null) {
   /* Повторное нажатие на ту же кнопку сворачивает её список: меню ведёт себя
      как обычный переключатель, а не открывается заново поверх себя. */
-  if (menuAnchor === anchor && $('.menu').length) {
+  if (menuAnchor === anchor && $$('.menu').length) {
     closeMenus();
     return;
   }
   closeMenus();
   menuAnchor = anchor;
   const menu = el('div', 'menu');
+  if (head) menu.appendChild(head);
   const rect = anchor.getBoundingClientRect();
   for (const item of items) {
     if (item.sep) {
@@ -3522,6 +3727,26 @@ function confirmPopover({ anchor, title, text, confirmLabel = 'Удалить' }
 
 /* ------------------------------ menus ------------------------------ */
 
+/* Строка учётной записи в начале меню профиля. В шапке ник теперь виден только
+   на широком экране, а на телефоне и в приложении-ярлыке убран из ряда значков
+   (иначе кнопка профиля шире соседей и промежутки между значками разные) — там
+   имя показывается здесь. На широком экране строку прячет CSS: ник и так виден
+   в шапке. */
+function userMenuHead() {
+  const head = el('div', 'menu-account');
+  const main = el('div', 'menu-account-main');
+  main.innerHTML =
+    '<svg class="account-glyph" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="7" r="3.2"/><path d="M4.5 16.2c.9-2.7 3-4.2 5.5-4.2s4.6 1.5 5.5 4.2"/></svg>';
+  const text = el('div', 'menu-account-text');
+  const name = state.user?.displayName || state.user?.username || '';
+  text.appendChild(el('div', 'menu-account-name', name));
+  if (state.user?.role === 'admin') text.appendChild(el('div', 'menu-account-role', 'Администратор'));
+  main.appendChild(text);
+  head.appendChild(main);
+  head.appendChild(el('div', 'sep'));
+  return head;
+}
+
 function openUserMenu(event) {
   const isAdmin = state.user?.role === 'admin';
   const items = [
@@ -3535,11 +3760,6 @@ function openUserMenu(event) {
       icon: ICONS.eye,
       action: () => memoryModal(),
     },
-    {
-      label: 'Уведомления',
-      icon: ICONS.bell,
-      action: () => notificationsModal(),
-    },
   ];
   if (isAdmin) {
     items.push(
@@ -3548,7 +3768,7 @@ function openUserMenu(event) {
     );
   }
   items.push({ sep: true }, { label: 'Выйти', icon: ICONS.logout, danger: true, action: () => logout() });
-  openContextMenu(event.currentTarget, items);
+  openContextMenu(event.currentTarget, items, userMenuHead());
 }
 
 function openProjectMenu(event, project) {
@@ -4065,6 +4285,9 @@ function resetClientState() {
   state.expanded = new Set();
   state.collapsedWorkflows = new Set();
   state.lastTitle = '';
+  /* Задания «Дашборда» принадлежат аккаунту: чужое расписание не показываем. */
+  hideDashboard();
+  state.dashboard = emptyDashboardState();
   state.dragOut = false;
 }
 
@@ -4162,12 +4385,47 @@ function renderApprovals(body, approvals, refresh) {
 
 /* --- рассылка уведомлений ---
    Администратор пишет объявление (например, о новой функции) и отправляет его
-   всем или выбранным людям. Доходит только до тех, у кого уведомления включены
-   на устройстве, — это видно заранее в списке получателей. */
+   всем или выбранным людям. Рядом видно не только тех, кому можно писать, но и
+   тех, у кого уведомления выключены на самом устройстве: браузер запретил,
+   разрешение ещё не спрашивали или приложение ни разу не открывали. */
+const PUSH_STATUS = {
+  on: { label: 'включены', cls: 'on' },
+  off: { label: 'выключены', cls: 'off' },
+  pending: { label: 'ждут разрешения', cls: 'pending' },
+  'no-subscription': { label: 'нет подписки', cls: 'pending' },
+  unsupported: { label: 'не поддерживаются', cls: 'muted' },
+  unknown: { label: 'нет данных', cls: 'muted' },
+};
+
+function pushStatusInfo(item) {
+  if (item.enabled > 0 && (item.disabled > 0 || item.pending > 0)) {
+    return { label: 'включены не везде', cls: 'partial' };
+  }
+  if (item.enabled > 0) return PUSH_STATUS.on;
+  if (item.disabled > 0) return PUSH_STATUS.off;
+  if (item.noSub > 0) return PUSH_STATUS['no-subscription'];
+  if (item.pending > 0) return PUSH_STATUS.pending;
+  if (item.unsupported > 0) return PUSH_STATUS.unsupported;
+  return PUSH_STATUS.unknown;
+}
+
+function pushSeenText(value) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  const days = Math.floor((Date.now() - date.getTime()) / 86400000);
+  if (days <= 0) return 'сегодня';
+  if (days === 1) return 'вчера';
+  if (days < 7) return `${days} ${plural(days, 'день', 'дня', 'дней')} назад`;
+  return date.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
+}
+
 function renderPushBroadcast(body, users) {
   body.appendChild(el('div', 'admin-section-title', 'Рассылка уведомлений'));
   const card = el('div', 'push-broadcast');
   const hint = el('p', 'push-broadcast-hint', 'Смотрим, у кого включены уведомления…');
+  const summary = el('div', 'push-summary');
+  summary.hidden = true;
 
   const form = el('form', 'push-form');
   const titleField = el('label', 'field');
@@ -4192,7 +4450,7 @@ function renderPushBroadcast(body, users) {
   const audience = el('select');
   for (const [value, label] of [
     ['all', 'Всем, у кого включены уведомления'],
-    ['some', 'Выбранным пользователям'],
+    ['some', 'Только отмеченным'],
   ]) {
     const option = el('option', '', label);
     option.value = value;
@@ -4201,8 +4459,13 @@ function renderPushBroadcast(body, users) {
   audienceField.appendChild(audience);
   form.appendChild(audienceField);
 
+  const pickerHead = el('div', 'push-picker-head');
+  pickerHead.appendChild(el('span', 'push-picker-title', 'Получатели'));
+  const pickerNote = el('span', 'push-picker-note', 'Отметить можно только устройства с включёнными уведомлениями');
+  pickerHead.appendChild(pickerNote);
+  form.appendChild(pickerHead);
+
   const picker = el('div', 'push-picker');
-  picker.hidden = true;
   form.appendChild(picker);
 
   const sendBtn = el('button', 'btn btn-primary', 'Отправить уведомление');
@@ -4214,55 +4477,127 @@ function renderPushBroadcast(body, users) {
   resultLine.hidden = true;
   form.appendChild(resultLine);
   card.appendChild(hint);
+  card.appendChild(summary);
   card.appendChild(form);
   body.appendChild(card);
 
-  /* Получатели — только те, кому есть куда писать: у остальных уведомления
-     выключены или приложение ни разу не открывали. */
-  let devices = new Map();
-  const boxes = [];
+  let entries = [];
+  let boxes = [];
+
+  const syncAudience = () => {
+    const all = audience.value === 'all';
+    for (const box of boxes) {
+      const available = box.dataset.available === '1';
+      box.disabled = !available || all;
+      box.checked = available && all;
+      box.closest('.push-pick')?.classList.toggle('on', box.checked);
+      box.closest('.push-pick')?.classList.toggle('available', available);
+    }
+  };
+
   const renderPicker = () => {
     picker.innerHTML = '';
-    boxes.length = 0;
-    const available = users.filter((user) => devices.get(user.id));
-    if (!available.length) {
-      picker.appendChild(el('p', 'push-broadcast-hint', 'Пока ни у кого не включены уведомления.'));
+    boxes = [];
+    if (!entries.length) {
+      picker.appendChild(el('p', 'push-broadcast-hint', 'Пользователей пока нет.'));
       return;
     }
-    for (const user of available) {
+    for (const item of entries) {
+      const available = item.enabled > 0;
       const row = el('label', 'push-pick');
+      row.dataset.available = available ? '1' : '0';
+      row.classList.toggle('available', available);
+
       const box = el('input');
       box.type = 'checkbox';
-      box.value = user.id;
+      box.value = item.userId;
+      box.dataset.available = available ? '1' : '0';
       box.addEventListener('change', () => row.classList.toggle('on', box.checked));
-      const count = devices.get(user.id);
-      row.append(
-        box,
-        el('span', 'push-pick-name', user.displayName || user.username),
-        el('span', 'push-pick-count', `${count} ${plural(count, 'устройство', 'устройства', 'устройств')}`),
-      );
+      row.appendChild(box);
+
+      const avatar = el('span', 'push-pick-avatar', (item.displayName || item.username || '?').charAt(0));
+      row.appendChild(avatar);
+
+      const main = el('span', 'push-pick-main');
+      const nameLine = el('span', 'push-pick-name');
+      nameLine.textContent = item.displayName || item.username || 'Без имени';
+      if (item.role === 'admin') nameLine.appendChild(el('span', 'badge', 'админ'));
+      main.appendChild(nameLine);
+
+      const login = item.username ? `@${item.username}` : '';
+      const seen = pushSeenText(item.lastLoginAt);
+      const meta = [login, seen ? `заходил ${seen}` : 'ещё не входил'].filter(Boolean).join(' · ');
+      main.appendChild(el('span', 'push-pick-meta', meta));
+
+      /* Устройства показываем по одному: администратору важно видеть, что
+         именно на телефоне уведомления выключены, а на ноутбуке — включены. */
+      const deviceLine = el('span', 'push-devices');
+      const deviceList = Array.isArray(item.deviceList) ? item.deviceList : [];
+      for (const device of deviceList.slice(0, 3)) {
+        const status = PUSH_STATUS[device.status] || PUSH_STATUS.unknown;
+        const chip = el('span', `push-device ${status.cls}`);
+        chip.appendChild(el('span', 'push-device-dot'));
+        const label = `${device.device || 'Устройство'}${device.app ? ' · приложение' : ''} · ${status.label}`;
+        chip.appendChild(document.createTextNode(label));
+        const seenDevice = pushSeenText(device.lastSeenAt);
+        chip.title = seenDevice ? `Последний раз: ${seenDevice}` : label;
+        deviceLine.appendChild(chip);
+      }
+      if (deviceList.length > 3) deviceLine.appendChild(el('span', 'push-device more', `+${deviceList.length - 3}`));
+      if (!deviceList.length) deviceLine.appendChild(el('span', 'push-device muted', 'нет данных с устройства'));
+      main.appendChild(deviceLine);
+      row.appendChild(main);
+
+      const status = pushStatusInfo(item);
+      const chip = el('span', `push-status ${status.cls}`, status.label);
+      if (item.enabled > 0 && deviceList.length > 1 && item.enabled < deviceList.length) {
+        chip.textContent = `${status.label} · ${item.enabled} из ${deviceList.length}`;
+      }
+      row.appendChild(chip);
       picker.appendChild(row);
       boxes.push(box);
     }
+    syncAudience();
   };
 
   api('/api/admin/push')
     .then((data) => {
-      devices = new Map((data.users || []).map((item) => [item.userId, item.devices]));
-      const total = Number(data.total) || 0;
-      const people = devices.size;
-      hint.textContent = total
-        ? `Уведомления включены у ${people} ${plural(people, 'человека', 'человек', 'человек')}, устройств: ${total}.`
-        : 'Пока ни у кого не включены уведомления — отправлять некому.';
+      entries = Array.isArray(data.users) ? data.users : [];
+      const counts = data.summary || {};
+      const totalPeople = Number(counts.users) || entries.length;
+      const enabledPeople = Number(counts.withEnabled) || 0;
+      const enabledDevices = Number(counts.devicesEnabled) || 0;
+      if (enabledDevices) {
+        hint.textContent =
+          `Уведомления включены у ${enabledPeople} из ${totalPeople} ${plural(totalPeople, 'человека', 'человек', 'человек')} — ` +
+          `сообщение получат ${enabledDevices} ${plural(enabledDevices, 'устройство', 'устройства', 'устройств')}. ` +
+          'Остальные видны ниже с причиной.';
+      } else {
+        hint.textContent =
+          'Пока ни у кого не включены уведомления. Ниже видно, на каком устройстве что мешает — отправлять пока некому.';
+      }
+      const mkStat = (value, label, cls) => {
+        const chip = el('span', `push-stat ${cls || ''}`);
+        chip.appendChild(el('span', 'push-stat-value', String(value)));
+        chip.appendChild(el('span', 'push-stat-label', label));
+        return chip;
+      };
+      summary.innerHTML = '';
+      summary.append(
+        mkStat(enabledPeople, 'включены', 'on'),
+        mkStat(Number(counts.offOnly) || 0, 'выключены', 'off'),
+        mkStat(Number(counts.noSubOnly) || 0, 'нет подписки', 'pending'),
+        mkStat(Number(counts.pendingOnly) || 0, 'ждут разрешения', 'pending'),
+        mkStat(Number(counts.noData) || 0, 'без данных', 'muted'),
+      );
+      summary.hidden = false;
       renderPicker();
     })
     .catch(() => {
-      hint.textContent = 'Не удалось узнать, у кого включены уведомления.';
+      hint.textContent = 'Не удалось получить состояние устройств. Список получателей пока недоступен.';
     });
 
-  audience.addEventListener('change', () => {
-    picker.hidden = audience.value !== 'some';
-  });
+  audience.addEventListener('change', syncAudience);
 
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
@@ -4283,7 +4618,7 @@ function renderPushBroadcast(body, users) {
     const selected = audience.value === 'some';
     const userIds = boxes.filter((box) => box.checked).map((box) => box.value);
     if (selected && !userIds.length) {
-      note.textContent = 'Отметьте хотя бы одного получателя';
+      note.textContent = 'Отметьте хотя бы одного получателя с включёнными уведомлениями';
       return;
     }
     sendBtn.disabled = true;
@@ -4305,11 +4640,12 @@ function renderPushBroadcast(body, users) {
           box.checked = false;
           box.closest('.push-pick')?.classList.remove('on');
         }
+        syncAudience();
       } else {
         toast('Ни одно устройство не приняло уведомление', 'error');
       }
       if (result.skipped) {
-        resultLine.textContent = `Без уведомлений: ${result.skipped} ${plural(result.skipped, 'пользователь', 'пользователя', 'пользователей')} — им сообщение не придёт.`;
+        resultLine.textContent = `Не дойдёт: ${result.skipped} ${plural(result.skipped, 'человеку', 'людям', 'людям')} — у них уведомления выключены или устройства ещё не подключены.`;
         resultLine.hidden = false;
       }
     } catch (error) {
@@ -4851,7 +5187,587 @@ async function checkSpelling() {
   }
 }
 
+/* ------------------------------- дашборд -------------------------------
+   Шесть постоянных заданий: что нового в законах, налоги и отчётность, деньги
+   компании, кадры и охрана труда, тендеры и закупки, рынок и конкуренты.
+   Время считает сервер (см. src/dashboard.mjs), а экран показывает карточки,
+   даёт включить нужное, поправить день, час, проект и текст задания и
+   запустить отчёт руками — не дожидаясь расписания. */
+
+const DASH_ICON_BY_BLOCK = {
+  law: 'scale',
+  taxes: 'receipt',
+  finance: 'chart',
+  people: 'users',
+  tenders: 'lot',
+  market: 'globe',
+};
+const DASH_CADENCES = [
+  ['weekly', 'Каждую неделю'],
+  ['monthly', 'Каждый месяц'],
+  ['quarterly', 'Раз в квартал'],
+];
+const DASH_WEEKDAYS = ['Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пятница', 'Суббота', 'Воскресенье'];
+const DASH_STATUS = {
+  running: 'выполняется',
+  done: 'готово',
+  error: 'ошибка',
+  skipped: 'пропущено',
+  stopped: 'остановлено',
+};
+
+function dashboardOpen() {
+  const view = $('#dashboardView');
+  return Boolean(view) && !view.classList.contains('hidden');
+}
+
+/* Расписание человеческими словами. Считаем от настроек, а не от ответа
+   сервера: в окне настроек человек меняет день и час, и подпись должна
+   меняться сразу, до сохранения. */
+function dashboardScheduleLabel({ cadence, dayOfMonth, dayOfWeek, hour }) {
+  const time = `${String(hour).padStart(2, '0')}:00`;
+  if (cadence === 'weekly') return `${DASH_WEEKDAYS[Math.min(7, Math.max(1, dayOfWeek)) - 1]}, ${time}`;
+  if (cadence === 'quarterly') return `раз в квартал, ${dayOfMonth}-го числа, ${time}`;
+  return `каждый месяц, ${dayOfMonth}-го числа, ${time}`;
+}
+
+function dashboardWhen(iso) {
+  if (!iso) return '';
+  const tz = state.dashboard.tz || 'Europe/Minsk';
+  try {
+    return new Date(iso).toLocaleString('ru-RU', {
+      timeZone: tz,
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  } catch {
+    return '';
+  }
+}
+
+async function showDashboard() {
+  const view = $('#dashboardView');
+  if (!view) return;
+  closePopover();
+  closeModal();
+  closeSidebar();
+  closeFilesDrawer();
+  view.classList.remove('hidden');
+  $('#app').classList.add('dash-open');
+  $('#dashboardBtn').classList.add('active');
+  $('#dashboardBtn').setAttribute('aria-pressed', 'true');
+  const crumb = $('#crumbChat');
+  crumb.textContent = 'Дашборд';
+  crumb.title = 'Дашборд';
+  crumb.classList.remove('hidden');
+  document.title = 'Дашборд — DSH Open';
+  /* Данные держим в памяти: экран открывается мгновенно, а свежесть
+     подтягиваем в фоне. */
+  if (state.dashboard.loaded) renderDashboard();
+  await loadDashboard();
+}
+
+function hideDashboard() {
+  const view = $('#dashboardView');
+  if (!view || view.classList.contains('hidden')) return;
+  view.classList.add('hidden');
+  $('#app').classList.remove('dash-open');
+  $('#dashboardBtn').classList.remove('active');
+  $('#dashboardBtn').setAttribute('aria-pressed', 'false');
+  updateCrumbs();
+  /* Вернулись из дашборда: лента снова видима, пересчитываем её середину. */
+  syncScrollJump();
+}
+
+async function loadDashboard() {
+  const grid = $('#dashGrid');
+  if (!state.dashboard.loaded && grid) {
+    grid.setAttribute('aria-busy', 'true');
+    grid.innerHTML = '';
+    for (let index = 0; index < 6; index += 1) grid.appendChild(el('div', 'dash-card dash-card-ghost'));
+  }
+  try {
+    const data = await api('/api/dashboard');
+    state.dashboard.tasks = Array.isArray(data.tasks) ? data.tasks : [];
+    state.dashboard.tz = data.tz || state.dashboard.tz;
+    state.dashboard.nextRunAt = data.nextRunAt || null;
+    state.dashboard.canAutoRun = Boolean(data.canAutoRun);
+    state.dashboard.balanceUsd = Number(data.balanceUsd || 0);
+    state.dashboard.loaded = true;
+    renderDashboard();
+  } catch (error) {
+    if (error.unauthorized) return;
+    if (!grid) return;
+    grid.setAttribute('aria-busy', 'false');
+    grid.innerHTML = '';
+    grid.appendChild(el('p', 'dash-error', error.message || 'Не удалось загрузить задания'));
+  }
+}
+
+function renderDashboard() {
+  const grid = $('#dashGrid');
+  if (!grid) return;
+  grid.setAttribute('aria-busy', 'false');
+  grid.innerHTML = '';
+  for (const task of state.dashboard.tasks) grid.appendChild(dashboardCard(task));
+  if (!state.dashboard.tasks.length) {
+    grid.appendChild(el('p', 'dash-error', 'Заданий нет — обновите экран, сервер создаст их заново.'));
+  }
+
+  const enabled = state.dashboard.tasks.filter((task) => task.enabled);
+  const allButton = $('#dashEnableAll');
+  if (allButton) {
+    allButton.textContent = enabled.length === state.dashboard.tasks.length ? 'Выключить всё' : 'Включить всё';
+    allButton.disabled = !state.dashboard.tasks.length;
+  }
+
+  const notice = $('#dashNotice');
+  if (!notice) return;
+  let text = '';
+  let kind = 'note';
+  if (!state.dashboard.canAutoRun) {
+    text = 'На балансе нет средств: по расписанию задания не запустятся. Пополните баланс — или запускайте отчёты вручную, сразу после пополнения.';
+    kind = 'warn';
+  } else if (!enabled.length) {
+    text = 'Все задания выключены. Включите нужные переключателем или нажмите «Включить всё» — дальше отчёты будут появляться сами.';
+  }
+  notice.className = `dash-notice${text ? ` ${kind}` : ' hidden'}`;
+  notice.textContent = text;
+}
+
+function dashIconFor(blockId) {
+  const icon = el('span', `dash-ico block-${blockId}`);
+  icon.innerHTML = ICONS[DASH_ICON_BY_BLOCK[blockId] || 'chart'] || ICONS.chart;
+  return icon;
+}
+
+function dashboardCard(task) {
+  const card = el('article', `dash-card${task.enabled ? ' on' : ''}`);
+  card.dataset.task = task.id;
+
+  const top = el('div', 'dash-card-top');
+  top.appendChild(dashIconFor(task.blockId));
+
+  const heading = el('div', 'dash-card-heading');
+  heading.appendChild(el('h2', 'dash-card-title', task.title));
+  heading.appendChild(el('p', 'dash-card-short', task.short || ''));
+  top.appendChild(heading);
+
+  /* Переключатель — кнопка с role="switch": так он одинаково понятен мышью,
+     пальцем и экранным диктором, и не тянет за собой форму. */
+  const toggle = el('button', 'dash-toggle');
+  toggle.type = 'button';
+  toggle.setAttribute('role', 'switch');
+  toggle.setAttribute('aria-checked', String(Boolean(task.enabled)));
+  toggle.setAttribute('aria-label', task.enabled ? `Выключить «${task.title}»` : `Включить «${task.title}»`);
+  toggle.title = task.enabled ? 'Выключить задание' : 'Включить задание';
+  toggle.appendChild(el('span', 'dash-toggle-thumb'));
+  toggle.addEventListener('click', () => toggleDashboardTask(task, toggle));
+  top.appendChild(toggle);
+  card.appendChild(top);
+
+  card.appendChild(el('p', 'dash-card-desc', task.description || ''));
+
+  /* Строка состояния: когда сработает и как прошёл прошлый раз. */
+  const status = el('div', 'dash-card-status');
+  status.appendChild(el('span', `dash-dot${task.enabled ? '' : ' off'}${task.lastStatus ? ` is-${task.lastStatus}` : ''}`));
+  const statusText = el('span', 'dash-status-text');
+  if (!task.enabled) statusText.textContent = `Выключено · ${task.schedule || dashboardScheduleLabel(task)}`;
+  else if (task.nextRunAt) statusText.textContent = `${task.schedule || dashboardScheduleLabel(task)} · следующий ${dashboardWhen(task.nextRunAt)}`;
+  else statusText.textContent = task.schedule || dashboardScheduleLabel(task);
+  status.appendChild(statusText);
+  card.appendChild(status);
+
+  const meta = el('div', 'dash-card-meta');
+  const project = el('span', 'dash-chip-badge');
+  project.textContent = task.projectName ? `проект: ${task.projectName}` : 'проект: по умолчанию';
+  project.title = 'Отчёты создаются в этом проекте';
+  meta.appendChild(project);
+  if (Array.isArray(task.files) && task.files.length) {
+    const docs = el('span', 'dash-chip-badge');
+    docs.textContent = `документов: ${task.files.length}`;
+    docs.title = 'Агент прочитает эти документы перед каждым отчётом';
+    meta.appendChild(docs);
+  }
+  if (task.lastChatId) {
+    const last = el('a', 'dash-last');
+    last.href = '#';
+    last.textContent = `последний: ${DASH_STATUS[task.lastStatus] || 'отчёт'}`;
+    last.title = task.lastRunAt ? `Открыть диалог от ${dashboardWhen(task.lastRunAt)}` : 'Открыть последний отчёт';
+    last.addEventListener('click', (event) => {
+      event.preventDefault();
+      openChat(task.lastChatId);
+    });
+    meta.appendChild(last);
+  }
+  card.appendChild(meta);
+
+  const actions = el('div', 'dash-card-actions');
+  const run = el('button', 'btn btn-quiet dash-run');
+  run.type = 'button';
+  run.innerHTML = `${ICONS.play}<span>Запустить</span>`;
+  run.title = task.enabled ? 'Сделать отчёт сейчас' : 'Разовый запуск: задание останется выключенным';
+  run.addEventListener('click', () => runDashboardTask(task, run));
+  actions.appendChild(run);
+  const setup = el('button', 'btn btn-ghost dash-setup');
+  setup.type = 'button';
+  setup.title = 'Изменить проект, частоту, день, час и текст задания';
+  setup.innerHTML = `${ICONS.sliders}<span>Настроить</span>`;
+  setup.addEventListener('click', () => openDashboardTaskModal(task));
+  actions.appendChild(setup);
+  card.appendChild(actions);
+
+  return card;
+}
+
+async function toggleDashboardTask(task, control) {
+  const next = !task.enabled;
+  if (control) control.disabled = true;
+  try {
+    const data = await api(`/api/dashboard/tasks/${task.id}`, { method: 'PATCH', body: { enabled: next } });
+    const index = state.dashboard.tasks.findIndex((item) => item.id === task.id);
+    if (index >= 0) state.dashboard.tasks[index] = data.task;
+    renderDashboard();
+    toast(next ? 'Задание включено — отчёт придёт по расписанию' : 'Задание выключено', 'ok');
+  } catch (error) {
+    if (!error.unauthorized) toast(error.message || 'Не удалось сохранить настройку');
+    if (control) control.disabled = false;
+  }
+}
+
+async function toggleAllDashboardTasks() {
+  const button = $('#dashEnableAll');
+  const tasks = state.dashboard.tasks;
+  if (!tasks.length) return;
+  const next = tasks.some((task) => !task.enabled);
+  if (button) button.disabled = true;
+  try {
+    /* По одному запросу на задание: сервер пересчитывает ближайший запуск
+       для каждого, а не для всех сразу. */
+    for (const task of tasks) {
+      if (task.enabled === next) continue;
+      const data = await api(`/api/dashboard/tasks/${task.id}`, { method: 'PATCH', body: { enabled: next } });
+      const index = state.dashboard.tasks.findIndex((item) => item.id === task.id);
+      if (index >= 0) state.dashboard.tasks[index] = data.task;
+    }
+    renderDashboard();
+    toast(next ? 'Все задания включены' : 'Все задания выключены', 'ok');
+  } catch (error) {
+    if (!error.unauthorized) toast(error.message || 'Не удалось сохранить настройку');
+    renderDashboard();
+  }
+}
+
+async function runDashboardTask(task, button) {
+  if (button) button.disabled = true;
+  try {
+    const data = await api(`/api/dashboard/tasks/${task.id}/run`, { method: 'POST', body: {} });
+    toast('Отчёт готовится — открываю диалог', 'ok');
+    if (data.chatId) await openChat(data.chatId);
+    else if (button) button.disabled = false;
+  } catch (error) {
+    if (!error.unauthorized) toast(error.message || 'Не удалось запустить задание');
+    if (button) button.disabled = false;
+  }
+}
+
+/* Поля окна: подпись связана с полем через for/id, а не обёрткой — иначе
+   диктор читает в названии поля ещё и подсказку под ним. */
+let dashFieldSeq = 0;
+
+function dashField(labelText, control, hint) {
+  const field = el('div', 'field');
+  dashFieldSeq += 1;
+  const id = `dashField${dashFieldSeq}`;
+  control.id = id;
+  const label = el('label', 'field-label', labelText);
+  label.htmlFor = id;
+  field.appendChild(label);
+  field.appendChild(control);
+  if (hint) field.appendChild(el('p', 'form-hint', hint));
+  return field;
+}
+
+function dashSelect(options, value) {
+  const select = el('select');
+  for (const [key, text] of options) {
+    const option = el('option', '', text);
+    option.value = String(key);
+    select.appendChild(option);
+  }
+  select.value = String(value);
+  return select;
+}
+
+/* Настройки задания: проект, частота, день, час и текст задания. Окно не
+   сохраняет ничего само — сервер пересчитывает ближайший запуск и возвращает
+   готовую карточку. */
+function openDashboardTaskModal(task) {
+  const draft = {
+    projectId: task.projectId || '',
+    cadence: task.cadence || 'monthly',
+    dayOfMonth: task.dayOfMonth || 1,
+    dayOfWeek: task.dayOfWeek || 1,
+    hour: task.hour ?? 9,
+    prompt: task.prompt || '',
+  };
+  const body = el('div', 'dash-form');
+
+  const projectOptions = [
+    ['', state.projects.length ? `Первый проект (${state.projects[0].name})` : 'Создать проект «Дашборд»'],
+  ];
+  for (const project of state.projects) projectOptions.push([project.id, project.name]);
+  const projectSelect = dashSelect(projectOptions, draft.projectId);
+  projectSelect.addEventListener('change', () => {
+    draft.projectId = projectSelect.value;
+  });
+  body.appendChild(dashField('Проект для отчётов', projectSelect, 'Диалог и файлы отчёта появятся в этом проекте.'));
+
+  const cadenceSelect = dashSelect(DASH_CADENCES, draft.cadence);
+  body.appendChild(dashField('Как часто', cadenceSelect));
+
+  const daySlot = el('div', 'dash-form-day');
+  const note = el('p', 'dash-form-note');
+  const refreshNote = () => {
+    note.textContent = `Запуск: ${dashboardScheduleLabel(draft)} по времени Минска`;
+  };
+  const renderDay = () => {
+    daySlot.innerHTML = '';
+    if (draft.cadence === 'weekly') {
+      const days = DASH_WEEKDAYS.map((name, index) => [index + 1, name]);
+      const select = dashSelect(days, draft.dayOfWeek);
+      select.addEventListener('change', () => {
+        draft.dayOfWeek = Number(select.value);
+        refreshNote();
+      });
+      daySlot.appendChild(dashField('День недели', select));
+    } else {
+      const days = [];
+      for (let day = 1; day <= 28; day += 1) days.push([day, `${day}-е число`]);
+      const select = dashSelect(days, draft.dayOfMonth);
+      select.addEventListener('change', () => {
+        draft.dayOfMonth = Number(select.value);
+        refreshNote();
+      });
+      daySlot.appendChild(dashField('День месяца', select, 'С 1-го по 28-е: так задание не пропускает февраль.'));
+    }
+  };
+  cadenceSelect.addEventListener('change', () => {
+    draft.cadence = cadenceSelect.value;
+    renderDay();
+    refreshNote();
+  });
+  body.appendChild(daySlot);
+
+  const hours = [];
+  for (let hour = 0; hour < 24; hour += 1) hours.push([hour, `${String(hour).padStart(2, '0')}:00`]);
+  const hourSelect = dashSelect(hours, draft.hour);
+  hourSelect.addEventListener('change', () => {
+    draft.hour = Number(hourSelect.value);
+    refreshNote();
+  });
+  body.appendChild(
+    dashField('Во сколько', hourSelect, 'Время минское (Europe/Minsk): часовой пояс сервера не важен.'),
+  );
+
+  /* Поле невысокое и растягивается мышью: текст задания длинный, но окно
+     должно целиком влезать в экран телефона — прокручивается само поле. */
+  const prompt = el('textarea', 'dash-prompt');
+  prompt.rows = 4;
+  prompt.maxLength = 2000;
+  prompt.value = draft.prompt;
+  prompt.addEventListener('input', () => {
+    draft.prompt = prompt.value;
+  });
+  body.appendChild(
+    dashField(
+      'Что должен сделать агент',
+      prompt,
+      'Текст задания. Уточните отрасль, город и формат — отчёт будет точнее.',
+    ),
+  );
+
+  /* Документы задания. Любой формат: агент получает их к каждому запуску и
+     строит отчёт по реальным бумагам, а не по общим данным. Загрузка идёт
+     сразу на сервер — окно ничего не держит у себя, закрытие не потеряет файл. */
+  let files = Array.isArray(task.files) ? task.files.slice() : [];
+  const docsBox = el('div', 'field dash-files');
+  docsBox.appendChild(el('span', 'field-label', 'Документы для задания'));
+
+  const docsList = el('ul', 'dash-files-list');
+  const docsEmpty = el('p', 'form-hint', 'Пока документов нет.');
+  const docsInput = el('input');
+  docsInput.type = 'file';
+  docsInput.multiple = true;
+  docsInput.hidden = true;
+
+  const docsButton = el('button', 'btn btn-quiet dash-files-add');
+  docsButton.type = 'button';
+  docsButton.innerHTML = `${ICONS.upload}<span>Приложить документы</span>`;
+  docsButton.title = 'Любой формат: Word, Excel, PDF, сканы, фото, CSV, TXT';
+
+  const applyTaskUpdate = (next) => {
+    const index = state.dashboard.tasks.findIndex((item) => item.id === task.id);
+    if (index >= 0) state.dashboard.tasks[index] = next;
+    files = Array.isArray(next.files) ? next.files.slice() : [];
+    renderDocs();
+  };
+
+  function renderDocs() {
+    docsList.innerHTML = '';
+    for (const file of files) {
+      const item = el('li', 'dash-files-item');
+      const name = fileNameEl(file.name, 'dash-files-name');
+      name.title = file.name;
+      item.appendChild(name);
+      item.appendChild(el('span', 'dash-files-size', file.uploading ? 'загрузка…' : fmtSize(file.size)));
+
+      if (file.uploading) {
+        item.appendChild(el('span', 'dash-files-wait', 'идёт загрузка'));
+        docsList.appendChild(item);
+        continue;
+      }
+
+      const open = el('a', 'dash-files-open');
+      open.href = `/api/dashboard/tasks/${task.id}/files/${file.id}`;
+      open.setAttribute('download', file.name);
+      open.title = 'Скачать документ';
+      open.innerHTML = `${ICONS.download}<span>Скачать</span>`;
+      item.appendChild(open);
+
+      const remove = el('button', 'dash-files-remove');
+      remove.type = 'button';
+      remove.title = 'Убрать документ из задания';
+      remove.setAttribute('aria-label', `Убрать «${file.name}»`);
+      remove.innerHTML = ICONS.trash;
+      remove.addEventListener('click', async () => {
+        remove.disabled = true;
+        try {
+          const data = await api(`/api/dashboard/tasks/${task.id}/files/${file.id}`, { method: 'DELETE' });
+          applyTaskUpdate(data.task);
+          toast('Документ убран', 'ok');
+        } catch (error) {
+          remove.disabled = false;
+          if (!error.unauthorized) toast(error.message || 'Не удалось убрать документ');
+        }
+      });
+      item.appendChild(remove);
+      docsList.appendChild(item);
+    }
+    docsList.classList.toggle('hidden', !files.length);
+    docsEmpty.classList.toggle('hidden', files.length > 0);
+    docsButton.disabled = files.filter((file) => !file.uploading).length >= 10;
+  }
+
+  docsButton.addEventListener('click', () => docsInput.click());
+  docsInput.addEventListener('change', async (event) => {
+    const picked = Array.from(event.target.files || []);
+    event.target.value = '';
+    for (const file of picked) {
+      if (files.filter((item) => !item.uploading).length >= 10) {
+        toast('К заданию можно приложить не больше 10 документов');
+        break;
+      }
+      const pending = { id: '', name: file.name, size: file.size, uploading: true };
+      files = [...files, pending];
+      renderDocs();
+      try {
+        const response = await fetch(`/api/dashboard/tasks/${task.id}/files`, {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: {
+            'Content-Type': file.type || 'application/octet-stream',
+            'X-Filename': encodeURIComponent(file.name),
+          },
+          body: file,
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.error || 'Не удалось загрузить документ');
+        applyTaskUpdate(data.task);
+      } catch (error) {
+        files = files.filter((item) => item !== pending);
+        renderDocs();
+        if (!error.unauthorized) toast(error.message || 'Не удалось загрузить документ');
+      }
+    }
+  });
+
+  /* Кнопка стоит сразу под подписью: список документов растёт вниз, и при
+     нескольких файлах «приложить» иначе уезжает за край окна. */
+  docsBox.appendChild(docsButton);
+  docsBox.appendChild(docsList);
+  docsBox.appendChild(docsEmpty);
+  docsBox.appendChild(docsInput);
+  docsBox.appendChild(
+    el('p', 'form-hint', 'Любой формат: Word, Excel, PDF, сканы и фото, выгрузки 1С и банка. Агент прочитает документы перед каждым отчётом.'),
+  );
+  renderDocs();
+  body.appendChild(docsBox);
+
+  body.appendChild(note);
+  renderDay();
+  refreshNote();
+
+  const reset = el('button', 'dash-reset');
+  reset.type = 'button';
+  reset.textContent = 'Вернуть текст по умолчанию';
+  reset.addEventListener('click', () => {
+    draft.prompt = task.defaults?.prompt || '';
+    prompt.value = draft.prompt;
+    toast('Текст задания сброшен — нажмите «Сохранить»', 'ok');
+  });
+  body.appendChild(reset);
+
+  openModal({
+    title: task.title,
+    subtitle: 'Постоянное задание',
+    headLead: dashIconFor(task.blockId),
+    className: 'dash-modal',
+    body,
+    actions: [
+      {
+        label: 'Сохранить',
+        kind: 'primary',
+        onClick: async () => {
+          try {
+            const data = await api(`/api/dashboard/tasks/${task.id}`, {
+              method: 'PATCH',
+              body: {
+                projectId: draft.projectId,
+                cadence: draft.cadence,
+                dayOfMonth: draft.dayOfMonth,
+                dayOfWeek: draft.dayOfWeek,
+                hour: draft.hour,
+                prompt: draft.prompt,
+              },
+            });
+            const index = state.dashboard.tasks.findIndex((item) => item.id === task.id);
+            if (index >= 0) state.dashboard.tasks[index] = data.task;
+            renderDashboard();
+            toast('Настройки сохранены', 'ok');
+          } catch (error) {
+            if (!error.unauthorized) toast(error.message || 'Не удалось сохранить настройки');
+            return false;
+          }
+          return true;
+        },
+      },
+      { label: 'Отмена', kind: 'quiet' },
+    ],
+  });
+}
+
 /* ------------------------------ wiring ------------------------------ */
+/* Кнопка «Дашборд» в шапке: открывает и закрывает экран постоянных заданий. */
+$('#dashboardBtn').addEventListener('click', () => {
+  if (dashboardOpen()) hideDashboard();
+  else showDashboard();
+});
+$('#dashRefresh').addEventListener('click', () => loadDashboard());
+$('#dashEnableAll').addEventListener('click', toggleAllDashboardTasks);
 
 $('#loginForm').addEventListener('submit', onLogin);
 $('#signupForm').addEventListener('submit', onSignup);
@@ -4873,15 +5789,141 @@ $('#filesPanelInput').addEventListener('change', (event) => {
   event.target.value = '';
 });
 $('#sidebarToggle').addEventListener('click', () => {
-  const app = $('#app');
-  const willOpen = !app.classList.contains('sidebar-open');
-  app.classList.toggle('sidebar-open', willOpen);
-  if (willOpen) closeFilesDrawer();
+  toggleSidebarDrawer();
 });
 $('#backdrop').addEventListener('click', () => {
   $('#app').classList.remove('sidebar-open');
   closeFilesDrawer();
 });
+
+/* --------------------------- свайпы боковых ящиков ---------------------------
+   На телефоне два привычных жеста: смахнул вправо — выехали «Проекты» слева,
+   смахнул влево — выехали «Файлы проекта» справа. Тот же жест в обратную
+   сторону закрывает уже открытый ящик.
+
+   Жест не должен мешать тому, что тоже листается вбок: код и таблицы в ответе,
+   просмотр документа, ползунки. Поэтому касание внутри горизонтально
+   прокручиваемого блока жест не начинает, а сам жест распознаётся только после
+   явного перевеса по горизонтали — вертикальная прокрутка ленты остаётся
+   нетронутой. На планшете проекты и так видны постоянно, поэтому свайп вправо
+   там ничего не делает; файлы открываются до 1100 px, как и кнопкой-папкой. */
+function initDrawerSwipes() {
+  const app = $('#app');
+  if (!app) return;
+  const projectsAreDrawer = () => window.matchMedia('(max-width: 860px)').matches;
+  /* Порог, после которого жест считается горизонтальным, и путь, который
+     нужно пройти, чтобы ящик открылся. 56 px — примерно треть большого пальца
+     по экрану: случайное касание при прокрутке ящик не выдвинет. */
+  const SIDE_SLOP = 12;
+  const OPEN_DISTANCE = 56;
+  /* Долгое удержание — это выделение текста или вызов меню, а не свайп. */
+  const LOCK_WINDOW = 600;
+  let gesture = null;
+
+  /* Ищем ближайший блок, который реально прокручивается вбок: у него свайп
+     должен листать содержимое, а не открывать ящик. */
+  function horizontalScroller(node) {
+    for (let parent = node; parent && parent !== app; parent = parent.parentElement) {
+      if (!(parent instanceof HTMLElement)) continue;
+      const overflowX = getComputedStyle(parent).overflowX;
+      if ((overflowX === 'auto' || overflowX === 'scroll') && parent.scrollWidth > parent.clientWidth + 2) {
+        return parent;
+      }
+    }
+    return null;
+  }
+
+  function startBlocked(target) {
+    if (!(target instanceof Element)) return true;
+    if (target.closest('#modalRoot, .modal-root, input, textarea, select, [contenteditable="true"], .resizer, .pdf-box')) {
+      return true;
+    }
+    return Boolean(horizontalScroller(target));
+  }
+
+  /* Что сделает жест в эту сторону — или ничего. Пока ни один ящик не открыт,
+     вправо открывает проекты, влево файлы. Открытый ящик закрывается только
+     обратным движением: «Проекты» уезжают влево, «Файлы» — вправо. */
+  function actionFor(dx) {
+    if (app.classList.contains('sidebar-open')) return dx < 0 ? 'close-projects' : null;
+    if (app.classList.contains('files-open')) return dx > 0 ? 'close-files' : null;
+    if (dx > 0) return projectsAreDrawer() ? 'open-projects' : null;
+    return filesNarrow() ? 'open-files' : null;
+  }
+
+  app.addEventListener('touchstart', (event) => {
+    gesture = null;
+    if (event.touches.length !== 1) return;
+    if (startBlocked(event.target)) return;
+    const touch = event.touches[0];
+    gesture = { x: touch.clientX, y: touch.clientY, time: performance.now(), action: null };
+  }, { passive: true });
+
+  app.addEventListener('touchmove', (event) => {
+    if (!gesture) return;
+    if (event.touches.length !== 1) {
+      gesture = null;
+      return;
+    }
+    const touch = event.touches[0];
+    const dx = touch.clientX - gesture.x;
+    const dy = touch.clientY - gesture.y;
+    if (!gesture.action) {
+      if (Math.abs(dx) < SIDE_SLOP) return;
+      if (Math.abs(dx) <= Math.abs(dy) * 1.4) return;
+      if (performance.now() - gesture.time > LOCK_WINDOW) {
+        gesture = null;
+        return;
+      }
+      gesture.action = actionFor(dx);
+      if (!gesture.action) {
+        gesture = null;
+        return;
+      }
+    }
+    /* Горизонталь забрали себе — страница вбок не поедет и «назад» в Safari
+       не сработает. Вертикальную прокрутку этот вызов не трогает: до неё
+       жест либо не дошёл, либо уже распознан как вертикальный. */
+    if (event.cancelable) event.preventDefault();
+  }, { passive: false });
+
+  function finish(event) {
+    const current = gesture;
+    gesture = null;
+    if (!current || !current.action) return;
+    const touch = event.changedTouches && event.changedTouches[0];
+    if (!touch) return;
+    const dx = touch.clientX - current.x;
+    if (Math.abs(dx) < OPEN_DISTANCE) return;
+    /* Направление должно совпасть с тем, что решили при захвате жеста:
+       «Проекты» открываются вправо и закрываются влево, «Файлы» — наоборот.
+       Разворот в последний момент не должен запускать противоположное действие. */
+    const rightward = current.action === 'open-projects' || current.action === 'close-files';
+    if (rightward ? dx <= 0 : dx >= 0) return;
+    switch (current.action) {
+      case 'open-projects':
+        openSidebarDrawer();
+        break;
+      case 'close-projects':
+        closeSidebar();
+        break;
+      case 'open-files':
+        openFilesDrawer();
+        break;
+      case 'close-files':
+        closeFilesDrawer();
+        break;
+      default:
+        break;
+    }
+  }
+
+  app.addEventListener('touchend', finish, { passive: true });
+  app.addEventListener('touchcancel', () => {
+    gesture = null;
+  }, { passive: true });
+}
+initDrawerSwipes();
 /* Заголовок панели «Файлы проекта» — подпись, а не кнопка: проект выбирается
    слева, и файлы всегда принадлежат ему. */
 /* ------------------------------ panel resize ------------------------------ */
@@ -4891,12 +5933,14 @@ $('#backdrop').addEventListener('click', () => {
 
 const LAYOUT_KEY = 'dshow-layout-v3';
 /* Боковые панели одинаковые по ширине: слева «Проекты», справа «Файлы проекта»,
-   по умолчанию 280 px у обеих, каждая тянется в пределах 264…420 px, диалогу
+   по умолчанию 292 px у обеих, каждая тянется в пределах 264…420 px, диалогу
    всегда остаётся минимум 400 px. Пока правую панель не тянули, она повторяет
-   ширину левой — блоки симметричны, и это видно на любой ширине окна. */
+   ширину левой — блоки симметричны, и это видно на любой ширине окна.
+   292 px вместо 280 — запас под чуть увеличенный кегль: названия проектов,
+   которые помещались целиком, не должны обрезаться из-за полупикселя. */
 const PANEL_RULES = {
-  sidebar: { min: 264, max: () => 420, def: () => 280 },
-  files: { min: 264, max: () => 420, def: () => 280 },
+  sidebar: { min: 264, max: () => 420, def: () => 292 },
+  files: { min: 264, max: () => 420, def: () => 292 },
 };
 
 function readLayoutRaw() {
@@ -4996,7 +6040,7 @@ function initPanelResize(handle, kind) {
   };
 
   /* Сброс (двойной щелчок или Home) возвращает правую панель к ширине левой,
-     а левую — к обычным 280 px. */
+     а левую — к обычным 292 px. */
   const resetWidth = () => {
     if (kind === 'files') {
       forgetLayout('files');
@@ -5190,6 +6234,10 @@ document.addEventListener('focusin', (event) => {
   }, 320);
 });
 
+/* Стрелки прокрутки диалога: зависят от реальной высоты ленты, поэтому
+   подключаются один раз после отрисовки каркаса. */
+initScrollJump();
+
 // На телефоне фокус в поле ввода поднимает клавиатуру: лента должна
 // остаться у последнего сообщения, а не показывать середину переписки.
 $('#input').addEventListener('focus', () => {
@@ -5371,16 +6419,84 @@ document.addEventListener('paste', (event) => {
 
 /* ------------------------- уведомления ------------------------- */
 
-/* Уведомления работают через push-службу браузера: сервер отправляет сообщение,
-   сервис-воркер показывает его, даже когда приложение закрыто. Разрешение
-   спрашивается только по кнопке — из обработчика действия человека. */
-const PUSH_FLAG = 'dshow-push-enabled-v1';
-/* Сколько устройств у аккаунта; список показывает, где включены уведомления. */
-let pushDevices = [];
-/* Включение идёт не мгновенно: браузер регистрируется в своей push-службе.
-   Пока оно не закончилось, повторный клик должен ждать тот же результат,
-   а не заводить вторую подписку. */
+/* Уведомления работают у всех и всегда: человек их не включает и не выключает.
+   Браузер выдаёт разрешение только по действию человека, поэтому первый тап по
+   экрану открывает его родной запрос — один раз, дальше браузер помнит ответ
+   сам. Включение идёт не мгновенно (браузер регистрируется в своей push-службе),
+   поэтому повторный вызов ждёт тот же результат, а не заводит вторую подписку. */
 let pushEnabling = null;
+/* Разрешение спрашиваем ровно из первого действия человека. */
+let pushPermissionArmed = false;
+/* В этом открытии приложения браузер уже спрашивали — второй раз не просим. */
+let pushAsked = false;
+/* Переход из уведомления и бейдж подключаем один раз на вкладку. */
+let pushListenersReady = false;
+/* Endpoint подписки, уже отправленный серверу в текущем входе. Сравниваем
+   адрес, а не флаг: браузер может пересоздать подписку, и её нужно прислать
+   заново, даже если раньше уже отправляли. */
+let pushRegistered = '';
+/* Стабильный ключ устройства: по нему сервер отличает телефон от ноутбука,
+   даже когда браузер пересоздаёт push-подписку. Ключ не секретный. */
+const PUSH_DEVICE_KEY = 'dshow-push-device-v1';
+let pushFallbackDeviceKey = '';
+let pushReportedSignature = '';
+let pushReportedAt = 0;
+let pushReporting = null;
+
+function pushDeviceKey() {
+  const make = () =>
+    globalThis.crypto?.randomUUID?.().replace(/-/g, '') ||
+    `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`;
+  try {
+    const saved = localStorage.getItem(PUSH_DEVICE_KEY);
+    if (saved && /^[A-Za-z0-9_-]{8,80}$/.test(saved)) return saved;
+    const value = make();
+    localStorage.setItem(PUSH_DEVICE_KEY, value);
+    return value;
+  } catch {
+    /* Приватный режим без хранилища: ключ живёт до закрытия вкладки. */
+    if (!pushFallbackDeviceKey) pushFallbackDeviceKey = make();
+    return pushFallbackDeviceKey;
+  }
+}
+
+/* Рассказываем серверу, что происходит на этом устройстве. Отправляем и при
+   запрете: администратор должен видеть, что человек выключил уведомления, а не
+   что устройство пропало. */
+async function reportPushState({ force = false } = {}) {
+  if (!state.user) return;
+  if (pushReporting) return pushReporting;
+  pushReporting = (async () => {
+    const supported = pushSupported();
+    let subscribed = false;
+    if (supported) {
+      const registration = await pushRegistration();
+      if (registration) {
+        const subscription = await registration.pushManager.getSubscription().catch(() => null);
+        subscribed = Boolean(subscription);
+      }
+    }
+    const payload = {
+      deviceId: pushDeviceKey(),
+      permission: supported ? Notification.permission || 'default' : 'unsupported',
+      subscribed,
+      app: openedAsApp(),
+    };
+    const signature = JSON.stringify(payload);
+    if (payload.permission !== 'granted') pushRegistered = '';
+    if (!force && signature === pushReportedSignature && Date.now() - pushReportedAt < 300000) return;
+    try {
+      await api('/api/push/report', { method: 'POST', body: payload });
+      pushReportedSignature = signature;
+      pushReportedAt = Date.now();
+    } catch {
+      /* Нет сети или сервер ещё старый — повторим при следующем открытии. */
+    }
+  })().finally(() => {
+    pushReporting = null;
+  });
+  return pushReporting;
+}
 
 function pushSupported() {
   return Boolean(
@@ -5401,7 +6517,7 @@ function urlBase64ToBytes(base64) {
   return bytes;
 }
 
-/* Готовый воркер: ждём активации не дольше восьми секунд, иначе окно
+/* Готовый воркер: ждём активации не дольше восьми секунд, иначе включение
    уведомлений висело бы на телефоне в ожидании, которого не будет. */
 function serviceWorkerReady(timeoutMs = 8000) {
   if (!('serviceWorker' in navigator)) return Promise.resolve(null);
@@ -5418,35 +6534,6 @@ async function pushRegistration() {
   } catch {
     return null;
   }
-}
-
-async function refreshPushState() {
-  const supported = pushSupported();
-  const permission = supported ? Notification.permission : 'unsupported';
-  const registration = supported ? await pushRegistration() : null;
-  let subscribed = false;
-  if (registration) {
-    try {
-      subscribed = Boolean(await registration.pushManager.getSubscription());
-    } catch {
-      subscribed = false;
-    }
-  }
-  let server = {};
-  try {
-    server = await api('/api/push/state');
-  } catch {
-    /* Сеть пропала — показываем хотя бы состояние браузера. */
-  }
-  pushDevices = Array.isArray(server.devices) ? server.devices : [];
-  state.push = {
-    supported,
-    permission,
-    subscribed,
-    publicKey: server.publicKey || '',
-    subscriptions: Number(server.subscriptions) || 0,
-  };
-  return state.push;
 }
 
 /* Браузер иногда думает над подпиской долго: у него своя регистрация в
@@ -5480,12 +6567,9 @@ async function enablePush() {
 }
 
 async function enablePushOnce() {
-  if (!pushSupported()) throw new Error('Этот браузер не умеет показывать уведомления');
-  let permission = Notification.permission;
-  if (permission === 'default') permission = await Notification.requestPermission();
-  if (permission !== 'granted') {
-    throw new Error('Разрешение не выдано. Включите уведомления для сайта в настройках браузера.');
-  }
+  /* Разрешение спрашивает только armPushPermission — из действия человека.
+     Здесь лишь молчаливая подписка уже разрешённого устройства. */
+  if (!pushSupported() || Notification.permission !== 'granted') return false;
   let registration = await pushRegistration();
   if (!registration) {
     try {
@@ -5495,56 +6579,68 @@ async function enablePushOnce() {
       registration = null;
     }
   }
-  if (!registration) throw new Error('Сервис-воркер не запустился — обновите страницу и повторите');
+  if (!registration) return false;
   const server = await api('/api/push/state');
+  if (!server.publicKey) return false;
   let subscription = await registration.pushManager.getSubscription().catch(() => null);
   if (!subscription) {
-    try {
-      subscription = await withPushTimeout(
-        registration.pushManager.subscribe({
-          userVisibleOnly: true,
-          applicationServerKey: urlBase64ToBytes(server.publicKey),
-        }),
-        60000,
-        'Браузер не ответил за минуту — нажмите «Включить» ещё раз',
-      );
-    } catch (error) {
-      if (error?.timeout) throw error;
-      throw new Error(`Браузер не дал подписаться: ${error?.message || 'неизвестная ошибка'}`);
+    /* Таймаут не отменяет запрос: браузер может ответить позже, и тогда
+       следующая попытка найдёт готовую подписку и дошлёт её серверу. */
+    subscription = await withPushTimeout(
+      registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToBytes(server.publicKey),
+      }),
+      60000,
+      'Браузер не ответил за минуту',
+    );
+  }
+  if (pushRegistered !== subscription.endpoint) {
+    await api('/api/push/subscribe', {
+      method: 'POST',
+      body: { subscription: subscription.toJSON(), deviceId: pushDeviceKey(), app: openedAsApp() },
+    });
+    pushRegistered = subscription.endpoint;
+  }
+  return true;
+}
+
+/* Первое действие человека (тап, клик, клавиша) — единственный законный повод
+   для родного запроса разрешения. Спрашиваем один раз: отказ браузера уважаем,
+   второй раз он всё равно не спросит без настроек. */
+function armPushPermission() {
+  if (!pushSupported() || pushPermissionArmed || pushAsked || Notification.permission !== 'default') return;
+  pushPermissionArmed = true;
+  const events = ['pointerdown', 'touchstart', 'keydown'];
+  const ask = async () => {
+    for (const type of events) window.removeEventListener(type, ask, true);
+    pushPermissionArmed = false;
+    if (!pushSupported()) return;
+    if (Notification.permission === 'default') {
+      pushAsked = true;
+      let granted = false;
+      try {
+        granted = (await Notification.requestPermission()) === 'granted';
+      } catch {
+        granted = false;
+      }
+      if (!granted) {
+        void reportPushState({ force: true });
+        return;
+      }
     }
-  }
-  await api('/api/push/subscribe', { method: 'POST', body: { subscription: subscription.toJSON() } });
-  try {
-    localStorage.setItem(PUSH_FLAG, '1');
-  } catch {
-    /* Без хранилища просто не запомним, что включали — включим заново. */
-  }
-  return refreshPushState();
-}
-
-async function disablePush() {
-  const registration = await pushRegistration();
-  const subscription = registration ? await registration.pushManager.getSubscription().catch(() => null) : null;
-  if (subscription) {
-    /* Сначала сервер, потом браузер: если сервер не ответил, подписка остаётся
-       и уведомления придут снова — это лучше, чем молча потерять устройство. */
-    await api('/api/push/unsubscribe', { method: 'POST', body: { endpoint: subscription.endpoint } });
-    await subscription.unsubscribe().catch(() => {});
-  }
-  try {
-    localStorage.removeItem(PUSH_FLAG);
-  } catch {
-    /* ignore */
-  }
-  return refreshPushState();
-}
-
-function pushWanted() {
-  try {
-    return localStorage.getItem(PUSH_FLAG) === '1';
-  } catch {
-    return false;
-  }
+    if (Notification.permission !== 'granted') {
+      void reportPushState({ force: true });
+      return;
+    }
+    try {
+      await enablePush();
+    } catch {
+      /* Сеть или push-служба подвели — повторим при следующем открытии. */
+    }
+    void reportPushState({ force: true });
+  };
+  for (const type of events) window.addEventListener(type, ask, { capture: true });
 }
 
 /* Бейдж на иконке приложения — как у обычных мессенджеров: цифра «есть новое».
@@ -5595,179 +6691,59 @@ function openChatFromUrl() {
   }
 }
 
+/* Включение уведомлений запускается после входа и при каждом открытии
+   приложения: подписку нужно подтверждать серверу, а после чистки браузера —
+   оформлять заново. Параллельные вызовы ждут один и тот же результат. */
+let pushRun = null;
+
+function ensurePush() {
+  if (!state.user) return Promise.resolve();
+  if (pushRun) return pushRun;
+  pushRun = initPush().finally(() => {
+    pushRun = null;
+  });
+  return pushRun;
+}
+
 async function initPush() {
-  if (!pushSupported()) return;
-  const registration = await serviceWorkerReady();
-  if (!registration) return;
-  try {
-    await refreshPushState();
-  } catch {
-    /* состояние уточним при открытии окна уведомлений */
+  if (!pushSupported()) {
+    void reportPushState();
+    return;
   }
-  /* Уведомления уже включали на этом устройстве — держим подписку живой:
-     после обновления воркера или чистки подписок браузером её нужно оформить
-     заново, иначе человек молча перестанет получать сообщения. */
-  if (pushWanted() && Notification.permission === 'granted') {
+  const registration = await serviceWorkerReady();
+  if (!registration) {
+    void reportPushState();
+    return;
+  }
+  if (!pushListenersReady) {
+    pushListenersReady = true;
+    navigator.serviceWorker.addEventListener('message', onServiceWorkerMessage);
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) return;
+      clearAppBadge();
+      /* Разрешение могли выдать в настройках браузера или в другой вкладке. */
+      if (Notification.permission === 'granted') {
+        void enablePush()
+          .catch(() => {})
+          .finally(() => void reportPushState({ force: true }));
+      } else {
+        armPushPermission();
+        void reportPushState({ force: true });
+      }
+    });
+    window.addEventListener('focus', clearAppBadge);
+  }
+  if (Notification.permission === 'granted') {
     try {
       await enablePush();
     } catch {
-      /* не мешаем работе приложения: включить можно вручную в меню */
+      /* Сеть или push-служба подвели — повторим при следующем открытии. */
     }
-  }
-  navigator.serviceWorker.addEventListener('message', onServiceWorkerMessage);
-  document.addEventListener('visibilitychange', () => {
-    if (!document.hidden) clearAppBadge();
-  });
-  window.addEventListener('focus', clearAppBadge);
-}
-
-function pushParagraph(text) {
-  const node = el('p', 'push-text', text);
-  return node;
-}
-
-async function notificationsModal() {
-  let status;
-  try {
-    status = await refreshPushState();
-  } catch {
-    toast('Не удалось узнать состояние уведомлений');
+    void reportPushState();
     return;
   }
-  const body = el('div', 'push-panel');
-  const head = el('div', 'push-head');
-  const icon = el('span', 'push-icon');
-  icon.innerHTML = ICONS.bell;
-  const headText = el('div', 'push-head-text');
-  headText.appendChild(el('div', 'push-title', status.subscribed ? 'Уведомления включены' : 'Уведомления выключены'));
-  headText.appendChild(
-    el(
-      'div',
-      'push-sub',
-      status.subscriptions
-        ? `Устройств подключено: ${status.subscriptions}`
-        : 'Это устройство пока не подключено',
-    ),
-  );
-  head.append(icon, headText);
-  body.appendChild(head);
-
-  const close = { label: 'Понятно', kind: 'primary' };
-
-  if (!status.supported) {
-    body.appendChild(pushParagraph('Этот браузер не умеет показывать уведомления от приложений.'));
-    if (homeScreenPlatform() === 'ios') {
-      body.appendChild(
-        pushParagraph('На iPhone и iPad уведомления приходят только в приложении, добавленном на экран «Домой»:'),
-      );
-      const steps = el('ol', 'a2hs-steps');
-      for (const step of HOME_SCREEN_STEPS.ios) steps.appendChild(el('li', '', step));
-      body.appendChild(steps);
-      body.appendChild(pushParagraph('Добавьте ярлык, откройте его и включите уведомления в этом же меню.'));
-    } else {
-      body.appendChild(
-        pushParagraph('Откройте сервис в Chrome, Edge, Safari или Firefox — там уведомления работают.'),
-      );
-    }
-    openModal({ title: 'Уведомления', body, actions: [close] });
-    return;
-  }
-
-  if (status.permission === 'denied') {
-    body.appendChild(
-      pushParagraph(
-        'Браузер запретил уведомления для этого сайта. Разрешите их в настройках: нажмите значок замка рядом с адресом → «Уведомления» → «Разрешить», затем обновите страницу.',
-      ),
-    );
-    openModal({ title: 'Уведомления', body, actions: [close] });
-    return;
-  }
-
-  if (!status.subscribed) {
-    body.appendChild(
-      pushParagraph('Включите — и узнаете о готовой задаче, даже если приложение закрыто или телефон в кармане.'),
-    );
-    if (homeScreenPlatform() === 'ios' && !openedAsApp()) {
-      body.appendChild(pushParagraph('На iPhone уведомления работают у ярлыка с домашнего экрана — добавьте его заранее.'));
-    }
-    openModal({
-      title: 'Уведомления',
-      body,
-      actions: [
-        { label: 'Не сейчас' },
-        {
-          label: 'Включить',
-          kind: 'primary',
-          onClick: async () => {
-            /* Подписку оформляет браузер, и на медленной сети это не мгновенно:
-               показываем, что работа идёт, чтобы окно не выглядело зависшим. */
-            const statusLine = document.querySelector('#modalRoot .push-sub');
-            if (statusLine) statusLine.textContent = 'Оформляем подписку — обычно это пара секунд…';
-            const slowTimer = setTimeout(() => {
-              if (statusLine?.isConnected) statusLine.textContent = 'Браузер отвечает медленно — ещё ждём…';
-            }, 12000);
-            try {
-              await enablePush();
-              toast('Уведомления включены', 'ok');
-            } catch (error) {
-              toast(error?.message || 'Не удалось включить уведомления');
-            } finally {
-              clearTimeout(slowTimer);
-            }
-            await notificationsModal();
-            return false;
-          },
-        },
-      ],
-    });
-    return;
-  }
-
-  body.appendChild(
-    pushParagraph(
-      'Проверьте доставку: уведомление должно появиться в центре уведомлений телефона или компьютера. Если приложение открыто на экране, проверка промолчит — сверните его.',
-    ),
-  );
-  if (pushDevices.length) {
-    const list = el('ul', 'push-list');
-    for (const device of pushDevices) {
-      const added = device.addedAt ? new Date(device.addedAt).toLocaleDateString('ru-RU') : '';
-      list.appendChild(el('li', '', `${device.device || 'Устройство'}${added ? ` · с ${added}` : ''}`));
-    }
-    body.appendChild(list);
-  }
-  openModal({
-    title: 'Уведомления',
-    body,
-    actions: [
-      {
-        label: 'Выключить',
-        onClick: async () => {
-          try {
-            await disablePush();
-            toast('Уведомления выключены');
-          } catch (error) {
-            toast(error?.message || 'Не удалось выключить уведомления');
-          }
-          await notificationsModal();
-          return false;
-        },
-      },
-      {
-        label: 'Проверить',
-        kind: 'primary',
-        onClick: async () => {
-          try {
-            const result = await api('/api/push/test', { method: 'POST', body: {} });
-            toast(result.sent ? 'Отправлено: смотрите центр уведомлений' : 'Сервер не смог доставить уведомление', result.sent ? 'ok' : 'error');
-          } catch (error) {
-            toast(error?.message || 'Не удалось отправить проверку');
-          }
-          return false;
-        },
-      },
-    ],
-  });
+  armPushPermission();
+  void reportPushState();
 }
 
 /* ---------------------- ярлык на домашний экран ---------------------- */
@@ -5917,16 +6893,21 @@ async function bootStart() {
   await bootStart();
   syncSignupAvailability();
   registerServiceWorker();
-/* Приложение открыли по ссылке из уведомления — сразу нужный диалог. */
+  /* Приложение открыли по ссылке из уведомления — сразу нужный диалог. */
   openChatFromUrl();
   /* Уведомления и бейдж: подписка этого устройства и переход из уведомления. */
-  void initPush();
+  void ensurePush();
   clearAppBadge();
   /* Телефон вернулся из сна, вкладку открыли снова, сеть восстановилась —
      догоняем задачи, которые всё это время шли на сервере, и заодно
      подтягиваем свежие проекты, диалоги и файлы. */
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden) return;
+    if (document.hidden) {
+      /* Свернули или закрыли приложение — запоминаем проект на случай, если
+         вкладка не успеет дожить до pagehide. */
+      rememberProject(state.activeProjectId);
+      return;
+    }
     if (bootPending) {
       bootStart();
       return;
@@ -5949,6 +6930,8 @@ async function bootStart() {
       syncFromServer();
     }
   });
+  /* Закрытие ярлыка-приложения: последний проект должен пережить закрытие. */
+  window.addEventListener('pagehide', () => rememberProject(state.activeProjectId));
   /* Пока вкладка открыта, раз в 20 секунд сверяемся с сервером сами: документы,
      сделанные с телефона, появляются в панели файлов без перезагрузки. */
   setInterval(() => {

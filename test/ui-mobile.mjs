@@ -1,5 +1,5 @@
 // Проверка подсказок в мобильной версии в настоящем Chrome через DevTools-протокол (без зависимостей):
-//   - четыре карточки «Чем помочь?» стоят по две в ряд на телефоне (390 px и 320 px);
+//   - шесть коротких карточек «Чем помочь?» стоят по две в ряд на телефоне (390 px и 320 px);
 //   - ничего не вылезает по горизонтали, текст карточек не обрезан;
 //   - «Файлы проекта» выезжают таким же ящиком, как «Проекты», и закрываются крестиком.
 //
@@ -136,9 +136,9 @@ try {
   loginStatus === 200 ? ok('вход в сервис') : fail('вход', loginStatus);
 
   // 2. пустой диалог — именно там видны подсказки «Чем помочь?»
-  //    Заводим отдельный проект: сервер отдаёт проекты по updatedAt, поэтому
-  //    свежий оказывается первым, и приложение открывает его единственный
-  //    (пустой) диалог. Так тест не зависит от того, что уже лежит у пользователя.
+  //    Заводим отдельный проект: приложение запоминает последний проект, а
+  //    свежий после перезагрузки оказывается первым. Так тест не зависит от
+  //    того, что уже лежит у пользователя.
   const target = await evaluate(
     `(async () => {
        const project = (await (await fetch('/api/projects', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({name:'Проверка мобильной версии'})})).json()).project;
@@ -170,9 +170,9 @@ try {
          viewport: window.innerWidth,
        };
      })()`);
-    layout.cards.length === 4 ? ok(`подсказки при ${width}px: четыре карточки`) : fail(`карточки при ${width}px`, String(layout.cards.length));
+    layout.cards.length === 6 ? ok(`подсказки при ${width}px: шесть карточек`) : fail(`карточки при ${width}px`, String(layout.cards.length));
     layout.columns === 2 ? ok(`две карточки в ряд при ${width}px`, `ширина ${layout.cards[0].w}px`) : fail(`колонки при ${width}px`, `колонок ${layout.columns}`);
-    layout.rows === 2 ? ok(`два ряда при ${width}px`) : fail(`ряды при ${width}px`, `рядов ${layout.rows}`);
+    layout.rows === 3 ? ok(`три ряда при ${width}px`) : fail(`ряды при ${width}px`, `рядов ${layout.rows}`);
     layout.cards[0].x < layout.cards[1].x && layout.cards[0].y === layout.cards[1].y
       ? ok(`первая пара стоит рядом при ${width}px`)
       : fail(`раскладка при ${width}px`, JSON.stringify(layout.cards));
@@ -290,8 +290,9 @@ try {
     : fail('дашборд не закрылся');
 
   // 3.2. Значки в шапке нарисованы одинаково: «Дашборд», профиль, тема и папка
-  //      одного размера и одной толщины. Раньше папка была заливкой и читалась
-  //      жирнее соседей, а человечек отличался от сетки на пиксель.
+  //      одного размера. Контурные — одного штриха 1,8; папка — исключение по
+  //      заливке: это та же раскрытая папка, что в заголовке панели «Файлы
+  //      проекта», поэтому она залита, как и там, а не обведена контуром.
   const headerIcons = await evaluate(`(() => [...document.querySelectorAll('.topbar-right svg')]
     .filter((svg) => svg.getBoundingClientRect().width > 0 && !svg.classList.contains('chev'))
     .map((svg) => ({
@@ -301,13 +302,23 @@ try {
       fill: getComputedStyle(svg).fill,
     })))()`);
   const iconSizes = [...new Set(headerIcons.map((icon) => icon.size))];
-  const iconStrokes = [...new Set(headerIcons.map((icon) => icon.stroke))];
-  headerIcons.length === 4 && iconSizes.length === 1 && iconStrokes.length === 1 && iconStrokes[0] === '1.6px'
-    ? ok('значки шапки одного размера и одного штриха', `${headerIcons.map((icon) => `${icon.id}:${icon.size}`).join(' / ')}, штрих ${iconStrokes[0]}`)
+  const lineIcons = headerIcons.filter((icon) => icon.id !== 'filesBtn');
+  const lineStrokes = [...new Set(lineIcons.map((icon) => icon.stroke))];
+  headerIcons.length === 4 && iconSizes.length === 1 && lineIcons.length === 3 && lineStrokes.length === 1 && lineStrokes[0] === '1.8px'
+    ? ok('значки шапки одного размера, контурные — одного штриха', `${headerIcons.map((icon) => `${icon.id}:${icon.size}`).join(' / ')}, штрих ${lineStrokes[0]}`)
     : fail('значки шапки разной толщины', JSON.stringify(headerIcons));
-  headerIcons.every((icon) => icon.fill === 'none')
-    ? ok('все значки шапки контурные, заливки нет')
-    : fail('заливка в значках шапки', JSON.stringify(headerIcons.filter((icon) => icon.fill !== 'none')));
+  const filled = headerIcons.filter((icon) => icon.fill !== 'none');
+  const folderMatchesPanel = await evaluate(`(() => {
+    const inBar = document.querySelector('#filesBtn svg path');
+    const inPanel = document.querySelector('#filesProjectTitle svg path');
+    if (!inBar || !inPanel) return false;
+    const a = inBar.getAttribute('d');
+    const b = inPanel.getAttribute('d');
+    return !!a && a === b;
+  })()`);
+  filled.length === 1 && filled[0].id === 'filesBtn' && folderMatchesPanel
+    ? ok('папка в шапке залита той же иконкой, что заголовок «Файлы проекта»')
+    : fail('иконка папки в шапке не совпала с панелью', JSON.stringify({ filled, folderMatchesPanel }));
   const dashLabel = await evaluate(`(() => {
     const btn = document.getElementById('dashboardBtn');
     const label = btn.querySelector('.dash-btn-label');
@@ -317,9 +328,60 @@ try {
     ? ok('у «Дашборда» на телефоне только значок')
     : fail('подпись у «Дашборда» на телефоне', JSON.stringify(dashLabel));
 
-  // 3.4. Кнопка-меню подсвечена, когда проект открыт: тот же фон, что у кнопки
-  //      «Дашборд» в открытом состоянии, — по ней видно, что список проектов
-  //      не пустой и открытый проект лежит именно там.
+  // 3.5. Ряд значков справа ровный: кнопка профиля — такой же квадрат, как
+  //      соседи, поэтому промежутки между всеми иконками одинаковые. Раньше в
+  //      ней стоял ник, кнопка была шире, и шаг выглядел разным.
+  const rightRow = await evaluate(`(() => {
+    const row = document.querySelector('.topbar-right');
+    const nodes = Array.from(row.children).filter((node) => getComputedStyle(node).display !== 'none');
+    const boxes = nodes.map((node) => {
+      const rect = node.getBoundingClientRect();
+      return { id: node.id, width: Math.round(rect.width), height: Math.round(rect.height), left: rect.left, right: rect.right };
+    });
+    return {
+      gap: getComputedStyle(row).columnGap,
+      gaps: boxes.slice(1).map((box, index) => Math.round(box.left - boxes[index].right)),
+      boxes: boxes.map((box) => box.width + '×' + box.height),
+      nameShown: document.getElementById('userName').getBoundingClientRect().width > 0,
+    };
+  })()`);
+  const evenGap = rightRow.gaps.length >= 2 && new Set(rightRow.gaps).size === 1;
+  evenGap && rightRow.gaps[0] > 0 && new Set(rightRow.boxes).size === 1 && !rightRow.nameShown
+    ? ok('значки справа стоят с одинаковым шагом', `шаг ${rightRow.gaps[0]} px, кнопки ${rightRow.boxes[0]}`)
+    : fail('шаг значков справа', JSON.stringify(rightRow));
+
+  // 3.6. Ник на телефоне не потерян: он переехал в начало раскрывающегося
+  //      списка профиля — туда, куда и так ведёт нажатие на значок.
+  await evaluate(`document.getElementById('userChip').click()`);
+  const profileHead = await waitFor(`(() => {
+    const head = document.querySelector('.menu .menu-account');
+    return !!head && getComputedStyle(head).display !== 'none';
+  })()`);
+  const profileMenu = profileHead
+    ? await evaluate(`(() => {
+        const account = document.querySelector('.menu .menu-account');
+        const headerName = document.getElementById('userName').textContent.trim();
+        return {
+          name: (account.querySelector('.menu-account-name') || {}).textContent.trim(),
+          role: (account.querySelector('.menu-account-role') || {}).textContent.trim(),
+          buttons: Array.from(document.querySelectorAll('.menu > button')).map((btn) => btn.textContent.trim()),
+        };
+      })()`)
+    : null;
+  profileMenu && profileMenu.name && profileMenu.name === await evaluate(`document.getElementById('userName').textContent.trim()`) && !profileMenu.buttons.includes(profileMenu.name)
+    ? ok('ник показан в списке профиля', `${profileMenu.name}${profileMenu.role ? ', ' + profileMenu.role : ''}`)
+    : fail('ник в списке профиля', JSON.stringify(profileMenu));
+  if (process.env.DSHOW_MOBILE_SHOT) {
+    const shot = await cdp.send('Page.captureScreenshot', { format: 'png' });
+    fs.writeFileSync(process.env.DSHOW_MOBILE_SHOT.replace('.png', '-profile.png'), Buffer.from(shot.data, 'base64'));
+  }
+  if (profileHead) await evaluate(`document.getElementById('userChip').click()`);
+  await waitFor(`!document.querySelector('.menu')`);
+
+  // 3.4. Кнопка-меню отмечена, когда проект открыт: по ней видно, что список
+  //      проектов не пустой и открытый проект лежит именно там. Постоянной
+  //      плашки у неё нет — фон остаётся только коротким откликом на нажатие,
+  //      поэтому кнопка не выглядит «залипшей».
   const burger = await evaluate(`(() => {
     const node = document.getElementById('sidebarToggle');
     const style = getComputedStyle(node);
@@ -330,17 +392,17 @@ try {
       project: (document.querySelector('.project.active .p-name') || {}).textContent || null,
     };
   })()`);
-  burger.active && burger.pressed === 'true' && burger.project
-    ? ok('кнопка-меню подсвечена при открытом проекте', `проект «${burger.project}»`)
+  burger.active && burger.pressed === 'true' && burger.project && burger.bg === 'rgba(0, 0, 0, 0)'
+    ? ok('кнопка-меню отмечена при открытом проекте и не держит плашку', `проект «${burger.project}»`)
     : fail('подсветка кнопки-меню', JSON.stringify(burger));
   await evaluate(`document.getElementById('dashboardBtn').click()`);
   const dashPainted = await waitFor(`document.getElementById('dashboardBtn').classList.contains('active')`);
   const dashBg = dashPainted ? await evaluate(`getComputedStyle(document.getElementById('dashboardBtn')).backgroundColor`) : '';
   await evaluate(`document.getElementById('dashboardBtn').click()`);
   await waitFor(`!document.getElementById('app').classList.contains('dash-open')`);
-  dashBg && dashBg === burger.bg
-    ? ok('подсветка кнопки-меню такого же цвета, как у активного «Дашборда»', dashBg)
-    : fail('цвет подсветки кнопки-меню', JSON.stringify({ menu: burger.bg, dash: dashBg }));
+  dashBg === 'rgba(0, 0, 0, 0)' && dashBg === burger.bg
+    ? ok('открытый «Дашборд» не залит, как и кнопка-меню', dashBg)
+    : fail('фон открытого «Дашборда»', JSON.stringify({ menu: burger.bg, dash: dashBg }));
 
   // 3.3. Меню профиля сворачивается от нажатия в любом другом месте сервиса:
   //      раньше слушали только mousedown, а на телефоне касание в ленту или
