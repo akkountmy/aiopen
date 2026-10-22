@@ -210,6 +210,10 @@ try {
   await goto(BASE + '/');
   const appReady = await waitFor(`!!document.getElementById('app') && !document.getElementById('app').classList.contains('hidden')`);
   appReady ? ok('рабочее окно загрузилось') : fail('окно', 'приложение не показалось');
+  /* Свежий запуск показывает стартовый экран без открытого диалога — чтобы
+     проверить шапку и панели, сначала открываем диалог, как это сделал бы человек. */
+  await evaluate(`document.querySelector('.chat-row')?.click()`);
+  await waitFor(`(document.querySelector('#crumbChat')?.textContent || '').trim().length > 0`);
 
   // 3. панели одинаковой ширины
   const panels = await evaluate(`(() => { ${MEASURE}
@@ -455,10 +459,9 @@ try {
       return svg ? { viewBox: svg.getAttribute('viewBox'), color: getComputedStyle(holder).color } : null;
     };
     const rows = [...document.querySelectorAll('.project')].map((project) => ({ active: project.classList.contains('active'), ...rowIcon(project) }));
-    /* Значок в шапке панели «Файлы проекта» — раскрытая папка Harness (сетка 16,
-       заливка). Кнопка-ящик в шапке сервиса нарисована контуром 1.6 в сетке 20:
-       она стоит в одном ряду с «Дашбордом», профилем и темой и должна совпадать
-       с ними по штриху и размеру. */
+    /* Значок в шапке панели «Файлы проекта» — раскрытая папка Harness (сетка
+       16, заливка). Кнопка-ящик в шапке сервиса нарисована той же папкой, чтобы
+       раздел читался как один, а не как два разных. */
     const folder = (svg, openStartsWith) => {
       if (!svg) return null;
       const path = svg.querySelector('path');
@@ -490,7 +493,7 @@ try {
       other: rows.find((row) => !row.active) || null,
       headerIcons,
       filesTitle: folder(document.querySelector('.files-title svg'), 'M5.19629'),
-      filesToggle: folder(document.querySelector('#filesBtn svg'), 'M3 6.1'),
+      filesToggle: folder(document.querySelector('#filesBtn svg'), 'M5.19629'),
     };
   })()`);
   icons.button && icons.button.viewBox === '0 0 16 16' && icons.button.fill !== 'none' && icons.button.stroke === 'none'
@@ -506,15 +509,17 @@ try {
   openFolder(icons.filesTitle) && icons.filesTitle.fill !== 'none' && icons.filesTitle.stroke === 'none'
     ? ok('значок «Файлы проекта» — раскрытая папка в наборе Harness', `сетка ${icons.filesTitle.viewBox}, заливка ${icons.filesTitle.fill}`)
     : fail('значок «Файлы проекта»', JSON.stringify(icons.filesTitle));
-  icons.filesToggle && icons.filesToggle.viewBox === '0 0 20 20' && icons.filesToggle.opens && icons.filesToggle.stroke !== 'none' && icons.filesToggle.fill === 'none'
-    ? ok('значок ящика файлов нарисован контуром, а не заливкой', `сетка ${icons.filesToggle.viewBox}, штрих ${icons.filesToggle.strokeWidth}`)
+  icons.filesToggle && openFolder(icons.filesToggle) && icons.filesToggle.fill !== 'none' && icons.filesToggle.stroke === 'none'
+    ? ok('папка в шапке — та же залитая иконка, что в панели', `сетка ${icons.filesToggle.viewBox}, заливка ${icons.filesToggle.fill}`)
     : fail('значок ящика файлов', JSON.stringify(icons.filesToggle));
-  /* Все значки шапки сервиса — один штрих 1.6 и один размер: раньше папка была
-     заливкой и читалась жирнее, а человечек отличался от сетки на пиксель. */
-  const headerSizes = [...new Set(icons.headerIcons.map((icon) => icon.size))];
-  const headerStrokes = [...new Set(icons.headerIcons.map((icon) => icon.strokeWidth))];
-  icons.headerIcons.length >= 3 && headerSizes.length === 1 && headerStrokes.length === 1 && headerStrokes[0] === '1.6px'
-    ? ok('значки шапки одного размера и одного штриха', `${icons.headerIcons.length} значка по ${headerSizes[0]} px, штрих ${headerStrokes[0]}`)
+  /* Контурные значки шапки сервиса — один размер и одна толщина линии 2 px.
+     Штрих задан через non-scaling-stroke, поэтому не зависит от масштаба сетки
+     (20 px) и размера значка: раньше 1,8 на 24 px давал 2,16 px. */
+  const headerLine = icons.headerIcons.filter((icon) => icon.id !== 'filesBtn');
+  const headerSizes = [...new Set(headerLine.map((icon) => icon.size))];
+  const headerStrokes = [...new Set(headerLine.map((icon) => icon.strokeWidth))];
+  headerLine.length >= 3 && headerSizes.length === 1 && headerStrokes.length === 1 && headerStrokes[0] === '2px'
+    ? ok('контурные значки шапки одного размера и штриха', `${headerLine.length} значка по ${headerSizes[0]} px, штрих ${headerStrokes[0]}`)
     : fail('значки шапки разной толщины', JSON.stringify(icons.headerIcons));
 
   /* «Дашборд» на компьютере — только значок, без подписи: кнопка стоит в ряду

@@ -156,13 +156,20 @@ body {
 /* iOS 26 красит полосу состояния не по theme-color, а по fixed-элементу у
    верхнего края (WebKit 301756, 325446). Когда ящик уезжает за экран, такого
    элемента не остаётся: полоса сереет и только потом медленно белеет. Эта
-   полоска всегда есть и всегда цвета страницы — системе есть что взять. */
+   полоска всегда есть и всегда цвета страницы — системе есть что взять.
+
+  Высота — ровно вырез/строка состояния, то есть именно та полоса, на которую
+  содержимое уже отступило через env(safe-area-inset-top). Придуманный сверху
+  запас в 12 px (на устройствах без выреза) накрывал верх шапки: полоска лежит
+  выше всего и срезала верхнюю рамку плашек «Новый проект» и «Файлы проекта»,
+  а у кнопок шапки — верх плашки наведения. Без выреза (компьютер, Android)
+  полоса теперь нулевая и ничего не перекрывает. */
 .status-tint {
   position: fixed;
   top: 0;
   left: 0;
   right: 0;
-  height: max(12px, env(safe-area-inset-top, 0px));
+  height: env(safe-area-inset-top, 0px);
   background-color: var(--bg);
   pointer-events: none;
   z-index: 59;
@@ -5913,15 +5920,24 @@ html.kb-open .scroll-jump {
 .topbar .dash-btn .dash-btn-ico,
 .topbar .user-chip-top .account-glyph,
 .topbar .files-toggle svg {
-  width: 24px;
-  height: 24px;
+  width: 22px;
+  height: 22px;
   flex: none;
 }
 
+/* Толщина линии у контурных значков — 2 px при любом размере значка. Без
+   vector-effect штрих масштабируется вместе с сеткой: на 24 px он выходил
+   2,16 px, на 26 px — 2,34 px, и значки в одной шапке выглядели по-разному
+   жирными. non-scaling-stroke считает штрих в экранных, а не в svg-пикселях,
+   поэтому все линии шапки ровно одной толщины на всех ширинах. */
 .topbar .dash-btn .dash-btn-ico,
 .topbar .user-chip-top .account-glyph,
 .topbar .btn-icon svg:not(.ico-solid) {
-  stroke-width: 1.8;
+  stroke-width: 2;
+}
+
+.topbar svg * {
+  vector-effect: non-scaling-stroke;
 }
 
 /* Ник в шапке — не подпись под иконкой, а полноценная строка: кегль как у
@@ -5994,7 +6010,7 @@ html.kb-open .scroll-jump {
   }
 }
 
-/* Планшет: коробки 38 px, значки 23 px. */
+/* Планшет: коробки 38 px, значки 22 px. */
 @media (max-width: 1100px) {
   .topbar {
     padding-right: max(2px, env(safe-area-inset-right, 0px));
@@ -6022,12 +6038,12 @@ html.kb-open .scroll-jump {
   .topbar .dash-btn .dash-btn-ico,
   .topbar .user-chip-top .account-glyph,
   .topbar .files-toggle svg {
-    width: 24px;
-    height: 24px;
+    width: 22px;
+    height: 22px;
   }
 }
 
-/* Телефон: коробки 40 px, значки 26 px — палец попадает без прицеливания. */
+/* Телефон: коробки 40 px, значки 24 px — палец попадает без прицеливания. */
 @media (max-width: 860px) {
   .topbar .btn-icon,
   .topbar .dash-btn {
@@ -6048,12 +6064,12 @@ html.kb-open .scroll-jump {
   .topbar .dash-btn .dash-btn-ico,
   .topbar .user-chip-top .account-glyph,
   .topbar .files-toggle svg {
-    width: 26px;
-    height: 26px;
+    width: 24px;
+    height: 24px;
   }
 }
 
-/* Узкий телефон: 38 px и 24 px — шапка из четырёх кнопок помещается в строку. */
+/* Узкий телефон: 38 px и 22 px — шапка из четырёх кнопок помещается в строку. */
 @media (max-width: 420px) {
   .topbar .btn-icon,
   .topbar .dash-btn {
@@ -6073,8 +6089,8 @@ html.kb-open .scroll-jump {
   .topbar .dash-btn .dash-btn-ico,
   .topbar .user-chip-top .account-glyph,
   .topbar .files-toggle svg {
-    width: 24px;
-    height: 24px;
+    width: 22px;
+    height: 22px;
   }
 }
 

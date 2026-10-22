@@ -1,5 +1,6 @@
 // Проверка подсказок в мобильной версии в настоящем Chrome через DevTools-протокол (без зависимостей):
-//   - шесть коротких карточек «Чем помочь?» стоят по две в ряд на телефоне (390 px и 320 px);
+//   - семь коротких карточек «Чем помочь?» стоят по две в ряд на телефоне (390 px и 320 px),
+//     последняя занимает всю ширину;
 //   - ничего не вылезает по горизонтали, текст карточек не обрезан;
 //   - «Файлы проекта» выезжают таким же ящиком, как «Проекты», и закрываются крестиком.
 //
@@ -170,9 +171,9 @@ try {
          viewport: window.innerWidth,
        };
      })()`);
-    layout.cards.length === 6 ? ok(`подсказки при ${width}px: шесть карточек`) : fail(`карточки при ${width}px`, String(layout.cards.length));
+    layout.cards.length === 7 ? ok(`подсказки при ${width}px: семь карточек`) : fail(`карточки при ${width}px`, String(layout.cards.length));
     layout.columns === 2 ? ok(`две карточки в ряд при ${width}px`, `ширина ${layout.cards[0].w}px`) : fail(`колонки при ${width}px`, `колонок ${layout.columns}`);
-    layout.rows === 3 ? ok(`три ряда при ${width}px`) : fail(`ряды при ${width}px`, `рядов ${layout.rows}`);
+    layout.rows === 4 ? ok(`четыре ряда при ${width}px`) : fail(`ряды при ${width}px`, `рядов ${layout.rows}`);
     layout.cards[0].x < layout.cards[1].x && layout.cards[0].y === layout.cards[1].y
       ? ok(`первая пара стоит рядом при ${width}px`)
       : fail(`раскладка при ${width}px`, JSON.stringify(layout.cards));
@@ -290,22 +291,26 @@ try {
     : fail('дашборд не закрылся');
 
   // 3.2. Значки в шапке нарисованы одинаково: «Дашборд», профиль, тема и папка
-  //      одного размера. Контурные — одного штриха 1,8; папка — исключение по
-  //      заливке: это та же раскрытая папка, что в заголовке панели «Файлы
-  //      проекта», поэтому она залита, как и там, а не обведена контуром.
+  //      одного размера. Контурные — одной толщины 2 px. Штрих считается в
+  //      экранных пикселях (vector-effect: non-scaling-stroke), поэтому 2 px
+  //      одинаковы и на 22 px, и на 24 px. Папка — исключение по заливке: это
+  //      та же раскрытая папка, что в заголовке панели «Файлы проекта».
   const headerIcons = await evaluate(`(() => [...document.querySelectorAll('.topbar-right svg')]
     .filter((svg) => svg.getBoundingClientRect().width > 0 && !svg.classList.contains('chev'))
     .map((svg) => ({
       id: svg.closest('button') ? svg.closest('button').id : '',
       size: Math.round(svg.getBoundingClientRect().width * 10) / 10,
       stroke: getComputedStyle(svg).strokeWidth,
+      scaling: getComputedStyle(svg.querySelector('*')).vectorEffect,
       fill: getComputedStyle(svg).fill,
     })))()`);
   const iconSizes = [...new Set(headerIcons.map((icon) => icon.size))];
   const lineIcons = headerIcons.filter((icon) => icon.id !== 'filesBtn');
   const lineStrokes = [...new Set(lineIcons.map((icon) => icon.stroke))];
-  headerIcons.length === 4 && iconSizes.length === 1 && lineIcons.length === 3 && lineStrokes.length === 1 && lineStrokes[0] === '1.8px'
-    ? ok('значки шапки одного размера, контурные — одного штриха', `${headerIcons.map((icon) => `${icon.id}:${icon.size}`).join(' / ')}, штрих ${lineStrokes[0]}`)
+  const lineScaling = [...new Set(lineIcons.map((icon) => icon.scaling))];
+  headerIcons.length === 4 && iconSizes.length === 1 && lineIcons.length === 3 && lineStrokes.length === 1 &&
+  lineStrokes[0] === '2px' && lineScaling.length === 1 && lineScaling[0] === 'non-scaling-stroke'
+    ? ok('значки шапки одного размера, контурные — одной толщины', `${headerIcons.map((icon) => `${icon.id}:${icon.size}`).join(' / ')}, штрих ${lineStrokes[0]} без масштабирования`)
     : fail('значки шапки разной толщины', JSON.stringify(headerIcons));
   const filled = headerIcons.filter((icon) => icon.fill !== 'none');
   const folderMatchesPanel = await evaluate(`(() => {
@@ -319,6 +324,30 @@ try {
   filled.length === 1 && filled[0].id === 'filesBtn' && folderMatchesPanel
     ? ok('папка в шапке залита той же иконкой, что заголовок «Файлы проекта»')
     : fail('иконка папки в шапке не совпала с панелью', JSON.stringify({ filled, folderMatchesPanel }));
+
+  // 3.2б. Верх плашек «Новый проект» и «Файлы проекта» не подрезан: полоска под
+  //       системную строку состояния больше не лежит поверх содержимого. Раньше
+  //       у неё был запас 12 px даже без выреза, и она срезала верхнюю рамку и
+  //       скругление обеих плашек на всех версиях.
+  const plateTops = await evaluate(`(() => {
+    const tint = document.querySelector('.status-tint');
+    const probe = document.createElement('div');
+    probe.style.cssText = 'position:fixed;top:0;height:env(safe-area-inset-top,0px);visibility:hidden';
+    document.body.appendChild(probe);
+    const safe = Math.round(probe.getBoundingClientRect().height);
+    probe.remove();
+    const top = (el) => (el ? Math.round(el.getBoundingClientRect().top * 10) / 10 : null);
+    return {
+      tint: tint ? Math.round(tint.getBoundingClientRect().height) : null,
+      safe,
+      newProject: top(document.getElementById('newProjectBtn')),
+      filesTitle: top(document.getElementById('filesProjectTitle')),
+    };
+  })()`);
+  plateTops.tint === plateTops.safe &&
+  Math.min(plateTops.newProject, plateTops.filesTitle) >= plateTops.tint
+    ? ok('полоска статус-бара не накрывает верх плашек проектов и файлов', `полоска ${plateTops.tint} px, плашки с ${plateTops.newProject}/${plateTops.filesTitle} px`)
+    : fail('полоска статус-бара подрезает верх плашек', JSON.stringify(plateTops));
   const dashLabel = await evaluate(`(() => {
     const btn = document.getElementById('dashboardBtn');
     const label = btn.querySelector('.dash-btn-label');
