@@ -1,16 +1,14 @@
-/* Проверка правила «три устройства одновременно» и предупреждений о передаче
-   пароля. Тест поднимает настоящий сервер на свободном порту во временной папке
-   данных, поэтому рабочие данные и Telegram не затрагиваются.
+/* Проверка правил входа под одним ником и предупреждений о передаче пароля.
+   Тест поднимает настоящий сервер на свободном порту во временной папке данных,
+   поэтому рабочие данные и Telegram не затрагиваются.
 
    Что проверяем:
-   - на аккаунте три места: ноутбук, браузер телефона и ярлык-приложение живут
-     одновременно;
-   - четвёртый вход закрывает самый давно не использованный сеанс, а не
-     «второй такой же по типу»; остальные устройства продолжают работать;
+   - число одновременных устройств не ограничено: ноутбук, браузер телефона,
+     ярлык-приложение и планшет живут одновременно и никто никого не выбивает;
    - повторный вход с той же машины (та же метка dshow_device) закрывает свой
-     прежний сеанс молча, без пометки «вас выбили» и без потери чужих мест;
-   - выбитому сеансу достаётся понятное объяснение «displaced», вход попадает в
-     историю, а администратор получает предупреждение;
+     прежний сеанс молча, без пометки «вас выбили» и без потери чужих сеансов;
+   - выбитых сеансов нет, поэтому и повода для тревоги «выбили» не возникает,
+     а история входов и предупреждение о частых устройствах продолжают работать;
    - классы устройств (компьютер, телефон, ярлык) по-прежнему записываются;
    - выход не считается выбиванием, а знакомая машина не добавляет устройство.
 
@@ -40,8 +38,8 @@ const env = {
   DSHOW_DATA_DIR: dataDir,
   DSHOW_ADMIN_USER: 'tester',
   DSHOW_ADMIN_PASSWORD: 'Test12345',
-  /* Три места — штатное значение; фиксируем явно, чтобы тест не зависел от машины. */
-  DSHOW_SESSIONS_MAX: '3',
+  /* Мест не считаем: фиксируем явно, что потолка нет (0 — без ограничений). */
+  DSHOW_SESSIONS_MAX: '0',
   /* Порог занижен специально: одного выбивания достаточно для предупреждения. */
   DSHOW_ALERT_DEVICES: '2',
   DSHOW_ALERT_IPS: '2',
@@ -158,12 +156,12 @@ try {
 
   const health = await call('/api/health');
   check(
-    'аккаунту разрешено три одновременных устройства',
-    health.data.sessions?.max === 3,
+    'число одновременных устройств не ограничено',
+    health.data.sessions?.max === 0 && health.data.sessions?.unlimited === true,
     JSON.stringify(health.data.sessions || {}),
   );
 
-  /* --- ноутбук, телефон и ярлык: три места сразу, никто никого не выбивает --- */
+  /* --- ноутбук, телефон и ярлык: все сразу, никто никого не выбивает --- */
   const laptop = await login(DESKTOP);
   check('вход с ноутбука успешен', laptop.status === 200, `HTTP ${laptop.status}`);
   check('выдан сеанс', Boolean(laptop.session));
@@ -191,8 +189,7 @@ try {
   const kinds = three.map((item) => item.kind).sort().join(',');
   check('классы устройств записаны', kinds === 'app,desktop,mobile', kinds);
 
-  /* --- четвёртое устройство: уступает самый давний по активности --- */
-  /* Телефон и ярлык только что работали, ноутбук — нет: уступать ему. */
+  /* --- четвёртое устройство: мест не считаем, никто не уступает --- */
   await sleep(30);
   await call('/api/me', { cookie: asCookie(phone.session) });
   await call('/api/me', { cookie: asCookie(shortcut.session) });
@@ -200,23 +197,18 @@ try {
   const tablet = await login(IPAD_UA, '', { 'sec-ch-ua-mobile': '?1' });
   check('вход с четвёртого устройства успешен', tablet.status === 200, `HTTP ${tablet.status}`);
 
-  const laptopDropped = await call('/api/me', { cookie: asCookie(laptop.session) });
-  check('уступил самый давно не использованный сеанс', laptopDropped.status === 401, `HTTP ${laptopDropped.status}`);
-  check('закрытый сеанс объясняет причину', laptopDropped.data.reason === 'displaced', String(laptopDropped.data.reason || ''));
-  check(
-    'объяснение говорит про лимит устройств',
-    /не больше 3 устройств/.test(String(laptopDropped.data.error || '')),
-    String(laptopDropped.data.error || '').slice(0, 90),
-  );
+  const laptopStays = await call('/api/me', { cookie: asCookie(laptop.session) });
+  check('давний сеанс не выбит четвёртым входом', laptopStays.status === 200, `HTTP ${laptopStays.status}`);
+  check('пометки «вас выбили» нет', laptopStays.data.reason === undefined, String(laptopStays.data.reason || 'нет пометки'));
   const phoneAfter = await call('/api/me', { cookie: asCookie(phone.session) });
   const shortcutAfter = await call('/api/me', { cookie: asCookie(shortcut.session) });
   const tabletMe = await call('/api/me', { cookie: asCookie(tablet.session) });
   check(
-    'остальные устройства не задеты',
+    'все четыре устройства работают одновременно',
     phoneAfter.status === 200 && shortcutAfter.status === 200 && tabletMe.status === 200,
     `телефон ${phoneAfter.status}, ярлык ${shortcutAfter.status}, планшет ${tabletMe.status}`,
   );
-  check('сеансов по-прежнему три', sessionsInState().length === 3, `сеансов: ${sessionsInState().length}`);
+  check('сеансов стало четыре — потолка нет', sessionsInState().length === 4, `сеансов: ${sessionsInState().length}`);
 
   /* --- повторный вход с той же машины: молча, без потери чужих мест --- */
   const phoneAgain = await login(ANDROID, phone.device);
@@ -244,7 +236,7 @@ try {
   check('история входов записана', events.length >= 4, `событий: ${events.length}`);
   check('видны все три класса устройств', new Set(events.map((item) => item.kind)).size === 3);
   check('разные метки устройств сохранены', new Set(events.map((item) => item.device)).size >= 3);
-  check('зафиксировано выбивание сеанса', events.some((item) => item.displaced >= 1));
+  check('выбитых сеансов нет', !events.some((item) => item.displaced >= 1));
   check('сработало предупреждение администратору', /\[guard\] подозрение/.test(log));
   check('сообщение ушло в канал уведомлений', /\[notify\]/.test(log));
 

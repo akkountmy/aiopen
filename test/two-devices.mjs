@@ -1,7 +1,7 @@
 /* Проверка совместной работы с компьютера и телефона под одним аккаунтом:
    два устройства держат сеансы одновременно и могут вести РАЗНЫЕ диалоги
-   параллельно. Внутри одного диалога ответ всегда один, а третий параллельный
-   ответ упирается в потолок на аккаунт.
+   параллельно. Внутри одного диалога ответ всегда один, а на аккаунт потолка
+   нет: третий, четвёртый и следующие диалоги тоже идут параллельно.
 
    Модель заменена заглушкой, поэтому токены не тратятся. Запуск:
    node test/two-devices.mjs */
@@ -208,7 +208,7 @@ try {
     ? ok('оба устройства начали ответ одновременно')
     : fail('параллельный запуск', `компьютер ${responseA.status}, телефон ${responseB.status}`);
 
-  /* Пока идут два ответа: повтор в тот же диалог и третий диалог. */
+  /* Пока идут два ответа: повтор в тот же диалог запрещён, а третий диалог — нет. */
   const sameChat = await api(desktop.cookie, DESKTOP_UA, `/api/chats/${chats[0]}/messages`, {
     method: 'POST',
     body: { text: 'Ещё раз в тот же диалог' },
@@ -217,21 +217,22 @@ try {
     ? ok('второй ответ в том же диалоге заблокирован', String(sameChat.status))
     : fail('блокировка одного диалога', `${sameChat.status} ${JSON.stringify(sameChat.data)}`);
 
-  const third = await api(mobile.cookie, MOBILE_UA, `/api/chats/${chats[2]}/messages`, {
-    method: 'POST',
-    body: { text: 'Третий параллельный ответ' },
-  });
-  third.status === 429 && /Сейчас идёт 2/.test(third.data?.error || '')
-    ? ok('потолок на аккаунт — два ответа', String(third.status))
-    : fail('потолок на аккаунт', `${third.status} ${JSON.stringify(third.data)}`);
+  const streamC = openStream(mobile.cookie, MOBILE_UA, chats[2], 'Третий параллельный ответ');
+  const responseC = await streamC;
+  responseC.status === 200
+    ? ok('третий ответ идёт параллельно — потолка на аккаунт нет', String(responseC.status))
+    : fail('третий параллельный ответ', `${responseC.status} ${JSON.stringify(await responseC.clone().json().catch(() => ({})))}`);
 
-  const [doneA, doneB] = await Promise.all([readStream(responseA), readStream(responseB)]);
-  doneA.events.some((event) => event.type === 'done') && doneB.events.some((event) => event.type === 'done')
-    ? ok('оба ответа дошли до конца')
-    : fail('завершение ответов', JSON.stringify(doneA.events.slice(-2)));
-  doneA.text.includes('Готово.') && doneB.text.includes('Готово.')
+  const [doneA, doneB, doneC] = await Promise.all([
+    readStream(responseA),
+    readStream(responseB),
+    readStream(responseC),
+  ]);
+  const allDone = [doneA, doneB, doneC].every((item) => item.events.some((event) => event.type === 'done'));
+  allDone ? ok('все три ответа дошли до конца') : fail('завершение ответов', JSON.stringify(doneA.events.slice(-2)));
+  doneA.text.includes('Готово.') && doneB.text.includes('Готово.') && doneC.text.includes('Готово.')
     ? ok('каждое устройство получило свой ответ')
-    : fail('текст ответов', `${doneA.text} / ${doneB.text}`);
+    : fail('текст ответов', `${doneA.text} / ${doneB.text} / ${doneC.text}`);
 
   const chatA = await api(desktop.cookie, DESKTOP_UA, `/api/chats/${chats[0]}`);
   const chatB = await api(mobile.cookie, MOBILE_UA, `/api/chats/${chats[1]}`);

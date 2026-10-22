@@ -65,8 +65,8 @@ const proofreadHits = new RateLimiter({ windowMs: 60 * 60 * 1000, max: 240 });
 const signupHits = new RateLimiter({ windowMs: 60 * 60 * 1000, max: SIGNUP.maxPerIpPerHour });
 /* Идущие ответы: ключ — «пользователь:диалог». Один и тот же диалог не может
    генерироваться дважды (иначе сообщения перепутаются), но разные диалоги
-   считаются независимо — так ноутбук и телефон работают параллельно. Общий
-   потолок на аккаунт остаётся: LIMITS.agentConcurrencyPerUser. */
+   считаются независимо — так ноутбук и телефон работают параллельно. Потолка на
+   аккаунт нет: LIMITS.agentConcurrencyPerUser = 0 значит «сколько угодно». */
 const runningChats = new Set();
 const runningByUser = new Map();
 const attachmentQueue = new Set();
@@ -531,6 +531,13 @@ function planDiskCap(memoryBytes) {
   return { bytes: row[1] * 1024 * MB, source: `тариф по лимиту памяти ${Math.round(mib)} МБ` };
 }
 
+/** Сколько мест у аккаунта: 0 — без ограничений (штатный режим, см. config).
+ *  Числа мест нет, поэтому отдаём пару «потолок + признак безлимита». */
+function sessionSeats() {
+  const limit = sessionLimit();
+  return { max: Number.isFinite(limit) ? limit : 0, unlimited: !Number.isFinite(limit) };
+}
+
 /** Живые сеансы и история входов: видно, с какого класса устройства вошли и кого это выбило. */
 function sessionsReport() {
   const now = Date.now();
@@ -561,9 +568,10 @@ function sessionsReport() {
   }));
   return {
     at: nowIso(),
-    /* Сколько устройств аккаунт держит одновременно: закрывается только самый
-       давно не использованный сеанс, поэтому тип устройства здесь справочный. */
-    seats: sessionLimit(),
+    /* Сколько устройств аккаунт держит одновременно. Сейчас — сколько угодно:
+       сеансы не выбивают друг друга, тип устройства здесь справочный. */
+    seats: sessionSeats().max,
+    seatsUnlimited: sessionSeats().unlimited,
     sessions,
     kicked,
     audit,
@@ -610,15 +618,13 @@ function requireUser(req, res) {
   if (token) {
     const kicked = store.kickedInfo(sessionKey(token));
     if (kicked) {
-      const seats = sessionLimit();
       return sendJson(
         res,
         401,
         {
           error:
-            `Этот сеанс закрыт: у аккаунта одновременно работают не больше ${seats} устройств, ` +
-            'и на новом входе пришлось уступить место тому, где дольше всего ничего не делали. ' +
-            'Просто войдите снова — или смените пароль, если это были не вы.',
+            'Этот сеанс закрыт — войдите снова. Так бывает после смены пароля, ' +
+            'выхода на этой машине или нового входа в этом же браузере.',
           reason: 'displaced',
           at: kicked.at,
         },
@@ -1125,8 +1131,11 @@ async function handleMessageStream(req, res, user, chatId) {
       run: publicRun(active),
     });
   }
+  /* Потолка на одновременные ответы у аккаунта нет: диалоги независимы, и
+     десяток вкладок может работать сразу. Предел включается только явной
+     настройкой LIMITS.agentConcurrencyPerUser > 0 (например, для отладки). */
   const busy = runningByUser.get(user.id) || 0;
-  if (busy >= LIMITS.agentConcurrencyPerUser) {
+  if (LIMITS.agentConcurrencyPerUser > 0 && busy >= LIMITS.agentConcurrencyPerUser) {
     return sendError(
       res,
       429,
@@ -1472,12 +1481,12 @@ async function route(req, res) {
       return sendJson(res, 200, { version: assetVersion() }, { 'Cache-Control': 'no-store' });
     }
     if (pathname === '/api/health' && method === 'GET') {
-      /* сколько устройств аккаунт держит одновременно — видно, что ноутбук,
-         браузер телефона и его ярлык работают параллельно, не выбивая друг друга */
+      /* Число одновременных устройств сейчас не ограничено: max = 0 и
+         unlimited = true. Настройка DSHOW_SESSIONS_MAX возвращает потолок. */
       return sendJson(res, 200, {
         ok: true,
         time: nowIso(),
-        sessions: { max: sessionLimit() },
+        sessions: sessionSeats(),
         docs: await docEngines(),
         skills: listSkills().length,
       });
