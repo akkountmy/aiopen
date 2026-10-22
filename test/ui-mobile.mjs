@@ -289,6 +289,57 @@ try {
     ? ok('дашборд закрывается, ящик убран')
     : fail('дашборд не закрылся');
 
+  // 3.2. Значки в шапке нарисованы одинаково: «Дашборд», профиль, тема и папка
+  //      одного размера и одной толщины. Раньше папка была заливкой и читалась
+  //      жирнее соседей, а человечек отличался от сетки на пиксель.
+  const headerIcons = await evaluate(`(() => [...document.querySelectorAll('.topbar-right svg')]
+    .filter((svg) => svg.getBoundingClientRect().width > 0 && !svg.classList.contains('chev'))
+    .map((svg) => ({
+      id: svg.closest('button') ? svg.closest('button').id : '',
+      size: Math.round(svg.getBoundingClientRect().width * 10) / 10,
+      stroke: getComputedStyle(svg).strokeWidth,
+      fill: getComputedStyle(svg).fill,
+    })))()`);
+  const iconSizes = [...new Set(headerIcons.map((icon) => icon.size))];
+  const iconStrokes = [...new Set(headerIcons.map((icon) => icon.stroke))];
+  headerIcons.length === 4 && iconSizes.length === 1 && iconStrokes.length === 1 && iconStrokes[0] === '1.6px'
+    ? ok('значки шапки одного размера и одного штриха', `${headerIcons.map((icon) => `${icon.id}:${icon.size}`).join(' / ')}, штрих ${iconStrokes[0]}`)
+    : fail('значки шапки разной толщины', JSON.stringify(headerIcons));
+  headerIcons.every((icon) => icon.fill === 'none')
+    ? ok('все значки шапки контурные, заливки нет')
+    : fail('заливка в значках шапки', JSON.stringify(headerIcons.filter((icon) => icon.fill !== 'none')));
+
+  // 3.3. Меню профиля сворачивается от нажатия в любом другом месте сервиса:
+  //      раньше слушали только mousedown, а на телефоне касание в ленту или
+  //      прокрутка оставляли список висеть открытым.
+  await evaluate(`document.getElementById('userChip').click()`);
+  const menuShown = await waitFor(`!!document.querySelector('.menu')`);
+  menuShown ? ok('меню профиля открывается') : fail('меню профиля не открылось');
+  if (menuShown) {
+    const chipBox = await evaluate(`(() => { const r = document.getElementById('userChip').getBoundingClientRect(); return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) }; })()`);
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: 40, y: 400 }] });
+    await sleep(40);
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    const menuClosed = await waitFor(`!document.querySelector('.menu')`, 4000);
+    menuClosed ? ok('касание в стороне сворачивает меню профиля') : fail('меню профиля осталось открытым после касания в стороне');
+    // Прокрутка ленты тоже убирает список, а не оставляет его висеть над ней.
+    await evaluate(`document.getElementById('userChip').click()`);
+    await waitFor(`!!document.querySelector('.menu')`);
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: 200, y: 620 }] });
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: 200, y: 500 }] });
+    await sleep(60);
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    const closedByScroll = await waitFor(`!document.querySelector('.menu')`, 4000);
+    closedByScroll ? ok('прокрутка ленты сворачивает меню профиля') : fail('меню профиля осталось после прокрутки');
+    // Повторное нажатие на профиль закрывает список.
+    await evaluate(`document.getElementById('userChip').click()`);
+    await waitFor(`!!document.querySelector('.menu')`);
+    await evaluate(`document.getElementById('userChip').click()`);
+    const toggled = await waitFor(`!document.querySelector('.menu')`, 4000);
+    toggled ? ok('повторное нажатие на профиль сворачивает меню') : fail('меню не свернулось повторным нажатием');
+    if (!menuClosed) console.log('    профиль был в', JSON.stringify(chipBox));
+  }
+
   // 4. файл в приложении-ярлыке: тап открывает своё окно просмотра, а
   //    «Скачать» оттуда не уводит из приложения. Раньше ссылка отдавала файл
   //    системе: открывалось чужое окно «чем открыть файл», из которого не было

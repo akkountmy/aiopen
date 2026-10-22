@@ -4660,3 +4660,40 @@ body.resizing {
     max-width: 82px;
   }
 }
+
+/* --------------------- значки шапки: один штрих и один размер ---------------------
+   «Дашборд», профиль, тема и папка — это один ряд, и рисоваться они должны
+   одинаково. Раньше папка была заливкой (штриха нет вовсе) и читалась заметно
+   жирнее соседей, а человечек отличался от сетки дашборда на пиксель: на каждом
+   размере экрана ряд выглядел по-своему. Теперь у всех четырёх один штрих 1.6
+   (как у остальных контурных значков сервиса) и один размер на каждой ширине:
+   18 px на компьютере, 20 px на планшете и телефоне, 19 px на узком телефоне. */
+.topbar-right .dash-btn .dash-btn-ico,
+.topbar-right .user-chip-top .account-glyph,
+.topbar-right .btn-icon svg,
+.topbar-right .files-toggle svg {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  stroke-width: 1.6;
+}
+
+@media (max-width: 1100px) {
+  .topbar-right .dash-btn .dash-btn-ico,
+  .topbar-right .user-chip-top .account-glyph,
+  .topbar-right .btn-icon svg,
+  .topbar-right .files-toggle svg {
+    width: 20px;
+    height: 20px;
+  }
+}
+
+@media (max-width: 420px) {
+  .topbar-right .dash-btn .dash-btn-ico,
+  .topbar-right .user-chip-top .account-glyph,
+  .topbar-right .btn-icon svg,
+  .topbar-right .files-toggle svg {
+    width: 19px;
+    height: 19px;
+  }
+}

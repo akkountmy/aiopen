@@ -455,25 +455,42 @@ try {
       return svg ? { viewBox: svg.getAttribute('viewBox'), color: getComputedStyle(holder).color } : null;
     };
     const rows = [...document.querySelectorAll('.project')].map((project) => ({ active: project.classList.contains('active'), ...rowIcon(project) }));
-    /* Значок в шапке «Файлы проекта» и в кнопке-ящике на телефоне: раскрытая
-       папка из набора Harness — сетка 16, заливка, один контур. */
-    const folder = (svg) => {
+    /* Значок в шапке панели «Файлы проекта» — раскрытая папка Harness (сетка 16,
+       заливка). Кнопка-ящик в шапке сервиса нарисована контуром 1.6 в сетке 20:
+       она стоит в одном ряду с «Дашбордом», профилем и темой и должна совпадать
+       с ними по штриху и размеру. */
+    const folder = (svg, openStartsWith) => {
       if (!svg) return null;
       const path = svg.querySelector('path');
+      const box = svg.getBoundingClientRect();
+      const style = getComputedStyle(svg);
       return {
         viewBox: svg.getAttribute('viewBox'),
-        fill: getComputedStyle(svg).fill,
-        stroke: getComputedStyle(svg).stroke,
+        fill: style.fill,
+        stroke: style.stroke,
+        strokeWidth: style.strokeWidth,
+        size: Math.round(box.width * 10) / 10,
         paths: svg.querySelectorAll('path').length,
-        opens: Boolean(path) && path.getAttribute('d').startsWith('M5.19629'),
+        opens: Boolean(path) && path.getAttribute('d').startsWith(openStartsWith),
       };
     };
+    /* Ряд значков в шапке сервиса: у всех один штрих и один размер. Шеврон у
+       профиля — не значок кнопки, а указатель «здесь раскрывается список». */
+    const headerIcons = [...document.querySelectorAll('.topbar-right svg')]
+      .filter((svg) => svg.getBoundingClientRect().width > 0 && !svg.classList.contains('chev'))
+      .map((svg) => ({
+        id: svg.closest('button') ? svg.closest('button').id : '',
+        size: Math.round(svg.getBoundingClientRect().width * 10) / 10,
+        strokeWidth: getComputedStyle(svg).strokeWidth,
+        fill: getComputedStyle(svg).fill,
+      }));
     return {
       button: btn ? { viewBox: btn.getAttribute('viewBox'), fill: getComputedStyle(btn).fill, stroke: getComputedStyle(btn).stroke } : null,
       active: rows.find((row) => row.active) || null,
       other: rows.find((row) => !row.active) || null,
-      filesTitle: folder(document.querySelector('.files-title svg')),
-      filesToggle: folder(document.querySelector('#filesBtn svg')),
+      headerIcons,
+      filesTitle: folder(document.querySelector('.files-title svg'), 'M5.19629'),
+      filesToggle: folder(document.querySelector('#filesBtn svg'), 'M3 6.1'),
     };
   })()`);
   icons.button && icons.button.viewBox === '0 0 16 16' && icons.button.fill !== 'none' && icons.button.stroke === 'none'
@@ -486,9 +503,19 @@ try {
     ? ok('значок открытого проекта заметнее закрытых', `${icons.active.color} против ${icons.other.color}`)
     : fail('яркость значка открытого проекта', JSON.stringify({ active: icons.active, other: icons.other }));
   const openFolder = (icon) => Boolean(icon) && icon.viewBox === '0 0 16 16' && icon.paths === 1 && icon.opens;
-  openFolder(icons.filesTitle) && icons.filesTitle.fill !== 'none' && icons.filesTitle.stroke === 'none' && openFolder(icons.filesToggle)
+  openFolder(icons.filesTitle) && icons.filesTitle.fill !== 'none' && icons.filesTitle.stroke === 'none'
     ? ok('значок «Файлы проекта» — раскрытая папка в наборе Harness', `сетка ${icons.filesTitle.viewBox}, заливка ${icons.filesTitle.fill}`)
-    : fail('значок «Файлы проекта»', JSON.stringify({ title: icons.filesTitle, toggle: icons.filesToggle }));
+    : fail('значок «Файлы проекта»', JSON.stringify(icons.filesTitle));
+  icons.filesToggle && icons.filesToggle.viewBox === '0 0 20 20' && icons.filesToggle.opens && icons.filesToggle.stroke !== 'none' && icons.filesToggle.fill === 'none'
+    ? ok('значок ящика файлов нарисован контуром, а не заливкой', `сетка ${icons.filesToggle.viewBox}, штрих ${icons.filesToggle.strokeWidth}`)
+    : fail('значок ящика файлов', JSON.stringify(icons.filesToggle));
+  /* Все значки шапки сервиса — один штрих 1.6 и один размер: раньше папка была
+     заливкой и читалась жирнее, а человечек отличался от сетки на пиксель. */
+  const headerSizes = [...new Set(icons.headerIcons.map((icon) => icon.size))];
+  const headerStrokes = [...new Set(icons.headerIcons.map((icon) => icon.strokeWidth))];
+  icons.headerIcons.length >= 3 && headerSizes.length === 1 && headerStrokes.length === 1 && headerStrokes[0] === '1.6px'
+    ? ok('значки шапки одного размера и одного штриха', `${icons.headerIcons.length} значка по ${headerSizes[0]} px, штрих ${headerStrokes[0]}`)
+    : fail('значки шапки разной толщины', JSON.stringify(icons.headerIcons));
 
   /* 12.7. Заголовок «Файлы проекта» — подпись, а не кнопка выбора проекта:
      файлы всегда принадлежат проекту, открытому слева, и панель идёт за ним.

@@ -3058,6 +3058,12 @@ function anchorBlockRight(anchor) {
 }
 
 function openContextMenu(anchor, items) {
+  /* Повторное нажатие на ту же кнопку сворачивает её список: меню ведёт себя
+     как обычный переключатель, а не открывается заново поверх себя. */
+  if (menuAnchor === anchor && $('.menu').length) {
+    closeMenus();
+    return;
+  }
   closeMenus();
   menuAnchor = anchor;
   const menu = el('div', 'menu');
@@ -3092,14 +3098,40 @@ function openContextMenu(anchor, items) {
     menu.style.left = `${left}px`;
     menu.style.top = `${Math.max(8, top)}px`;
   }
+  /* Меню сворачивается от любого действия вне его: нажатие мышью, касание
+     пальцем, прокрутка ленты или панели. pointerdown закрывает меню и на
+     телефоне — раньше слушали только mousedown, а на сенсорном экране его
+     может не быть вовсе (жест уходит в прокрутку), и меню оставалось висеть. */
   setTimeout(() => {
+    if (menuAnchor !== anchor) return;
     const closer = (event) => {
-      if (!menu.contains(event.target)) {
-        closeMenus();
-        document.removeEventListener('mousedown', closer);
-      }
+      if (menu.contains(event.target)) return;
+      /* Кнопка, из которой открыт список, закрывает его своим обработчиком:
+         иначе нажатие на неё сначала гасило меню, а потом открывало заново. */
+      if (anchor.contains(event.target)) return;
+      closeMenus();
     };
-    document.addEventListener('mousedown', closer);
+    const cleaner = () => {
+      closeMenus();
+    };
+    document.addEventListener('pointerdown', closer, true);
+    document.addEventListener('touchstart', closer, { capture: true, passive: true });
+    document.addEventListener('mousedown', closer, true);
+    document.addEventListener('scroll', cleaner, true);
+    window.addEventListener('wheel', cleaner, { passive: true });
+    window.addEventListener('touchmove', cleaner, { passive: true });
+    /* Снимаем слушатели сразу после закрытия меню — чистим за собой вручную,
+       потому что меню может исчезнуть и от выбора пункта, и от смены экрана. */
+    const watch = setInterval(() => {
+      if (menu.isConnected) return;
+      clearInterval(watch);
+      document.removeEventListener('pointerdown', closer, true);
+      document.removeEventListener('touchstart', closer, true);
+      document.removeEventListener('mousedown', closer, true);
+      document.removeEventListener('scroll', cleaner, true);
+      window.removeEventListener('wheel', cleaner);
+      window.removeEventListener('touchmove', cleaner);
+    }, 400);
   }, 0);
 }
 
