@@ -4508,17 +4508,6 @@ body.resizing {
 
 /* --------------------------- уведомления --------------------------- */
 
-.push-panel {
-  display: grid;
-  gap: 12px;
-}
-
-.push-head {
-  display: flex;
-  gap: 12px;
-  align-items: center;
-}
-
 /* Рассылка из админки: форма объявления и выбор получателей. */
 .push-broadcast {
   margin: 0 0 16px;

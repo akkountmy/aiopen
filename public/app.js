@@ -44,7 +44,6 @@ const ICONS = {
   theme:
     '<svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="3.6"/><path d="M10 2.4v1.8M10 15.8v1.8M2.4 10h1.8M15.8 10h1.8M4.6 4.6l1.3 1.3M14.1 14.1l1.3 1.3M15.4 4.6l-1.3 1.3M5.9 14.1l-1.3 1.3"/></svg>',
   eye: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M2.5 10s2.9-4.5 7.5-4.5S17.5 10 17.5 10s-2.9 4.5-7.5 4.5S2.5 10 2.5 10z"/><circle cx="10" cy="10" r="1.9"/></svg>',
-  bell: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3a4 4 0 00-4 4v3.2L4.6 13h10.8L14 10.2V7a4 4 0 00-4-4z"/><path d="M8.2 15.4a1.9 1.9 0 003.6 0"/></svg>',
 };
 
 const WHALE_SVG =
@@ -683,6 +682,9 @@ async function startApp(payload) {
   if (state.activeProjectId) syncFilesPanel({ reload: !restoredUi });
   /* Черновик возвращаем, если страница сама обновилась до новой версии. */
   restoreDraft();
+  /* Уведомления включаются сами после входа: человек ничего не настраивает. */
+  pushRegistered = false;
+  void ensurePush();
   checkAppVersion();
   $('#input').focus();
 }
@@ -3489,11 +3491,6 @@ function openUserMenu(event) {
       icon: ICONS.eye,
       action: () => memoryModal(),
     },
-    {
-      label: 'Уведомления',
-      icon: ICONS.bell,
-      action: () => notificationsModal(),
-    },
   ];
   if (isAdmin) {
     items.push(
@@ -4121,7 +4118,7 @@ function renderApprovals(body, approvals, refresh) {
 function renderPushBroadcast(body, users) {
   body.appendChild(el('div', 'admin-section-title', 'Рассылка уведомлений'));
   const card = el('div', 'push-broadcast');
-  const hint = el('p', 'push-broadcast-hint', 'Смотрим, у кого включены уведомления…');
+  const hint = el('p', 'push-broadcast-hint', 'Смотрим, у кого есть устройства…');
 
   const form = el('form', 'push-form');
   const titleField = el('label', 'field');
@@ -4145,7 +4142,7 @@ function renderPushBroadcast(body, users) {
   audienceField.appendChild(el('span', 'field-label', 'Кому'));
   const audience = el('select');
   for (const [value, label] of [
-    ['all', 'Всем, у кого включены уведомления'],
+    ['all', 'Всем, у кого есть устройство'],
     ['some', 'Выбранным пользователям'],
   ]) {
     const option = el('option', '', label);
@@ -4171,8 +4168,8 @@ function renderPushBroadcast(body, users) {
   card.appendChild(form);
   body.appendChild(card);
 
-  /* Получатели — только те, кому есть куда писать: у остальных уведомления
-     выключены или приложение ни разу не открывали. */
+  /* Получатели — только те, кому есть куда писать: у остальных приложение ещё
+     не открывали или браузер запретил уведомления. */
   let devices = new Map();
   const boxes = [];
   const renderPicker = () => {
@@ -4180,7 +4177,7 @@ function renderPushBroadcast(body, users) {
     boxes.length = 0;
     const available = users.filter((user) => devices.get(user.id));
     if (!available.length) {
-      picker.appendChild(el('p', 'push-broadcast-hint', 'Пока ни у кого не включены уведомления.'));
+      picker.appendChild(el('p', 'push-broadcast-hint', 'Пока ни у кого нет устройства с уведомлениями.'));
       return;
     }
     for (const user of available) {
@@ -4206,12 +4203,12 @@ function renderPushBroadcast(body, users) {
       const total = Number(data.total) || 0;
       const people = devices.size;
       hint.textContent = total
-        ? `Уведомления включены у ${people} ${plural(people, 'человека', 'человек', 'человек')}, устройств: ${total}.`
-        : 'Пока ни у кого не включены уведомления — отправлять некому.';
+        ? `Уведомления приходят ${people} ${plural(people, 'человеку', 'людям', 'людям')}, устройств: ${total}.`
+        : 'Пока ни у кого нет устройства с уведомлениями — отправлять некому.';
       renderPicker();
     })
     .catch(() => {
-      hint.textContent = 'Не удалось узнать, у кого включены уведомления.';
+      hint.textContent = 'Не удалось узнать, у кого есть устройства.';
     });
 
   audience.addEventListener('change', () => {
@@ -4263,7 +4260,7 @@ function renderPushBroadcast(body, users) {
         toast('Ни одно устройство не приняло уведомление', 'error');
       }
       if (result.skipped) {
-        resultLine.textContent = `Без уведомлений: ${result.skipped} ${plural(result.skipped, 'пользователь', 'пользователя', 'пользователей')} — им сообщение не придёт.`;
+        resultLine.textContent = `Не дойдёт: ${result.skipped} ${plural(result.skipped, 'человеку', 'людям', 'людям')} — у них пока нет устройства с уведомлениями.`;
         resultLine.hidden = false;
       }
     } catch (error) {
@@ -5325,16 +5322,20 @@ document.addEventListener('paste', (event) => {
 
 /* ------------------------- уведомления ------------------------- */
 
-/* Уведомления работают через push-службу браузера: сервер отправляет сообщение,
-   сервис-воркер показывает его, даже когда приложение закрыто. Разрешение
-   спрашивается только по кнопке — из обработчика действия человека. */
-const PUSH_FLAG = 'dshow-push-enabled-v1';
-/* Сколько устройств у аккаунта; список показывает, где включены уведомления. */
-let pushDevices = [];
-/* Включение идёт не мгновенно: браузер регистрируется в своей push-службе.
-   Пока оно не закончилось, повторный клик должен ждать тот же результат,
-   а не заводить вторую подписку. */
+/* Уведомления работают у всех и всегда: человек их не включает и не выключает.
+   Браузер выдаёт разрешение только по действию человека, поэтому первый тап по
+   экрану открывает его родной запрос — один раз, дальше браузер помнит ответ
+   сам. Включение идёт не мгновенно (браузер регистрируется в своей push-службе),
+   поэтому повторный вызов ждёт тот же результат, а не заводит вторую подписку. */
 let pushEnabling = null;
+/* Разрешение спрашиваем ровно из первого действия человека. */
+let pushPermissionArmed = false;
+/* В этом открытии приложения браузер уже спрашивали — второй раз не просим. */
+let pushAsked = false;
+/* Переход из уведомления и бейдж подключаем один раз на вкладку. */
+let pushListenersReady = false;
+/* Подписка этого устройства уже отправлена серверу в текущем входе. */
+let pushRegistered = false;
 
 function pushSupported() {
   return Boolean(
@@ -5355,7 +5356,7 @@ function urlBase64ToBytes(base64) {
   return bytes;
 }
 
-/* Готовый воркер: ждём активации не дольше восьми секунд, иначе окно
+/* Готовый воркер: ждём активации не дольше восьми секунд, иначе включение
    уведомлений висело бы на телефоне в ожидании, которого не будет. */
 function serviceWorkerReady(timeoutMs = 8000) {
   if (!('serviceWorker' in navigator)) return Promise.resolve(null);
@@ -5372,35 +5373,6 @@ async function pushRegistration() {
   } catch {
     return null;
   }
-}
-
-async function refreshPushState() {
-  const supported = pushSupported();
-  const permission = supported ? Notification.permission : 'unsupported';
-  const registration = supported ? await pushRegistration() : null;
-  let subscribed = false;
-  if (registration) {
-    try {
-      subscribed = Boolean(await registration.pushManager.getSubscription());
-    } catch {
-      subscribed = false;
-    }
-  }
-  let server = {};
-  try {
-    server = await api('/api/push/state');
-  } catch {
-    /* Сеть пропала — показываем хотя бы состояние браузера. */
-  }
-  pushDevices = Array.isArray(server.devices) ? server.devices : [];
-  state.push = {
-    supported,
-    permission,
-    subscribed,
-    publicKey: server.publicKey || '',
-    subscriptions: Number(server.subscriptions) || 0,
-  };
-  return state.push;
 }
 
 /* Браузер иногда думает над подпиской долго: у него своя регистрация в
@@ -5434,12 +5406,9 @@ async function enablePush() {
 }
 
 async function enablePushOnce() {
-  if (!pushSupported()) throw new Error('Этот браузер не умеет показывать уведомления');
-  let permission = Notification.permission;
-  if (permission === 'default') permission = await Notification.requestPermission();
-  if (permission !== 'granted') {
-    throw new Error('Разрешение не выдано. Включите уведомления для сайта в настройках браузера.');
-  }
+  /* Разрешение спрашивает только armPushPermission — из действия человека.
+     Здесь лишь молчаливая подписка уже разрешённого устройства. */
+  if (!pushSupported() || Notification.permission !== 'granted') return false;
   let registration = await pushRegistration();
   if (!registration) {
     try {
@@ -5449,56 +5418,58 @@ async function enablePushOnce() {
       registration = null;
     }
   }
-  if (!registration) throw new Error('Сервис-воркер не запустился — обновите страницу и повторите');
+  if (!registration) return false;
   const server = await api('/api/push/state');
+  if (!server.publicKey) return false;
   let subscription = await registration.pushManager.getSubscription().catch(() => null);
   if (!subscription) {
-    try {
-      subscription = await withPushTimeout(
-        registration.pushManager.subscribe({
-          userVisibleOnly: true,
-          applicationServerKey: urlBase64ToBytes(server.publicKey),
-        }),
-        60000,
-        'Браузер не ответил за минуту — нажмите «Включить» ещё раз',
-      );
-    } catch (error) {
-      if (error?.timeout) throw error;
-      throw new Error(`Браузер не дал подписаться: ${error?.message || 'неизвестная ошибка'}`);
+    /* Таймаут не отменяет запрос: браузер может ответить позже, и тогда
+       следующая попытка найдёт готовую подписку и дошлёт её серверу. */
+    subscription = await withPushTimeout(
+      registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToBytes(server.publicKey),
+      }),
+      60000,
+      'Браузер не ответил за минуту',
+    );
+  }
+  if (!pushRegistered) {
+    await api('/api/push/subscribe', { method: 'POST', body: { subscription: subscription.toJSON() } });
+    pushRegistered = true;
+  }
+  return true;
+}
+
+/* Первое действие человека (тап, клик, клавиша) — единственный законный повод
+   для родного запроса разрешения. Спрашиваем один раз: отказ браузера уважаем,
+   второй раз он всё равно не спросит без настроек. */
+function armPushPermission() {
+  if (!pushSupported() || pushPermissionArmed || pushAsked || Notification.permission !== 'default') return;
+  pushPermissionArmed = true;
+  const events = ['pointerdown', 'touchstart', 'keydown'];
+  const ask = async () => {
+    for (const type of events) window.removeEventListener(type, ask, true);
+    pushPermissionArmed = false;
+    if (!pushSupported()) return;
+    if (Notification.permission === 'default') {
+      pushAsked = true;
+      let granted = false;
+      try {
+        granted = (await Notification.requestPermission()) === 'granted';
+      } catch {
+        granted = false;
+      }
+      if (!granted) return;
     }
-  }
-  await api('/api/push/subscribe', { method: 'POST', body: { subscription: subscription.toJSON() } });
-  try {
-    localStorage.setItem(PUSH_FLAG, '1');
-  } catch {
-    /* Без хранилища просто не запомним, что включали — включим заново. */
-  }
-  return refreshPushState();
-}
-
-async function disablePush() {
-  const registration = await pushRegistration();
-  const subscription = registration ? await registration.pushManager.getSubscription().catch(() => null) : null;
-  if (subscription) {
-    /* Сначала сервер, потом браузер: если сервер не ответил, подписка остаётся
-       и уведомления придут снова — это лучше, чем молча потерять устройство. */
-    await api('/api/push/unsubscribe', { method: 'POST', body: { endpoint: subscription.endpoint } });
-    await subscription.unsubscribe().catch(() => {});
-  }
-  try {
-    localStorage.removeItem(PUSH_FLAG);
-  } catch {
-    /* ignore */
-  }
-  return refreshPushState();
-}
-
-function pushWanted() {
-  try {
-    return localStorage.getItem(PUSH_FLAG) === '1';
-  } catch {
-    return false;
-  }
+    if (Notification.permission !== 'granted') return;
+    try {
+      await enablePush();
+    } catch {
+      /* Сеть или push-служба подвели — повторим при следующем открытии. */
+    }
+  };
+  for (const type of events) window.addEventListener(type, ask, { capture: true });
 }
 
 /* Бейдж на иконке приложения — как у обычных мессенджеров: цифра «есть новое».
@@ -5549,179 +5520,45 @@ function openChatFromUrl() {
   }
 }
 
+/* Включение уведомлений запускается после входа и при каждом открытии
+   приложения: подписку нужно подтверждать серверу, а после чистки браузера —
+   оформлять заново. Параллельные вызовы ждут один и тот же результат. */
+let pushRun = null;
+
+function ensurePush() {
+  if (!state.user) return Promise.resolve();
+  if (pushRun) return pushRun;
+  pushRun = initPush().finally(() => {
+    pushRun = null;
+  });
+  return pushRun;
+}
+
 async function initPush() {
   if (!pushSupported()) return;
   const registration = await serviceWorkerReady();
   if (!registration) return;
-  try {
-    await refreshPushState();
-  } catch {
-    /* состояние уточним при открытии окна уведомлений */
+  if (!pushListenersReady) {
+    pushListenersReady = true;
+    navigator.serviceWorker.addEventListener('message', onServiceWorkerMessage);
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) return;
+      clearAppBadge();
+      /* Разрешение могли выдать в настройках браузера или в другой вкладке. */
+      if (Notification.permission === 'granted') void enablePush().catch(() => {});
+      else armPushPermission();
+    });
+    window.addEventListener('focus', clearAppBadge);
   }
-  /* Уведомления уже включали на этом устройстве — держим подписку живой:
-     после обновления воркера или чистки подписок браузером её нужно оформить
-     заново, иначе человек молча перестанет получать сообщения. */
-  if (pushWanted() && Notification.permission === 'granted') {
+  if (Notification.permission === 'granted') {
     try {
       await enablePush();
     } catch {
-      /* не мешаем работе приложения: включить можно вручную в меню */
+      /* Сеть или push-служба подвели — повторим при следующем открытии. */
     }
-  }
-  navigator.serviceWorker.addEventListener('message', onServiceWorkerMessage);
-  document.addEventListener('visibilitychange', () => {
-    if (!document.hidden) clearAppBadge();
-  });
-  window.addEventListener('focus', clearAppBadge);
-}
-
-function pushParagraph(text) {
-  const node = el('p', 'push-text', text);
-  return node;
-}
-
-async function notificationsModal() {
-  let status;
-  try {
-    status = await refreshPushState();
-  } catch {
-    toast('Не удалось узнать состояние уведомлений');
     return;
   }
-  const body = el('div', 'push-panel');
-  const head = el('div', 'push-head');
-  const icon = el('span', 'push-icon');
-  icon.innerHTML = ICONS.bell;
-  const headText = el('div', 'push-head-text');
-  headText.appendChild(el('div', 'push-title', status.subscribed ? 'Уведомления включены' : 'Уведомления выключены'));
-  headText.appendChild(
-    el(
-      'div',
-      'push-sub',
-      status.subscriptions
-        ? `Устройств подключено: ${status.subscriptions}`
-        : 'Это устройство пока не подключено',
-    ),
-  );
-  head.append(icon, headText);
-  body.appendChild(head);
-
-  const close = { label: 'Понятно', kind: 'primary' };
-
-  if (!status.supported) {
-    body.appendChild(pushParagraph('Этот браузер не умеет показывать уведомления от приложений.'));
-    if (homeScreenPlatform() === 'ios') {
-      body.appendChild(
-        pushParagraph('На iPhone и iPad уведомления приходят только в приложении, добавленном на экран «Домой»:'),
-      );
-      const steps = el('ol', 'a2hs-steps');
-      for (const step of HOME_SCREEN_STEPS.ios) steps.appendChild(el('li', '', step));
-      body.appendChild(steps);
-      body.appendChild(pushParagraph('Добавьте ярлык, откройте его и включите уведомления в этом же меню.'));
-    } else {
-      body.appendChild(
-        pushParagraph('Откройте сервис в Chrome, Edge, Safari или Firefox — там уведомления работают.'),
-      );
-    }
-    openModal({ title: 'Уведомления', body, actions: [close] });
-    return;
-  }
-
-  if (status.permission === 'denied') {
-    body.appendChild(
-      pushParagraph(
-        'Браузер запретил уведомления для этого сайта. Разрешите их в настройках: нажмите значок замка рядом с адресом → «Уведомления» → «Разрешить», затем обновите страницу.',
-      ),
-    );
-    openModal({ title: 'Уведомления', body, actions: [close] });
-    return;
-  }
-
-  if (!status.subscribed) {
-    body.appendChild(
-      pushParagraph('Включите — и узнаете о готовой задаче, даже если приложение закрыто или телефон в кармане.'),
-    );
-    if (homeScreenPlatform() === 'ios' && !openedAsApp()) {
-      body.appendChild(pushParagraph('На iPhone уведомления работают у ярлыка с домашнего экрана — добавьте его заранее.'));
-    }
-    openModal({
-      title: 'Уведомления',
-      body,
-      actions: [
-        { label: 'Не сейчас' },
-        {
-          label: 'Включить',
-          kind: 'primary',
-          onClick: async () => {
-            /* Подписку оформляет браузер, и на медленной сети это не мгновенно:
-               показываем, что работа идёт, чтобы окно не выглядело зависшим. */
-            const statusLine = document.querySelector('#modalRoot .push-sub');
-            if (statusLine) statusLine.textContent = 'Оформляем подписку — обычно это пара секунд…';
-            const slowTimer = setTimeout(() => {
-              if (statusLine?.isConnected) statusLine.textContent = 'Браузер отвечает медленно — ещё ждём…';
-            }, 12000);
-            try {
-              await enablePush();
-              toast('Уведомления включены', 'ok');
-            } catch (error) {
-              toast(error?.message || 'Не удалось включить уведомления');
-            } finally {
-              clearTimeout(slowTimer);
-            }
-            await notificationsModal();
-            return false;
-          },
-        },
-      ],
-    });
-    return;
-  }
-
-  body.appendChild(
-    pushParagraph(
-      'Проверьте доставку: уведомление должно появиться в центре уведомлений телефона или компьютера. Если приложение открыто на экране, проверка промолчит — сверните его.',
-    ),
-  );
-  if (pushDevices.length) {
-    const list = el('ul', 'push-list');
-    for (const device of pushDevices) {
-      const added = device.addedAt ? new Date(device.addedAt).toLocaleDateString('ru-RU') : '';
-      list.appendChild(el('li', '', `${device.device || 'Устройство'}${added ? ` · с ${added}` : ''}`));
-    }
-    body.appendChild(list);
-  }
-  openModal({
-    title: 'Уведомления',
-    body,
-    actions: [
-      {
-        label: 'Выключить',
-        onClick: async () => {
-          try {
-            await disablePush();
-            toast('Уведомления выключены');
-          } catch (error) {
-            toast(error?.message || 'Не удалось выключить уведомления');
-          }
-          await notificationsModal();
-          return false;
-        },
-      },
-      {
-        label: 'Проверить',
-        kind: 'primary',
-        onClick: async () => {
-          try {
-            const result = await api('/api/push/test', { method: 'POST', body: {} });
-            toast(result.sent ? 'Отправлено: смотрите центр уведомлений' : 'Сервер не смог доставить уведомление', result.sent ? 'ok' : 'error');
-          } catch (error) {
-            toast(error?.message || 'Не удалось отправить проверку');
-          }
-          return false;
-        },
-      },
-    ],
-  });
+  armPushPermission();
 }
 
 /* ---------------------- ярлык на домашний экран ---------------------- */
@@ -5874,7 +5711,7 @@ async function bootStart() {
 /* Приложение открыли по ссылке из уведомления — сразу нужный диалог. */
   openChatFromUrl();
   /* Уведомления и бейдж: подписка этого устройства и переход из уведомления. */
-  void initPush();
+  void ensurePush();
   clearAppBadge();
   /* Телефон вернулся из сна, вкладку открыли снова, сеть восстановилась —
      догоняем задачи, которые всё это время шли на сервере, и заодно
