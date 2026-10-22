@@ -91,7 +91,7 @@ if (mode === 'status') {
     { name: 'DSHOW_PORT', value: '3123', isSecret: false, type: 'RUN' },
     { name: 'DSHOW_DATA_DIR', value: '/data', isSecret: false, type: 'RUN' },
     { name: 'DSHOW_TRUST_PROXY', value: '1', isSecret: false, type: 'RUN' },
-    { name: 'DSHOW_ADMIN_USER', value: 'DSHOPENWEB', isSecret: false, type: 'RUN' },
+    { name: 'DSHOW_ADMIN_USER', value: 'DSH', isSecret: false, type: 'RUN' },
     { name: 'DSHOW_ADMIN_PASSWORD', value: adminPassword, isSecret: true, type: 'RUN' },
     { name: 'DSHOW_DEEPSEEK_KEY', value: keys.DEEPSEEK_API_KEY, isSecret: true, type: 'RUN' },
     { name: 'OPENROUTER_API_KEY', value: keys.OPENROUTER_API_KEY, isSecret: true, type: 'RUN' },

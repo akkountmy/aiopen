@@ -25,7 +25,7 @@ const MODEL_PORT = 3411;
 const APP_PORT = 3412;
 const BASE = `http://127.0.0.1:${APP_PORT}`;
 const DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'dshow-steps-'));
-const ADMIN = { username: 'DSHOPENWEB', password: 'TestPass-12345' };
+const ADMIN = { username: 'DSH', password: 'TestPass-12345' };
 const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36';
 

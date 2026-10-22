@@ -49,6 +49,11 @@ function overlap(a, b) {
 
 const SEED_FILE = path.join(DATA_DIR, 'admin-seed.json');
 
+/* Заводские ники администратора прошлых версий. Совсем короткий ник (DSH)
+   занял место длинного, и учётные записи, созданные раньше, надо перенести,
+   а не заводить заново: иначе пропали бы пароль, баланс, проекты и диалоги. */
+const LEGACY_ADMIN_NAMES = new Set(['dshopenweb']);
+
 function emptyState() {
   return {
     version: 2,
@@ -123,6 +128,9 @@ class Store {
     this.pruneSessions();
     this.migrate();
     this.migrateUploadsIntoRoot();
+    /* Ник администратора задаётся настройкой; в данных мог остаться прежний
+       заводской — переносим его, пока не завели посторонних записей. */
+    this.renameLegacyAdmin(adminUsername);
 
     if (this.state.users.length === 0) {
       let record = null;
@@ -161,6 +169,29 @@ class Store {
 
     /* Если аккаунт в системе один, владелец наследства известен сразу. */
     if (this.state.users.length === 1) this.claimOrphans(this.state.users[0].id);
+  }
+
+  /**
+   * Заводской ник администратора сменился. Если в данных лежит прежний, просто
+   * переименовываем ту же запись: пароль, баланс, проекты и диалоги остаются на
+   * месте, ник в следующий вход — новый. Ник, выбранный человеком вручную, не
+   * трогаем: переименование идёт только из списка прежних заводских имён.
+   */
+  renameLegacyAdmin(adminUsername) {
+    if (!adminUsername) return false;
+    const lower = String(adminUsername).toLowerCase();
+    const clash = this.state.users.find((user) => user.usernameLower === lower);
+    if (clash) return false;
+    const legacy = this.state.users.find(
+      (user) => user.role === 'admin' && LEGACY_ADMIN_NAMES.has(user.usernameLower),
+    );
+    if (!legacy) return false;
+    const previous = legacy.username;
+    legacy.username = String(adminUsername);
+    legacy.usernameLower = lower;
+    this.save();
+    console.log(`[admin] Ник администратора перенесён: ${previous} → ${adminUsername}`);
+    return true;
   }
 
   /**

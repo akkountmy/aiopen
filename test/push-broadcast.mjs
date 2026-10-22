@@ -6,7 +6,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 
 const BASE = process.env.PUSH_BASE || 'http://127.0.0.1:3141';
-const ADMIN = process.env.PUSH_USER || 'DSHOPENWEB';
+const ADMIN = process.env.PUSH_USER || 'DSH';
 const ADMIN_PASS = process.env.PUSH_PASS || 'test-only-pass-123';
 const DATA = path.resolve(process.env.PUSH_DATA || '.tmp/push-data');
 

@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 
 const BASE = process.env.DSHOW_BASE || 'https://dshopen-vladimir00177.msk1.amvera.tech';
-const USER = process.env.DSHOW_USER || 'DSHOPENWEB';
+const USER = process.env.DSHOW_USER || 'DSH';
 const PASS = process.env.DSHOW_PASS;
 if (!PASS) throw new Error('нет DSHOW_PASS');
 

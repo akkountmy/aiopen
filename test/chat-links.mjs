@@ -11,7 +11,7 @@ import { spawn } from 'node:child_process';
 
 const ROOT = path.resolve('.');
 const BASE = process.env.DSHOW_BASE || 'http://127.0.0.1:3123';
-const USER = process.env.DSHOW_USER || 'DSHOPENWEB';
+const USER = process.env.DSHOW_USER || 'DSH';
 const PASS = process.env.DSHOW_PASS || '';
 const STAMP = Date.now().toString().slice(-6);
 const PROJECT = `Проверка ссылок в ответах ${STAMP}`;

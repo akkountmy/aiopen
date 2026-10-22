@@ -3,7 +3,7 @@ import path from 'node:path';
 import { DATA_DIR } from '../src/config.mjs';
 import { hashPassword } from '../src/security.mjs';
 
-const username = process.argv[2] || process.env.DSHOW_ADMIN_USER || 'DSHOPENWEB';
+const username = process.argv[2] || process.env.DSHOW_ADMIN_USER || 'DSH';
 const password = process.argv[3] || process.env.DSHOW_ADMIN_PASSWORD;
 
 if (!password) {

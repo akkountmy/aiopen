@@ -23,7 +23,7 @@ const APP_PORT = 3408;
 const CDP_PORT = 9433;
 const BASE = `http://127.0.0.1:${APP_PORT}`;
 const DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'dshow-ui-runs-'));
-const ADMIN = { username: 'DSHOPENWEB', password: 'TestPass-12345' };
+const ADMIN = { username: 'DSH', password: 'TestPass-12345' };
 const STAMP = Date.now().toString().slice(-6);
 const SECOND_PROJECT = `Второй проект ${STAMP}`;
 

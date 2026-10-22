@@ -709,6 +709,30 @@ try {
     ? ok('диалоги идут в порядке создания', chatOrder.join(' / '))
     : fail('порядок диалогов', JSON.stringify(chatOrder));
 
+  /* 15. Дашборд на компьютере занимает третью колонку сам: панель файлов в это
+     время убрана. Правило спрятано в медиазапрос для широкого экрана, поэтому
+     на телефоне ящик файлов продолжает выезжать (см. test/ui-mobile.mjs). */
+  await evaluate(`document.getElementById('dashboardBtn').click()`);
+  await waitFor(`document.getElementById('app').classList.contains('dash-open')`);
+  const dashDesktop = await evaluate(`(() => {
+    const panel = document.getElementById('filesPanel');
+    const app = document.getElementById('app');
+    return {
+      filesDisplay: getComputedStyle(panel).display,
+      columns: getComputedStyle(app).gridTemplateColumns.split(' ').filter(Boolean).length,
+      viewport: window.innerWidth,
+    };
+  })()`);
+  dashDesktop.viewport > 1100 && dashDesktop.filesDisplay === 'none'
+    ? ok('в дашборде на компьютере колонка файлов убрана')
+    : fail('панель файлов в дашборде на компьютере', JSON.stringify(dashDesktop));
+  await evaluate(`document.getElementById('dashboardBtn').click()`);
+  await waitFor(`!document.getElementById('app').classList.contains('dash-open')`);
+  const filesBack = await evaluate(`getComputedStyle(document.getElementById('filesPanel')).display`);
+  filesBack !== 'none'
+    ? ok('после дашборда панель файлов возвращается')
+    : fail('панель файлов не вернулась', filesBack);
+
   /* Уборка за собой: созданные для проверки порядка проекты не нужны. */
   await evaluate(`(async () => {
     const boot = await (await fetch('/api/bootstrap')).json();

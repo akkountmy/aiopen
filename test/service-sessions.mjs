@@ -13,7 +13,7 @@ import path from 'node:path';
 const PORT = 3199;
 const BASE = `http://127.0.0.1:${PORT}`;
 const DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'dshow-sessions-'));
-const ADMIN = { username: 'DSHOPENWEB', password: 'TestPass-12345' };
+const ADMIN = { username: 'DSH', password: 'TestPass-12345' };
 
 const UAS = {
   desktop: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36',

@@ -17,7 +17,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-const ADMIN = { username: 'DSHOPENWEB', password: 'TestPass-12345' };
+const ADMIN = { username: 'DSH', password: 'TestPass-12345' };
 const UA =
   'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Mobile Safari/537.36 DSH-OPEN-WEB-standalone';
 

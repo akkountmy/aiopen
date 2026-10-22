@@ -14,7 +14,7 @@ import path from 'node:path';
 import JSZip from 'jszip';
 
 const BASE = (process.env.P1_BASE || 'https://dshopen-vladimir00177.msk1.amvera.tech').replace(/\/+$/, '');
-const USER = process.env.P1_USER || 'DSHOPENWEB';
+const USER = process.env.P1_USER || 'DSH';
 const PASS = process.env.P1_PASS || '';
 const TIMEOUT_MS = Number(process.env.P1_TIMEOUT_MS || 240000);
 

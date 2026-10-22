@@ -249,7 +249,7 @@ export const VISION = {
 };
 
 export const ADMIN = {
-  username: process.env.DSHOW_ADMIN_USER || 'DSHOPENWEB',
+  username: process.env.DSHOW_ADMIN_USER || 'DSH',
   password: process.env.DSHOW_ADMIN_PASSWORD || '',
   displayName: 'Администратор',
 };

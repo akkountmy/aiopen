@@ -256,6 +256,39 @@ try {
     ? ok('Escape закрывает ящик файлов')
     : fail('закрытие ящика файлов', JSON.stringify(closedState.files));
 
+  // 3.1. В дашборде правый блок тоже должен выезжать: панель файлов раньше
+  //      пряталась правилом !important без учёта ширины экрана, и кнопка-папка
+  //      в шапке на телефоне не открывала ничего.
+  await cdp.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
+  await goto(BASE + '/');
+  await waitFor(`!!document.getElementById('app') && !document.getElementById('app').classList.contains('hidden')`);
+  await evaluate(`document.getElementById('dashboardBtn').click()`);
+  const dashShown = await waitFor(`document.getElementById('app').classList.contains('dash-open')`);
+  dashShown ? ok('дашборд открывается на телефоне') : fail('дашборд на телефоне не открылся');
+  if (process.env.DSHOW_MOBILE_SHOT) {
+    const shot = await cdp.send('Page.captureScreenshot', { format: 'png' });
+    fs.writeFileSync(process.env.DSHOW_MOBILE_SHOT.replace('.png', '-dashboard.png'), Buffer.from(shot.data, 'base64'));
+  }
+  await evaluate(`document.getElementById('filesBtn').click()`);
+  await waitFor(`document.getElementById('app').classList.contains('files-open')`);
+  const dashDrawer = await evaluate(DRAWERS);
+  dashDrawer.filesOpen ? ok('в дашборде ящик файлов открывается') : fail('ящик файлов в дашборде', JSON.stringify(dashDrawer));
+  const dashPanelOnScreen =
+    dashDrawer.files &&
+    dashDrawer.files.display !== 'none' &&
+    dashDrawer.files.visibility === 'visible' &&
+    dashDrawer.files.right === dashDrawer.viewport;
+  dashPanelOnScreen
+    ? ok('в дашборде панель файлов видна на экране', `${dashDrawer.files.width} px`)
+    : fail('панель файлов в дашборде скрыта', JSON.stringify(dashDrawer.files));
+  await evaluate(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`);
+  await waitFor(`!document.getElementById('app').classList.contains('files-open')`);
+  await evaluate(`document.getElementById('dashboardBtn').click()`);
+  await waitFor(`!document.getElementById('app').classList.contains('dash-open')`);
+  (await evaluate(`!document.getElementById('app').classList.contains('dash-open')`))
+    ? ok('дашборд закрывается, ящик убран')
+    : fail('дашборд не закрылся');
+
   // 4. файл в приложении-ярлыке: тап открывает своё окно просмотра, а
   //    «Скачать» оттуда не уводит из приложения. Раньше ссылка отдавала файл
   //    системе: открывалось чужое окно «чем открыть файл», из которого не было
