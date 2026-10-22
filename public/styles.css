@@ -4623,3 +4623,40 @@ body.resizing {
   font-size: var(--fs-12);
   white-space: nowrap;
 }
+
+/* ------------------- шапка на телефоне: собранная правая группа -----------------
+   «Дашборд», учётная запись, тема и папка стояли в 40-пиксельных коробках: между
+   значками набегало по 20 px воздуха, а сама группа упиралась в край экрана.
+   Коробки уже (36 px), отступ шапки справа тоньше, ник в чипе подрезан — значки
+   встают ближе друг к другу и правее. Высоту не трогаем: 40 px остаётся, палец
+   попадает по кнопке без прицеливания. */
+@media (max-width: 1100px) {
+  .topbar {
+    padding-right: max(2px, env(safe-area-inset-right, 0px));
+  }
+  .topbar .topbar-right {
+    gap: 0;
+  }
+  .topbar .topbar-right .btn-icon,
+  .topbar .topbar-right .dash-btn {
+    width: 36px;
+  }
+  .topbar .topbar-right .user-chip-top {
+    padding: 0 6px;
+    gap: 5px;
+  }
+  .topbar .topbar-right .user-chip-top .user-name {
+    max-width: 92px;
+  }
+}
+
+/* Совсем узкий экран: значки те же 36 px, но и высота 38, чтобы строка шапки
+   не становилась выше соседних элементов. */
+@media (max-width: 420px) {
+  .topbar .topbar-right .dash-btn {
+    height: 38px;
+  }
+  .topbar .topbar-right .user-chip-top .user-name {
+    max-width: 82px;
+  }
+}

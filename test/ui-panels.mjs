@@ -709,29 +709,34 @@ try {
     ? ok('диалоги идут в порядке создания', chatOrder.join(' / '))
     : fail('порядок диалогов', JSON.stringify(chatOrder));
 
-  /* 15. Дашборд на компьютере занимает третью колонку сам: панель файлов в это
-     время убрана. Правило спрятано в медиазапрос для широкого экрана, поэтому
-     на телефоне ящик файлов продолжает выезжать (см. test/ui-mobile.mjs). */
+  /* 15. Дашборд на компьютере занимает место ленты: лента и поле ввода скрыты,
+     дашборд на экране, горизонтальной прокрутки нет. Колонка файлов при этом
+     остаётся рабочей — рядом с дашбордом её видно, а на телефоне это выезжающий
+     ящик (см. test/ui-mobile.mjs). Проверяем саму подмену и чистый возврат. */
   await evaluate(`document.getElementById('dashboardBtn').click()`);
   await waitFor(`document.getElementById('app').classList.contains('dash-open')`);
   const dashDesktop = await evaluate(`(() => {
-    const panel = document.getElementById('filesPanel');
-    const app = document.getElementById('app');
+    const view = document.getElementById('dashboardView');
     return {
-      filesDisplay: getComputedStyle(panel).display,
-      columns: getComputedStyle(app).gridTemplateColumns.split(' ').filter(Boolean).length,
+      scrollDisplay: getComputedStyle(document.querySelector('.scroll')).display,
+      filesDisplay: getComputedStyle(document.getElementById('filesPanel')).display,
+      dashWidth: Math.round(view.getBoundingClientRect().width),
+      overflow: document.documentElement.scrollWidth - window.innerWidth,
       viewport: window.innerWidth,
     };
   })()`);
-  dashDesktop.viewport > 1100 && dashDesktop.filesDisplay === 'none'
-    ? ok('в дашборде на компьютере колонка файлов убрана')
-    : fail('панель файлов в дашборде на компьютере', JSON.stringify(dashDesktop));
+  dashDesktop.scrollDisplay === 'none' && dashDesktop.dashWidth > 300 && dashDesktop.overflow <= 0
+    ? ok('дашборд на компьютере занимает место ленты', `дашборд ${dashDesktop.dashWidth}px, ящик файлов: ${dashDesktop.filesDisplay}`)
+    : fail('дашборд на компьютере', JSON.stringify(dashDesktop));
   await evaluate(`document.getElementById('dashboardBtn').click()`);
   await waitFor(`!document.getElementById('app').classList.contains('dash-open')`);
-  const filesBack = await evaluate(`getComputedStyle(document.getElementById('filesPanel')).display`);
-  filesBack !== 'none'
-    ? ok('после дашборда панель файлов возвращается')
-    : fail('панель файлов не вернулась', filesBack);
+  const afterDash = await evaluate(`(() => ({
+    scrollDisplay: getComputedStyle(document.querySelector('.scroll')).display,
+    filesDisplay: getComputedStyle(document.getElementById('filesPanel')).display,
+  }))()`);
+  afterDash.scrollDisplay !== 'none' && afterDash.filesDisplay !== 'none'
+    ? ok('после дашборда лента и панель файлов возвращаются')
+    : fail('после дашборда', JSON.stringify(afterDash));
 
   /* Уборка за собой: созданные для проверки порядка проекты не нужны. */
   await evaluate(`(async () => {

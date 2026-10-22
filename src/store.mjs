@@ -176,21 +176,36 @@ class Store {
    * переименовываем ту же запись: пароль, баланс, проекты и диалоги остаются на
    * месте, ник в следующий вход — новый. Ник, выбранный человеком вручную, не
    * трогаем: переименование идёт только из списка прежних заводских имён.
+   * Подпись в шапке (displayName) тоже могла остаться прежней: её ставили при
+   * создании записи, и без переноса человек продолжает видеть длинное имя.
    */
   renameLegacyAdmin(adminUsername) {
     if (!adminUsername) return false;
-    const lower = String(adminUsername).toLowerCase();
+    const target = String(adminUsername);
+    const lower = target.toLowerCase();
+    const isLegacy = (value) => LEGACY_ADMIN_NAMES.has(String(value || '').toLowerCase());
+
+    /* Запись уже переименована, а подпись от прошлой версии осталась. */
+    const renamed = this.state.users.find((user) => user.usernameLower === lower && isLegacy(user.displayName));
+    if (renamed) {
+      renamed.displayName = target;
+      this.save();
+      console.log(`[admin] Подпись администратора перенесена: ${target}`);
+      return true;
+    }
+
     const clash = this.state.users.find((user) => user.usernameLower === lower);
     if (clash) return false;
     const legacy = this.state.users.find(
-      (user) => user.role === 'admin' && LEGACY_ADMIN_NAMES.has(user.usernameLower),
+      (user) => user.role === 'admin' && isLegacy(user.usernameLower),
     );
     if (!legacy) return false;
     const previous = legacy.username;
-    legacy.username = String(adminUsername);
+    legacy.username = target;
     legacy.usernameLower = lower;
+    if (isLegacy(legacy.displayName)) legacy.displayName = target;
     this.save();
-    console.log(`[admin] Ник администратора перенесён: ${previous} → ${adminUsername}`);
+    console.log(`[admin] Ник администратора перенесён: ${previous} → ${target}`);
     return true;
   }
 
