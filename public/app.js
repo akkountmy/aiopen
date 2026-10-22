@@ -1235,7 +1235,7 @@ function renderEmpty() {
       <button class="suggestion" type="button" data-prompt="Разбери файлы проекта: выдели главное, ключевые цифры и возможные ошибки.">Разбор файлов</button>
       <button class="suggestion" type="button" data-prompt="Распознай текст на скриншотах или фото проекта и собери его в аккуратный документ.">Фото в текст</button>
       <button class="suggestion" type="button" data-prompt="Найди актуальные данные по теме в интернете, проверь по первоисточникам и оформи ссылки.">Поиск в интернете</button>
-      <button class="suggestion" type="button" data-prompt="Собери готовую страницу сайта или 3D-схему по описанию, с адаптацией под телефон.">Сайт или 3D</button>
+      <button class="suggestion" type="button" data-prompt="Собери по описанию готовую страницу сайта, лендинг или 3D-схему, с адаптацией под телефон. Для лендинга: первый экран с заголовком и призывом к действию, блоки с выгодами и ценами, форма заявки.">Сайт, лендинг или 3D</button>
     </div>`;
   empty.addEventListener('click', (event) => {
     const button = event.target.closest('[data-prompt]');
