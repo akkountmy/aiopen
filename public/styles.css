@@ -4518,3 +4518,108 @@ body.resizing {
   gap: 12px;
   align-items: center;
 }
+
+/* Рассылка из админки: форма объявления и выбор получателей. */
+.push-broadcast {
+  margin: 0 0 16px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--layer-1);
+}
+
+.push-broadcast-hint {
+  margin: 0 0 12px;
+  color: var(--text-3);
+  font-size: var(--fs-12);
+  line-height: var(--lh-18);
+}
+
+.push-form {
+  display: grid;
+  gap: 2px;
+}
+
+.push-form .field:last-of-type {
+  margin-bottom: 10px;
+}
+
+.push-form textarea {
+  width: 100%;
+  min-height: 76px;
+  padding: 10px 12px;
+  background: var(--layer-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--fs-14);
+  line-height: var(--lh-20);
+  resize: vertical;
+  outline: none;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.push-form textarea:focus {
+  border-color: rgba(86, 134, 254, 0.55);
+  background: var(--layer-3);
+}
+
+.push-form .btn {
+  justify-self: start;
+  margin-top: 4px;
+}
+
+/* Список получателей: прокручивается, чтобы десяток человек не растягивал
+   админку на несколько экранов. */
+.push-picker {
+  display: grid;
+  gap: 6px;
+  max-height: 240px;
+  overflow-y: auto;
+  margin: 2px 0 10px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--layer-2);
+}
+
+.push-pick {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: var(--fs-14);
+  transition: background 0.14s ease;
+}
+
+.push-pick:hover {
+  background: var(--layer-3);
+}
+
+.push-pick.on {
+  background: rgba(86, 134, 254, 0.16);
+}
+
+.push-pick input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.push-pick-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.push-pick-count {
+  color: var(--text-4);
+  font-size: var(--fs-12);
+  white-space: nowrap;
+}

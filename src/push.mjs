@@ -164,13 +164,12 @@ export function forgetUser(userId) {
 }
 
 /**
- * Отправка всем устройствам пользователя. Ошибка одного устройства не мешает
- * остальным. Ответ 404/410/403 означает, что подписка больше не существует
+ * Отправка на список подписок. Ошибка одного устройства не мешает остальным.
+ * Ответ 404/410/403 означает, что подписка больше не существует
  * (переустановили приложение, отозвали разрешение) — её убираем сразу.
  */
-export async function pushToUser(userId, payload) {
-  const list = loadSubs();
-  const mine = list.filter((item) => item.userId === userId);
+async function deliver(subs, payload) {
+  const mine = subs;
   if (!mine.length) return { sent: 0, failed: 0, total: 0 };
   ensureVapid();
   const body = JSON.stringify(payload || {});
@@ -208,4 +207,43 @@ export async function pushToUser(userId, payload) {
   }
   saveSubs(fresh.filter((item) => !dead.includes(item.endpoint)));
   return { sent, failed, total: mine.length };
+}
+
+/** Отправка всем устройствам одного пользователя. */
+export async function pushToUser(userId, payload) {
+  return deliver(
+    loadSubs().filter((item) => item.userId === userId),
+    payload,
+  );
+}
+
+/**
+ * Кому можно писать: пользователи, у которых есть хотя бы одно подключённое
+ * устройство. Нужно администратору для рассылки — он видит, у кого
+ * уведомления действительно включены, а у кого их просто некуда слать.
+ */
+export function pushTargets() {
+  const counts = new Map();
+  let total = 0;
+  for (const item of loadSubs()) {
+    total += 1;
+    counts.set(item.userId, (counts.get(item.userId) || 0) + 1);
+  }
+  return {
+    total,
+    users: [...counts.entries()].map(([userId, devices]) => ({ userId, devices })),
+  };
+}
+
+/**
+ * Рассылка нескольким пользователям сразу (объявление о новой функции и
+ * подобное). Устройства отправляются параллельно; ответ — сколько дошло,
+ * сколько нет и скольким людям вообще было куда писать.
+ */
+export async function pushToUsers(userIds, payload) {
+  const wanted = new Set((Array.isArray(userIds) ? userIds : [userIds]).filter(Boolean).map(String));
+  const subs = loadSubs().filter((item) => wanted.has(item.userId));
+  const result = await deliver(subs, payload);
+  const people = new Set(subs.map((item) => item.userId));
+  return { ...result, users: people.size };
 }

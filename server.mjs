@@ -28,7 +28,14 @@ import { detectKind, extractDocumentText, kindLabel } from './src/docparse.mjs';
 import { previewDocument } from './src/docpreview.mjs';
 import { projectFilesBrief } from './src/filebrief.mjs';
 import { docEngines } from './src/doc/index.mjs';
-import { pushState, pushToUser, subscribe as pushSubscribe, unsubscribe as pushUnsubscribe } from './src/push.mjs';
+import {
+  pushState,
+  pushTargets,
+  pushToUser,
+  pushToUsers,
+  subscribe as pushSubscribe,
+  unsubscribe as pushUnsubscribe,
+} from './src/push.mjs';
 import { approvalMessage, notifyAdmin, suspicionMessage } from './src/notify.mjs';
 import { issueOpenLink, resolveOpenLink, asciiFileName, OPEN_PREFIX } from './src/openlink.mjs';
 import { proofreadText } from './src/proofread.mjs';
@@ -2049,6 +2056,49 @@ async function route(req, res) {
       const admin = requireAdmin(req, res);
       if (!admin) return;
       return sendJson(res, 200, { overview: store.overview(), keys: keyStatus() });
+    }
+    /* --- рассылка уведомлений от администратора ---
+       Объявление о новой функции уходит всем или выбранным пользователям —
+       разумеется, только тем, у кого уведомления включены на устройстве. */
+    if (pathname === '/api/admin/push' && method === 'GET') {
+      const admin = requireAdmin(req, res);
+      if (!admin) return;
+      return sendJson(res, 200, pushTargets(), { 'Cache-Control': 'no-store' });
+    }
+    if (pathname === '/api/admin/push' && method === 'POST') {
+      const admin = requireAdmin(req, res);
+      if (!admin) return;
+      const body = await readJsonBody(req);
+      const title = String(body.title || '').trim();
+      const text = String(body.text || body.body || '').trim();
+      if (!title) return sendError(res, 400, 'Укажите заголовок уведомления');
+      if (title.length > 80) return sendError(res, 400, 'Заголовок длиннее 80 символов');
+      if (!text) return sendError(res, 400, 'Укажите текст уведомления');
+      if (text.length > 300) return sendError(res, 400, 'Текст длиннее 300 символов');
+      const targets = pushTargets();
+      const devicesByUser = new Map(targets.users.map((item) => [item.userId, item.devices]));
+      const requested = [...new Set((Array.isArray(body.userIds) ? body.userIds : []).map(String).filter(Boolean))];
+      const all = body.all === true;
+      const userIds = all ? [...devicesByUser.keys()] : requested.filter((id) => devicesByUser.has(id));
+      /* Про тех, кому уведомления не придут вовсе, сообщаем отдельно: иначе
+         администратор решит, что объявление получили все. */
+      const skipped = all
+        ? store.users().filter((item) => !devicesByUser.has(item.id)).length
+        : requested.filter((id) => !devicesByUser.has(id)).length;
+      if (!userIds.length) {
+        return sendError(res, 409, 'Ни у одного из выбранных не включены уведомления');
+      }
+      const result = await pushToUsers(userIds, {
+        title,
+        body: text,
+        url: '/',
+        kind: 'news',
+        tag: `dsh-news-${Date.now()}`,
+      });
+      console.log(
+        `[push] рассылка от ${admin.username}: принято устройств ${result.sent} из ${result.total}, людей ${result.users}`,
+      );
+      return sendJson(res, 200, { ok: result.sent > 0, ...result, skipped });
     }
     /* Сколько места дано сервису и сколько занято: сторож места проверяет это раз в неделю. */
     if (pathname === '/api/admin/sessions' && method === 'GET') {

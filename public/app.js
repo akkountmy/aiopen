@@ -4114,6 +4114,167 @@ function renderApprovals(body, approvals, refresh) {
   }
 }
 
+/* --- рассылка уведомлений ---
+   Администратор пишет объявление (например, о новой функции) и отправляет его
+   всем или выбранным людям. Доходит только до тех, у кого уведомления включены
+   на устройстве, — это видно заранее в списке получателей. */
+function renderPushBroadcast(body, users) {
+  body.appendChild(el('div', 'admin-section-title', 'Рассылка уведомлений'));
+  const card = el('div', 'push-broadcast');
+  const hint = el('p', 'push-broadcast-hint', 'Смотрим, у кого включены уведомления…');
+
+  const form = el('form', 'push-form');
+  const titleField = el('label', 'field');
+  titleField.appendChild(el('span', 'field-label', 'Заголовок'));
+  const titleInput = el('input');
+  titleInput.placeholder = 'Например: «Новая функция — напоминания»';
+  titleInput.maxLength = 80;
+  titleField.appendChild(titleInput);
+  form.appendChild(titleField);
+
+  const textField = el('label', 'field');
+  textField.appendChild(el('span', 'field-label', 'Текст'));
+  const textInput = el('textarea');
+  textInput.rows = 3;
+  textInput.maxLength = 300;
+  textInput.placeholder = 'Коротко: что появилось и как этим пользоваться';
+  textField.appendChild(textInput);
+  form.appendChild(textField);
+
+  const audienceField = el('label', 'field');
+  audienceField.appendChild(el('span', 'field-label', 'Кому'));
+  const audience = el('select');
+  for (const [value, label] of [
+    ['all', 'Всем, у кого включены уведомления'],
+    ['some', 'Выбранным пользователям'],
+  ]) {
+    const option = el('option', '', label);
+    option.value = value;
+    audience.appendChild(option);
+  }
+  audienceField.appendChild(audience);
+  form.appendChild(audienceField);
+
+  const picker = el('div', 'push-picker');
+  picker.hidden = true;
+  form.appendChild(picker);
+
+  const sendBtn = el('button', 'btn btn-primary', 'Отправить уведомление');
+  sendBtn.type = 'submit';
+  form.appendChild(sendBtn);
+  const note = el('p', 'field-error');
+  form.appendChild(note);
+  const resultLine = el('p', 'push-broadcast-hint');
+  resultLine.hidden = true;
+  form.appendChild(resultLine);
+  card.appendChild(hint);
+  card.appendChild(form);
+  body.appendChild(card);
+
+  /* Получатели — только те, кому есть куда писать: у остальных уведомления
+     выключены или приложение ни разу не открывали. */
+  let devices = new Map();
+  const boxes = [];
+  const renderPicker = () => {
+    picker.innerHTML = '';
+    boxes.length = 0;
+    const available = users.filter((user) => devices.get(user.id));
+    if (!available.length) {
+      picker.appendChild(el('p', 'push-broadcast-hint', 'Пока ни у кого не включены уведомления.'));
+      return;
+    }
+    for (const user of available) {
+      const row = el('label', 'push-pick');
+      const box = el('input');
+      box.type = 'checkbox';
+      box.value = user.id;
+      box.addEventListener('change', () => row.classList.toggle('on', box.checked));
+      const count = devices.get(user.id);
+      row.append(
+        box,
+        el('span', 'push-pick-name', user.displayName || user.username),
+        el('span', 'push-pick-count', `${count} ${plural(count, 'устройство', 'устройства', 'устройств')}`),
+      );
+      picker.appendChild(row);
+      boxes.push(box);
+    }
+  };
+
+  api('/api/admin/push')
+    .then((data) => {
+      devices = new Map((data.users || []).map((item) => [item.userId, item.devices]));
+      const total = Number(data.total) || 0;
+      const people = devices.size;
+      hint.textContent = total
+        ? `Уведомления включены у ${people} ${plural(people, 'человека', 'человек', 'человек')}, устройств: ${total}.`
+        : 'Пока ни у кого не включены уведомления — отправлять некому.';
+      renderPicker();
+    })
+    .catch(() => {
+      hint.textContent = 'Не удалось узнать, у кого включены уведомления.';
+    });
+
+  audience.addEventListener('change', () => {
+    picker.hidden = audience.value !== 'some';
+  });
+
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    note.textContent = '';
+    resultLine.hidden = true;
+    const title = titleInput.value.trim();
+    const text = textInput.value.trim();
+    if (!title) {
+      note.textContent = 'Заполните заголовок';
+      titleInput.focus();
+      return;
+    }
+    if (!text) {
+      note.textContent = 'Заполните текст';
+      textInput.focus();
+      return;
+    }
+    const selected = audience.value === 'some';
+    const userIds = boxes.filter((box) => box.checked).map((box) => box.value);
+    if (selected && !userIds.length) {
+      note.textContent = 'Отметьте хотя бы одного получателя';
+      return;
+    }
+    sendBtn.disabled = true;
+    const caption = sendBtn.textContent;
+    sendBtn.textContent = 'Отправляем…';
+    try {
+      const result = await api('/api/admin/push', {
+        method: 'POST',
+        body: { all: !selected, userIds, title, text },
+      });
+      if (result.sent) {
+        toast(
+          `Уведомление ушло на ${result.sent} ${plural(result.sent, 'устройство', 'устройства', 'устройств')}`,
+          'ok',
+        );
+        titleInput.value = '';
+        textInput.value = '';
+        for (const box of boxes) {
+          box.checked = false;
+          box.closest('.push-pick')?.classList.remove('on');
+        }
+      } else {
+        toast('Ни одно устройство не приняло уведомление', 'error');
+      }
+      if (result.skipped) {
+        resultLine.textContent = `Без уведомлений: ${result.skipped} ${plural(result.skipped, 'пользователь', 'пользователя', 'пользователей')} — им сообщение не придёт.`;
+        resultLine.hidden = false;
+      }
+    } catch (error) {
+      note.textContent = error.message;
+    } finally {
+      sendBtn.disabled = false;
+      sendBtn.textContent = caption;
+    }
+  });
+}
+
 function renderAdmin(body, users, overview, approvals = [], refresh = null) {
   body.innerHTML = '';
   const stats = el('div', 'stats');
@@ -4184,6 +4345,8 @@ function renderAdmin(body, users, overview, approvals = [], refresh = null) {
   body.appendChild(form);
 
   renderApprovals(body, approvals, refresh);
+
+  renderPushBroadcast(body, users);
 
   const list = el('div');
   for (const user of users) {
@@ -5460,7 +5623,7 @@ async function notificationsModal() {
         pushParagraph('Откройте сервис в Chrome, Edge, Safari или Firefox — там уведомления работают.'),
       );
     }
-    openModal({ title: 'Уведомления', subtitle: 'Как в обычном приложении', body, actions: [close] });
+    openModal({ title: 'Уведомления', body, actions: [close] });
     return;
   }
 
@@ -5470,7 +5633,7 @@ async function notificationsModal() {
         'Браузер запретил уведомления для этого сайта. Разрешите их в настройках: нажмите значок замка рядом с адресом → «Уведомления» → «Разрешить», затем обновите страницу.',
       ),
     );
-    openModal({ title: 'Уведомления', subtitle: 'Как в обычном приложении', body, actions: [close] });
+    openModal({ title: 'Уведомления', body, actions: [close] });
     return;
   }
 
@@ -5478,22 +5641,11 @@ async function notificationsModal() {
     body.appendChild(
       pushParagraph('Включите — и узнаете о готовой задаче, даже если приложение закрыто или телефон в кармане.'),
     );
-    const list = el('ul', 'push-list');
-    for (const line of [
-      'задача готова — с началом ответа;',
-      'задача прервалась с ошибкой;',
-      'задача ждёт подтверждения администратора.',
-    ]) {
-      list.appendChild(el('li', '', line));
-    }
-    body.appendChild(list);
     if (homeScreenPlatform() === 'ios' && !openedAsApp()) {
       body.appendChild(pushParagraph('На iPhone уведомления работают у ярлыка с домашнего экрана — добавьте его заранее.'));
     }
-    body.appendChild(pushParagraph('Уведомление не появится, если приложение прямо сейчас открыто на экране: ответ и так виден в диалоге.'));
     openModal({
       title: 'Уведомления',
-      subtitle: 'Как в обычном приложении',
       body,
       actions: [
         { label: 'Не сейчас' },
@@ -5540,7 +5692,6 @@ async function notificationsModal() {
   }
   openModal({
     title: 'Уведомления',
-    subtitle: 'Как в обычном приложении',
     body,
     actions: [
       {
