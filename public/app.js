@@ -625,6 +625,9 @@ function switchAuthForm(mode) {
 /* ------------------------------ app init ------------------------------ */
 
 async function startApp(payload) {
+  /* При открытии ярлыка показываем стартовый экран, при обычной перезагрузке
+     возвращаем открытый диалог. */
+  const freshOpen = openedFresh();
   /* Панель файлов, открытую до перезагрузки, запоминаем до сброса состояния:
      resetClientState затирает память вкладки. */
   const savedUi = readFilesUi();
@@ -646,18 +649,20 @@ async function startApp(payload) {
     }
   }
   const first = state.projects[0];
-  state.expanded.clear();
-  if (first) {
-    state.expanded.add(first.id);
-    state.activeProjectId = first.id;
-  }
-  /* Проект, в котором человек работал: его же и открываем, иначе после
-     перезагрузки панель файлов вернулась бы к чужой папке. */
+  /* Проект, в котором человек работал в момент закрытия: сначала наша
+     постоянная память, затем открытая панель файлов, и только потом первый
+     проект. Проект мог быть удалён с другого устройства — такую запись
+     пропускаем. */
+  const lastProject = lastProjectId();
+  const lastProjectAlive = lastProject && state.projects.some((project) => project.id === lastProject);
   const uiProject = savedUi ? state.projects.find((project) => project.id === savedUi.projectId) : null;
-  if (uiProject) {
-    state.expanded.add(uiProject.id);
-    state.activeProjectId = uiProject.id;
+  const preferredProjectId = (lastProjectAlive ? lastProject : '') || uiProject?.id || first?.id || '';
+  state.expanded.clear();
+  if (preferredProjectId) {
+    state.expanded.add(preferredProjectId);
+    state.activeProjectId = preferredProjectId;
   }
+  rememberProject(state.activeProjectId);
   /* Панель файлов показывает файлы проекта диалога: отдельного выбора в её
      заголовке нет, поэтому активный проект — единственный источник. */
   syncFilesProjectLabel();
@@ -665,14 +670,22 @@ async function startApp(payload) {
      чтобы работа выглядела непрерывной. */
   for (const run of payload.runs || []) trackRun(run.id, run.chatId);
   renderSidebar();
-  /* Открываем диалог с живой задачей, иначе последний открытый, иначе первый
-     в проекте — после перезагрузки человек возвращается туда, где работал. */
-  const runningChat = (payload.runs || []).find((run) => findChatProject(run.chatId));
-  const remembered = lastChatId();
-  const target =
-    runningChat?.chatId || (remembered && findChatProject(remembered) ? remembered : '') || activeProject()?.chats?.[0]?.id || '';
-  if (target) await openChat(target);
-  else renderThread();
+  if (freshOpen) {
+    /* Стартовый экран: поле ввода и подсказки, но без автоматически открытого
+       диалога — человек сам решит, продолжить прошлый разговор или начать новый. */
+    state.chat = null;
+    state.activeChatId = null;
+    renderThread();
+  } else {
+    /* Перезагрузка страницы: открываем диалог с живой задачей, иначе последний
+       открытый, иначе первый в проекте — человек возвращается туда, где работал. */
+    const runningChat = (payload.runs || []).find((run) => findChatProject(run.chatId));
+    const remembered = lastChatId();
+    const target =
+      runningChat?.chatId || (remembered && findChatProject(remembered) ? remembered : '') || activeProject()?.chats?.[0]?.id || '';
+    if (target) await openChat(target);
+    else renderThread();
+  }
   updateCrumbs();
   watchWideBlocks();
   /* Панель «Файлы проекта», открытая до перезагрузки, возвращается открытой:
@@ -721,6 +734,7 @@ function syncFilesProjectLabel() {
 /* Переключение диалога или проекта просто освежает подпись: файлы панели уже
    принадлежат активному проекту. */
 function followActiveProject() {
+  rememberProject(state.activeProjectId);
   syncFilesProjectLabel();
 }
 
@@ -952,6 +966,43 @@ function findChatProject(chatId) {
   return state.projects.find((project) => (project.chats || []).some((chat) => chat.id === chatId)) || null;
 }
 
+/* Последний проект, в котором человек работал. В отличие от открытого диалога,
+   он нужен и тогда, когда в момент закрытия приложения человек стоял на
+   стартовом экране: запоминаем проект при каждом переключении, а не только
+   вместе с диалогом. */
+const LAST_PROJECT_KEY = 'dshow.lastProject';
+
+function rememberProject(projectId) {
+  if (!state.user || !projectId) return;
+  try {
+    localStorage.setItem(LAST_PROJECT_KEY, projectId);
+  } catch {
+    /* Приватный режим браузера — не критично. */
+  }
+}
+
+function lastProjectId() {
+  try {
+    return localStorage.getItem(LAST_PROJECT_KEY) || '';
+  } catch {
+    return '';
+  }
+}
+
+/* Ярлык-приложение открыли заново или страницу просто обновили? При
+   перезагрузке возвращаем человека в открытый диалог, а при новом запуске
+   показываем стартовый экран в последнем проекте. */
+function openedFresh() {
+  try {
+    const nav = performance.getEntriesByType?.('navigation')?.[0];
+    if (nav?.type) return nav.type === 'navigate';
+    if (performance.navigation) return performance.navigation.type === 0;
+  } catch {
+    /* остаёмся на безопасном варианте — как при новом запуске */
+  }
+  return true;
+}
+
 async function openChat(chatId) {
   /* Переключение во время ответа теперь разрешено: работа идёт на сервере, а
      вкладка просто показывает другой диалог и возвращается к потоку позже. */
@@ -1035,12 +1086,14 @@ function renderEmpty() {
   empty.innerHTML = `
     <div class="empty-mark">${WHALE_SVG}</div>
     <h2 class="empty-title">Чем помочь?</h2>
-    <p class="empty-sub">Поставьте задачу — файлы, расчёты и поиск подключу сам.</p>
-    <div class="suggestions">
-      <button class="suggestion" data-prompt="Проанализируй таблицу из файлов проекта и сделай краткий вывод с ключевыми числами.">Разобрать таблицу и найти главное</button>
-      <button class="suggestion" data-prompt="Распознай текст на изображениях проекта и собери из него структурированный документ.">Распознать текст со скриншотов</button>
-      <button class="suggestion" data-prompt="Подготовь отчёт в Word и Excel по данным проекта, с таблицами и выводами.">Сделать отчёт Word и Excel</button>
-      <button class="suggestion" data-prompt="Найди актуальную информацию по теме в интернете, проверь по первоисточникам и оформи ссылки.">Найти и проверить информацию</button>
+    <p class="empty-sub">Выберите подсказку или напишите задачу.</p>
+    <div class="suggestions" aria-label="Возможности ассистента">
+      <button class="suggestion" type="button" data-prompt="Подготовь отчёт в Word и Excel по данным проекта: таблицы, расчёты и выводы.">Word и Excel</button>
+      <button class="suggestion" type="button" data-prompt="Сделай презентацию по материалам проекта: слайды с тезисами, цифрами и выводами.">Презентация</button>
+      <button class="suggestion" type="button" data-prompt="Разбери файлы проекта: выдели главное, ключевые цифры и возможные ошибки.">Разбор файлов</button>
+      <button class="suggestion" type="button" data-prompt="Распознай текст на скриншотах или фото проекта и собери его в аккуратный документ.">Фото в текст</button>
+      <button class="suggestion" type="button" data-prompt="Найди актуальные данные по теме в интернете, проверь по первоисточникам и оформи ссылки.">Поиск в интернете</button>
+      <button class="suggestion" type="button" data-prompt="Собери готовую страницу сайта или 3D-схему по описанию, с адаптацией под телефон.">Сайт или 3D</button>
     </div>`;
   empty.addEventListener('click', (event) => {
     const button = event.target.closest('[data-prompt]');
@@ -5717,7 +5770,12 @@ async function bootStart() {
      догоняем задачи, которые всё это время шли на сервере, и заодно
      подтягиваем свежие проекты, диалоги и файлы. */
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden) return;
+    if (document.hidden) {
+      /* Свернули или закрыли приложение — запоминаем проект на случай, если
+         вкладка не успеет дожить до pagehide. */
+      rememberProject(state.activeProjectId);
+      return;
+    }
     if (bootPending) {
       bootStart();
       return;
@@ -5740,6 +5798,8 @@ async function bootStart() {
       syncFromServer();
     }
   });
+  /* Закрытие ярлыка-приложения: последний проект должен пережить закрытие. */
+  window.addEventListener('pagehide', () => rememberProject(state.activeProjectId));
   /* Пока вкладка открыта, раз в 20 секунд сверяемся с сервером сами: документы,
      сделанные с телефона, появляются в панели файлов без перезагрузки. */
   setInterval(() => {

@@ -1441,12 +1441,14 @@ body.resizing {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
-  width: min(560px, 100%);
+  /* Шесть коротких подсказок по две в ряд: колонки уже прежних, поэтому
+     блоки читаются как компактные кнопки, а не как широкие полосы. */
+  width: min(430px, 100%);
 }
 
 .suggestion {
   text-align: left;
-  padding: 11px 13px;
+  padding: 10px 12px;
   background: var(--layer-1);
   border: 1px solid var(--line);
   border-radius: var(--radius-md);
@@ -3420,14 +3422,14 @@ body.resizing {
     -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 18px), transparent);
     mask-image: linear-gradient(to right, #000 calc(100% - 18px), transparent);
   }
-  /* Подсказки на телефоне — по две в ряд: четыре кнопки занимают два ряда. */
+  /* Подсказки на телефоне — по две в ряд: шесть кнопок занимают три ряда. */
   .suggestions {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 8px;
-    width: 100%;
+    width: min(100%, 430px);
   }
   .suggestion {
-    padding: 12px 13px;
+    padding: 11px 12px;
   }
   .stats {
     grid-template-columns: repeat(2, minmax(0, 1fr));

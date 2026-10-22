@@ -1,5 +1,5 @@
 // Проверка подсказок в мобильной версии в настоящем Chrome через DevTools-протокол (без зависимостей):
-//   - четыре карточки «Чем помочь?» стоят по две в ряд на телефоне (390 px и 320 px);
+//   - шесть коротких карточек «Чем помочь?» стоят по две в ряд на телефоне (390 px и 320 px);
 //   - ничего не вылезает по горизонтали, текст карточек не обрезан;
 //   - «Файлы проекта» выезжают таким же ящиком, как «Проекты», и закрываются крестиком.
 //
@@ -136,9 +136,9 @@ try {
   loginStatus === 200 ? ok('вход в сервис') : fail('вход', loginStatus);
 
   // 2. пустой диалог — именно там видны подсказки «Чем помочь?»
-  //    Заводим отдельный проект: сервер отдаёт проекты по updatedAt, поэтому
-  //    свежий оказывается первым, и приложение открывает его единственный
-  //    (пустой) диалог. Так тест не зависит от того, что уже лежит у пользователя.
+  //    Заводим отдельный проект: приложение показывает стартовый экран в
+  //    последнем проекте, а свежий после перезагрузки оказывается первым.
+  //    Так тест не зависит от того, что уже лежит у пользователя.
   const target = await evaluate(
     `(async () => {
        const project = (await (await fetch('/api/projects', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({name:'Проверка мобильной версии'})})).json()).project;
@@ -170,9 +170,9 @@ try {
          viewport: window.innerWidth,
        };
      })()`);
-    layout.cards.length === 4 ? ok(`подсказки при ${width}px: четыре карточки`) : fail(`карточки при ${width}px`, String(layout.cards.length));
+    layout.cards.length === 6 ? ok(`подсказки при ${width}px: шесть карточек`) : fail(`карточки при ${width}px`, String(layout.cards.length));
     layout.columns === 2 ? ok(`две карточки в ряд при ${width}px`, `ширина ${layout.cards[0].w}px`) : fail(`колонки при ${width}px`, `колонок ${layout.columns}`);
-    layout.rows === 2 ? ok(`два ряда при ${width}px`) : fail(`ряды при ${width}px`, `рядов ${layout.rows}`);
+    layout.rows === 3 ? ok(`три ряда при ${width}px`) : fail(`ряды при ${width}px`, `рядов ${layout.rows}`);
     layout.cards[0].x < layout.cards[1].x && layout.cards[0].y === layout.cards[1].y
       ? ok(`первая пара стоит рядом при ${width}px`)
       : fail(`раскладка при ${width}px`, JSON.stringify(layout.cards));
