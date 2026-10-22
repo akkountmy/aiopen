@@ -1,5 +1,5 @@
-// Проверка подсказок в мобильной версии в настоящем Chrome через DevTools-протокол (без зависимостей):
-//   - семь коротких карточек «Чем помочь?» стоят по две в ряд на телефоне (390 px и 320 px),
+﻿// Проверка подсказок в мобильной версии в настоящем Chrome через DevTools-протокол (без зависимостей):
+//   - шесть коротких карточек «Чем помочь?» стоят по две в ряд на телефоне (390 px и 320 px),
 //     последняя занимает всю ширину;
 //   - ничего не вылезает по горизонтали, текст карточек не обрезан;
 //   - «Файлы проекта» выезжают таким же ящиком, как «Проекты», и закрываются крестиком.
@@ -171,9 +171,9 @@ try {
          viewport: window.innerWidth,
        };
      })()`);
-    layout.cards.length === 7 ? ok(`подсказки при ${width}px: семь карточек`) : fail(`карточки при ${width}px`, String(layout.cards.length));
+    layout.cards.length === 6 ? ok(`подсказки при ${width}px: шесть карточек`) : fail(`карточки при ${width}px`, String(layout.cards.length));
     layout.columns === 2 ? ok(`две карточки в ряд при ${width}px`, `ширина ${layout.cards[0].w}px`) : fail(`колонки при ${width}px`, `колонок ${layout.columns}`);
-    layout.rows === 4 ? ok(`четыре ряда при ${width}px`) : fail(`ряды при ${width}px`, `рядов ${layout.rows}`);
+    layout.rows === 3 ? ok(`три ряда при ${width}px`) : fail(`ряды при ${width}px`, `рядов ${layout.rows}`);
     layout.cards[0].x < layout.cards[1].x && layout.cards[0].y === layout.cards[1].y
       ? ok(`первая пара стоит рядом при ${width}px`)
       : fail(`раскладка при ${width}px`, JSON.stringify(layout.cards));

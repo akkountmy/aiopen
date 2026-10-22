@@ -1631,24 +1631,33 @@ html.kb-open .scroll-jump {
 
 .suggestions {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
-  /* Шесть коротких подсказок по две в ряд: колонки уже прежних, поэтому
-     блоки читаются как компактные кнопки, а не как широкие полосы. */
-  width: min(430px, 100%);
+  /* Шесть коротких подсказок по три в ряд: колонки узкие, поэтому кнопки
+     компактные — мелкий кегль и меньше отступы. Ширина блока подобрана так,
+     чтобы три кнопки с самым длинным текстом («Поиск в интернете») влезали в
+     строку без переноса. */
+  width: min(560px, 100%);
+}
+
+/* Если подсказок станет нечётное число, последняя иначе оставила бы пустые
+   клетки справа: в неполном ряду она занимает всю ширину. Сейчас подсказок
+   шесть, правило про запас. */
+.suggestions > .suggestion:last-child:nth-child(odd) {
+  grid-column: 1 / -1;
 }
 
 .suggestion {
   text-align: left;
-  padding: 10px 12px;
+  padding: 8px 10px;
   background: var(--layer-1);
   border: 1px solid var(--line);
   border-radius: var(--radius-md);
   color: var(--text-2);
-  font-size: var(--fs-13);
+  font-size: var(--fs-12);
   cursor: pointer;
   transition: background 0.14s ease, border-color 0.14s ease, color 0.14s ease;
-  line-height: var(--lh-20);
+  line-height: var(--lh-18);
 }
 
 .suggestion:hover {
@@ -3659,7 +3668,9 @@ html.kb-open .scroll-jump {
     -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 18px), transparent);
     mask-image: linear-gradient(to right, #000 calc(100% - 18px), transparent);
   }
-  /* Подсказки на телефоне — по две в ряд: шесть кнопок занимают три ряда. */
+  /* Подсказки на телефоне — по две в ряд и прежним кеглем: три узкие кнопки
+     в строку на 390 px дали бы переносы, а мелкий текст читается хуже. Шесть
+     кнопок занимают ровно три ряда. */
   .suggestions {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 8px;
@@ -3667,6 +3678,8 @@ html.kb-open .scroll-jump {
   }
   .suggestion {
     padding: 11px 12px;
+    font-size: var(--fs-13);
+    line-height: var(--lh-20);
   }
   .stats {
     grid-template-columns: repeat(2, minmax(0, 1fr));

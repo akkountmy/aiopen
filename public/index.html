@@ -118,11 +118,11 @@
           </div>
           <div class="topbar-right">
             <span id="balanceChip" class="balance-chip hidden" aria-label="Баланс"></span>
-            <!-- Профиль стоит в шапке первым, за ним — переключатель темы,
-                 «Дашборд» и папка. На телефоне от «Дашборда» остаётся только
-                 значок, чтобы шапка не расползлась, а ник уходит в
-                 раскрывающийся список: кнопка профиля остаётся квадратом, как
-                 соседи, и ряд значков справа держит одинаковый шаг. -->
+            <!-- Профиль стоит в шапке первым, за ним — «Дашборд», тема и папка.
+                 На телефоне от «Дашборда» остаётся только значок, чтобы шапка не
+                 расползлась, а ник уходит в раскрывающийся список: кнопка профиля
+                 остаётся квадратом, как соседи, и ряд значков справа держит
+                 одинаковый шаг. -->
             <button id="userChip" class="user-chip user-chip-top" type="button" title="Учётная запись" aria-haspopup="menu">
               <!-- Ник идёт первым, значок человечка — за ним: так подпись
                    читается как имя учётной записи, а рисунок только подтверждает
@@ -135,13 +135,13 @@
               <svg class="account-glyph" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="7" r="3.2" /><path d="M4.5 16.2c.9-2.7 3-4.2 5.5-4.2s4.6 1.5 5.5 4.2" /></svg>
               <svg class="chev" viewBox="0 0 20 20" aria-hidden="true"><path d="M6 8l4 4 4-4" /></svg>
             </button>
-            <button id="themeToggle" class="btn btn-ghost btn-icon theme-toggle" type="button" title="Светлая тема" aria-label="Переключить тему">
-              <svg class="icon-moon" viewBox="0 0 20 20" aria-hidden="true"><path d="M16 11.5A6.5 6.5 0 018.5 4a6.5 6.5 0 107.5 7.5z" /></svg>
-              <svg class="icon-sun hidden" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="3.6" /><path d="M10 2v1.8M10 16.2V18M2 10h1.8M16.2 10H18M4.3 4.3l1.3 1.3M14.4 14.4l1.3 1.3M15.7 4.3l-1.3 1.3M5.6 14.4l-1.3 1.3" /></svg>
-            </button>
             <button id="dashboardBtn" class="btn btn-ghost dash-btn" type="button" title="Дашборд: постоянные задания" aria-label="Дашборд" aria-pressed="false">
               <svg class="dash-btn-ico" viewBox="0 0 20 20" aria-hidden="true"><rect x="3.2" y="3.2" width="5.6" height="5.6" rx="1.5" /><rect x="11.2" y="3.2" width="5.6" height="5.6" rx="1.5" /><rect x="3.2" y="11.2" width="5.6" height="5.6" rx="1.5" /><rect x="11.2" y="11.2" width="5.6" height="5.6" rx="1.5" /></svg>
               <span class="dash-btn-label">Дашборд</span>
+            </button>
+            <button id="themeToggle" class="btn btn-ghost btn-icon theme-toggle" type="button" title="Светлая тема" aria-label="Переключить тему">
+              <svg class="icon-moon" viewBox="0 0 20 20" aria-hidden="true"><path d="M16 11.5A6.5 6.5 0 018.5 4a6.5 6.5 0 107.5 7.5z" /></svg>
+              <svg class="icon-sun hidden" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="3.6" /><path d="M10 2v1.8M10 16.2V18M2 10h1.8M16.2 10H18M4.3 4.3l1.3 1.3M14.4 14.4l1.3 1.3M15.7 4.3l-1.3 1.3M5.6 14.4l-1.3 1.3" /></svg>
             </button>
             <!-- Панель «Файлы проекта» открыта всегда, поэтому значка папки на
                  большом экране нет: кнопка нужна только до 1100 px, где панель

@@ -3,6 +3,7 @@ import path from 'node:path';
 import {
   BILLING,
   CHATS_DIR,
+  DASHBOARD_FILES_DIR,
   DATA_DIR,
   DEVICE,
   DEVICE_KINDS,
@@ -10,6 +11,15 @@ import {
   WORKSPACES_DIR,
   sessionLimit,
 } from './config.mjs';
+import {
+  DASHBOARD_BLOCKS,
+  DASHBOARD_LIMITS,
+  applyDashboardPatch,
+  dashboardBlock,
+  defaultDashboardTask,
+  nextRunAt,
+  withoutCompanySize,
+} from './dashboard.mjs';
 import { MEMORY_LIMITS, normalizeFact } from './memory.mjs';
 import { hashPassword, sessionKind, verifyPassword } from './security.mjs';
 import { atomicWrite, nowIso, readJson, uid, uniqueFileName } from './util.mjs';
@@ -73,6 +83,8 @@ function emptyState() {
     attachments: {},
     usage: {},
     approvals: [],
+    /* Постоянные задания «Дашборда»: шесть блоков на каждый аккаунт. */
+    dashboard: [],
     settings: {
       registrationOpen: false,
       visionEnabled: true,
@@ -262,6 +274,10 @@ class Store {
     }
     if (!Array.isArray(this.state.approvals)) {
       this.state.approvals = [];
+      changed = true;
+    }
+    if (!Array.isArray(this.state.dashboard)) {
+      this.state.dashboard = [];
       changed = true;
     }
     if (!this.state.kicked || typeof this.state.kicked !== 'object') {
@@ -563,11 +579,200 @@ class Store {
     return true;
   }
 
+  /* ---------------- «Дашборд»: постоянные задания ---------------- */
+
+  /* Шесть блоков — это не свободный список, а фиксированный набор на аккаунт:
+     так у каждого пользователя есть полный набор, а порядок карточек всегда
+     одинаковый. Настройки (расписание, проект, текст задания) — свои. */
+  dashboardTasks(userId) {
+    const list = Array.isArray(this.state.dashboard) ? this.state.dashboard : [];
+    const order = new Map(DASHBOARD_BLOCKS.map((block, index) => [block.id, index]));
+    return list
+      .filter((task) => task.ownerId === userId)
+      .map((task) => ({ ...task }))
+      .sort((a, b) => (order.get(a.blockId) ?? 99) - (order.get(b.blockId) ?? 99));
+  }
+
+  /** Досоздаёт недостающие блоки (новый аккаунт, новый блок в релизе). */
+  ensureDashboardTasks(userId) {
+    if (!Array.isArray(this.state.dashboard)) this.state.dashboard = [];
+    let changed = false;
+    /* Задания, созданные раньше, несут старую формулировку про численность
+       компании. Правим только её: всё, что человек написал сам, не трогаем. */
+    for (const task of this.state.dashboard) {
+      if (task.ownerId !== userId) continue;
+      const fixed = withoutCompanySize(task.prompt);
+      if (fixed !== task.prompt) {
+        task.prompt = fixed;
+        task.updatedAt = nowIso();
+        changed = true;
+      }
+      if (!Array.isArray(task.files)) {
+        task.files = [];
+        changed = true;
+      }
+    }
+    const present = new Set(this.state.dashboard.filter((task) => task.ownerId === userId).map((task) => task.blockId));
+    for (const block of DASHBOARD_BLOCKS) {
+      if (present.has(block.id)) continue;
+      this.state.dashboard.push(defaultDashboardTask(block, userId));
+      changed = true;
+    }
+    if (changed) this.save();
+    return this.dashboardTasks(userId);
+  }
+
+  getDashboardTask(id, userId) {
+    const list = Array.isArray(this.state.dashboard) ? this.state.dashboard : [];
+    const task = list.find((item) => item.id === id && item.ownerId === userId);
+    return task ? { ...task } : null;
+  }
+
+  /* Правка настроек. Время следующего запуска пересчитывается, если изменилось
+     само расписание или если оно уже в прошлом: иначе задание «зависло» бы на
+     старой дате после включения. Выключенное задание даты не держит. */
+  updateDashboardTask(id, userId, patch) {
+    const list = Array.isArray(this.state.dashboard) ? this.state.dashboard : [];
+    const task = list.find((item) => item.id === id && item.ownerId === userId);
+    if (!task) return null;
+    const before = { enabled: task.enabled, cadence: task.cadence, dayOfMonth: task.dayOfMonth, dayOfWeek: task.dayOfWeek, hour: task.hour };
+    const changed = applyDashboardPatch(task, patch);
+    const scheduleChanged = ['enabled', 'cadence', 'dayOfMonth', 'dayOfWeek', 'hour'].some((key) => before[key] !== task[key]);
+    if (!task.enabled) {
+      task.nextRunAt = null;
+    } else if (scheduleChanged || !task.nextRunAt || !(Date.parse(task.nextRunAt) > Date.now())) {
+      task.nextRunAt = nextRunAt(task, Date.now());
+    }
+    if (changed.length) task.updatedAt = nowIso();
+    this.save();
+    return { ...task };
+  }
+
+  /** Вернуть блок к заводским настройкам (расписание и текст задания). */
+  resetDashboardTask(id, userId) {
+    const block = dashboardBlock(this.dashboardTaskBlockId(id, userId));
+    if (!block) return null;
+    return this.updateDashboardTask(id, userId, {
+      cadence: block.cadence,
+      dayOfMonth: block.dayOfMonth,
+      dayOfWeek: block.dayOfWeek,
+      hour: block.hour,
+      prompt: block.prompt,
+    });
+  }
+
+  dashboardTaskBlockId(id, userId) {
+    const list = Array.isArray(this.state.dashboard) ? this.state.dashboard : [];
+    const task = list.find((item) => item.id === id && item.ownerId === userId);
+    return task ? task.blockId : '';
+  }
+
+  /* ---- документы задания ----
+     Файлы лежат вне проектов: человек может сменить проект отчёта, а материалы
+     должны остаться. В индекс попадают только метаданные. */
+  dashboardFilesDir(taskId) {
+    return path.join(DASHBOARD_FILES_DIR, String(taskId).replace(/[^a-z0-9_-]/gi, ''));
+  }
+
+  addDashboardFile(id, userId, file) {
+    const list = Array.isArray(this.state.dashboard) ? this.state.dashboard : [];
+    const task = list.find((item) => item.id === id && item.ownerId === userId);
+    if (!task) return null;
+    if (!Array.isArray(task.files)) task.files = [];
+    if (task.files.length >= DASHBOARD_LIMITS.maxFiles) return null;
+    task.files.push(file);
+    task.updatedAt = nowIso();
+    this.save();
+    return { ...task };
+  }
+
+  deleteDashboardFile(id, userId, fileId) {
+    const list = Array.isArray(this.state.dashboard) ? this.state.dashboard : [];
+    const task = list.find((item) => item.id === id && item.ownerId === userId);
+    if (!task || !Array.isArray(task.files)) return null;
+    const index = task.files.findIndex((file) => file.id === fileId);
+    if (index < 0) return null;
+    const [removed] = task.files.splice(index, 1);
+    task.updatedAt = nowIso();
+    this.save();
+    return removed;
+  }
+
+  /** Задания, которым пора запускаться. Один тик — один список. */
+  dashboardDue(nowMs = Date.now()) {
+    const list = Array.isArray(this.state.dashboard) ? this.state.dashboard : [];
+    return list
+      .filter((task) => task.enabled && task.nextRunAt && Date.parse(task.nextRunAt) <= nowMs)
+      .map((task) => ({ ...task }));
+  }
+
+  /** Запуск состоялся: фиксируем время, диалог и сразу переносим дату вперёд.
+      Запуск по кнопке («Запустить сейчас») дату не двигает: это дополнительный
+      отчёт, а не вместо планового. */
+  markDashboardStarted(id, { chatId, at = Date.now(), advance = true } = {}) {
+    const list = Array.isArray(this.state.dashboard) ? this.state.dashboard : [];
+    const task = list.find((item) => item.id === id);
+    if (!task) return null;
+    task.lastRunAt = new Date(at).toISOString();
+    task.lastStatus = 'running';
+    task.lastChatId = chatId || '';
+    task.lastError = '';
+    if (advance) task.nextRunAt = nextRunAt(task, Date.now());
+    this.save();
+    return { ...task };
+  }
+
+  /** Запуск не состоялся (нет денег, нет доступа, сервис лежал) — не теряем,
+      а записываем причину и переносим дату. */
+  markDashboardSkipped(id, { reason = '', at = Date.now(), disable = false } = {}) {
+    const list = Array.isArray(this.state.dashboard) ? this.state.dashboard : [];
+    const task = list.find((item) => item.id === id);
+    if (!task) return null;
+    task.lastStatus = 'skipped';
+    task.lastError = String(reason || '').slice(0, 300);
+    task.lastSkippedAt = new Date(at).toISOString();
+    if (disable) task.enabled = false;
+    task.nextRunAt = task.enabled ? nextRunAt(task, Date.now()) : null;
+    this.save();
+    return { ...task };
+  }
+
+  markDashboardFinished(id, status) {
+    const list = Array.isArray(this.state.dashboard) ? this.state.dashboard : [];
+    const task = list.find((item) => item.id === id);
+    if (!task) return null;
+    task.lastStatus = status === 'done' ? 'done' : status === 'stopped' ? 'stopped' : 'error';
+    if (task.lastStatus === 'error') task.lastError = 'задание завершилось с ошибкой — подробности в диалоге';
+    this.save();
+    return { ...task };
+  }
+
+  /** Перенос запуска на несколько минут вперёд: агент занят, ждём. */
+  postponeDashboardTask(id, minutes = 10) {
+    const list = Array.isArray(this.state.dashboard) ? this.state.dashboard : [];
+    const task = list.find((item) => item.id === id);
+    if (!task) return null;
+    task.nextRunAt = new Date(Date.now() + Math.max(1, minutes) * 60 * 1000).toISOString();
+    this.save();
+    return { ...task };
+  }
+
+  /** Только для проверок: сделать запуск «уже пора», не дожидаясь месяца. */
+  forceDashboardDue(id) {
+    const list = Array.isArray(this.state.dashboard) ? this.state.dashboard : [];
+    const task = list.find((item) => item.id === id);
+    if (!task) return null;
+    task.nextRunAt = new Date(Date.now() - 1000).toISOString();
+    this.save();
+    return { ...task };
+  }
+
   deleteUser(id) {
     const user = this.getUser(id);
     if (!user) return false;
     this.dropUserSessions(id);
     this.state.users = this.state.users.filter((u) => u.id !== id);
+    this.state.dashboard = (this.state.dashboard || []).filter((task) => task.ownerId !== id);
     for (const project of this.state.projects.filter((p) => p.ownerId === id)) {
       this.deleteProject(project.id);
     }
@@ -942,6 +1147,9 @@ class Store {
       messages: data?.messages || [],
       history: data?.history || [],
       memory: data?.memory || '',
+      /* Карточка длинной задачи: что сделано, что осталось, какие файлы готовы.
+         Переживает перезапуск процесса и подставляется в следующий ход. */
+      task: data?.task || null,
     };
   }
 
@@ -957,7 +1165,7 @@ class Store {
     };
     this.state.chats.push(chat);
     this.save();
-    this.writeChat(chat.id, { messages: [], history: [], memory: '' });
+    this.writeChat(chat.id, { messages: [], history: [], memory: '', task: null });
     const project = this.getProject(projectId);
     if (project) {
       project.updatedAt = nowIso();

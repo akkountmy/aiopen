@@ -1,0 +1,14 @@
+node_modules
+npm-debug.log*
+data
+.trims
+exports
+.git
+.gitignore
+.dockerignore
+Dockerfile
+*.log
+*.zip
+*.tmp
+scripts/*.log
+scripts/*state.json

@@ -11,7 +11,8 @@ import { createDocumentPdf, createPresentationPdf } from './pdf.mjs';
 import { docEngines, docIssues, makePdf, makePresentation, makeWord, makeWorkbook } from './doc/index.mjs';
 import { imageInfo } from './doc/image-info.mjs';
 import { describeImage } from './vision.mjs';
-import { fetchUrl, webSearch } from './search.mjs';
+import { fetchUrl, webSearch, readPage, fetchMany, crawlSite, searchMany } from './search.mjs';
+import { runJavascript } from './jsruntime.mjs';
 import { escapeHtml, formatBytes, safeName, truncate } from './util.mjs';
 import { writeZip } from './zip.mjs';
 
@@ -813,14 +814,19 @@ export const TOOL_DEFS = [
     type: 'function',
     function: {
       name: 'web_search',
-      description: 'Найти актуальную информацию в интернете. Возвращает заголовки, ссылки и сниппеты.',
+      description:
+        'Найти актуальную информацию в интернете. Возвращает заголовки, ссылки и сниппеты. Можно передать несколько запросов сразу (queries) — они объединятся в одну выдачу без повторов.',
       parameters: {
         type: 'object',
         properties: {
-          query: { type: 'string' },
-          limit: { type: 'integer', description: 'Сколько результатов, 1–10. По умолчанию 6.' },
+          query: { type: 'string', description: 'Один поисковый запрос.' },
+          queries: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Несколько запросов сразу, до 4 — для широкого охвата разных формулировок.',
+          },
+          limit: { type: 'integer', description: 'Сколько результатов на запрос, 1–10. По умолчанию 6.' },
         },
-        required: ['query'],
       },
     },
   },
@@ -828,12 +834,69 @@ export const TOOL_DEFS = [
     type: 'function',
     function: {
       name: 'fetch_url',
-      description: 'Загрузить веб-страницу, PDF или файл по ссылке и получить текст.',
+      description:
+        'Загрузить веб-страницу, PDF или API по ссылке и получить текст. Поддерживает POST с телом запроса и своими заголовками — годится для обращений к открытым API.',
       parameters: {
         type: 'object',
         properties: {
           url: { type: 'string' },
           max_chars: { type: 'integer', description: 'Максимум символов, по умолчанию 24000.' },
+          method: { type: 'string', description: 'GET (по умолчанию), POST, PUT или HEAD.' },
+          body: { type: 'string', description: 'Тело запроса для POST/PUT (JSON или форма).' },
+          headers: {
+            type: 'object',
+            description: 'Свои заголовки, например {"Content-Type":"application/json"} или {"Authorization":"Bearer …"}.',
+          },
+        },
+        required: ['url'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'read_page',
+      description:
+        'Прочитать страницу как статью: заголовок, описание, оглавление, таблицы, ссылки и очищенный от меню текст. Работает без браузера — лучший выбор для больших и «шумных» страниц и для сбора ссылок перед crawl.',
+      parameters: {
+        type: 'object',
+        properties: {
+          url: { type: 'string' },
+          max_chars: { type: 'integer', description: 'Максимум символов текста, по умолчанию 32000.' },
+        },
+        required: ['url'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'fetch_many',
+      description:
+        'Загрузить до 6 ссылок параллельно и получить текст каждой. Быстрее, чем вызывать fetch_url по одной, и не срывается, если часть ссылок недоступна.',
+      parameters: {
+        type: 'object',
+        properties: {
+          urls: { type: 'array', items: { type: 'string' }, description: 'Ссылки, до 6.' },
+          max_chars: { type: 'integer', description: 'Максимум символов на страницу, по умолчанию 8000.' },
+        },
+        required: ['urls'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'crawl',
+      description:
+        'Обойти сайт по внутренним ссылкам: до 20 страниц с одного домена, с ограничением глубины. Нужен, когда данных нет на одной странице — каталог, прайс, документация, список документов.',
+      parameters: {
+        type: 'object',
+        properties: {
+          url: { type: 'string', description: 'Стартовая страница.' },
+          max_pages: { type: 'integer', description: 'Сколько страниц обойти, 1–20. По умолчанию 8.' },
+          max_depth: { type: 'integer', description: 'Глубина переходов, 0–2. По умолчанию 1.' },
+          max_chars: { type: 'integer', description: 'Максимум символов текста на страницу, по умолчанию 4000.' },
         },
         required: ['url'],
       },
@@ -844,11 +907,60 @@ export const TOOL_DEFS = [
     function: {
       name: 'run_python',
       description:
-        'Выполнить Python-код в папке проекта (если Python установлен; в облаке его может не быть). Для простых расчётов используй calculate, для обработки данных — стандартные библиотеки.',
+        'Выполнить Python-код в папке проекта (если Python установлен; в облаке его нет — тогда используй run_js).',
       parameters: {
         type: 'object',
         properties: { code: { type: 'string', description: 'Полный код скрипта.' } },
         required: ['code'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'run_js',
+      description:
+        'Выполнить JavaScript в папке проекта — замена Python там, где его нет. В песочнице есть: read(path), readJson(path), write(path, text|object), append(path, text), ls(path), exists(path), print(...), parseCsv(text), toCsv(rows), read-файлы, sum/avg/median/pct/stdev/min/max/round/groupBy. Верни результат через return или print. Годится для пересчётов, чистки и сводок CSV/JSON, разбора текста, проверки сумм и долей, генерации CSV и MD. Тяжёлые таблицы (сотни тысяч строк) считай через analyze_data, а сюда подавай агрегаты.',
+      parameters: {
+        type: 'object',
+        properties: {
+          code: { type: 'string', description: 'Код на JavaScript. Тело функции: доступен return.' },
+          timeout_ms: { type: 'integer', description: 'Предел времени, мс. По умолчанию 8000, максимум 20000.' },
+        },
+        required: ['code'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'spawn_agent',
+      description:
+        'Запустить 1–4 субагентов параллельно. Каждый работает в своём изолированном контексте и возвращает сжатый отчёт: чтение файлов, анализ данных, расчёты (run_js), поиск и загрузка страниц. Файлы создаёт основная задача. Используй для параллельного исследования, независимой перепроверки цифр и больших разборов, где одному агенту не хватает шагов.',
+      parameters: {
+        type: 'object',
+        properties: {
+          tasks: {
+            type: 'array',
+            description: 'Задачи субагентов, от 1 до 4.',
+            items: {
+              type: 'object',
+              properties: {
+                name: { type: 'string', description: 'Короткое имя подзадачи.' },
+                task: { type: 'string', description: 'Что сделать и что вернуть в отчёте.' },
+              },
+              required: ['task'],
+            },
+          },
+          tools: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Ограничить набор инструментов подзадач (необязательно).',
+          },
+          context: { type: 'string', description: 'Общий контекст, который увидят все субагенты.' },
+          concurrency: { type: 'integer', description: 'Сколько работать одновременно, 1–4. По умолчанию 3.' },
+        },
+        required: ['tasks'],
       },
     },
   },
@@ -1220,7 +1332,12 @@ export const TOOL_LABELS = {
   analyze_image: 'Распознавание изображения',
   web_search: 'Поиск в интернете',
   fetch_url: 'Загрузка страницы',
+  read_page: 'Чтение страницы',
+  fetch_many: 'Загрузка ссылок',
+  crawl: 'Обход сайта',
   run_python: 'Расчёты',
+  run_js: 'Расчёты',
+  spawn_agent: 'Субагенты',
   create_excel: 'Создание Excel',
   create_word: 'Создание Word',
   create_pptx: 'Создание презентации',
@@ -1229,6 +1346,16 @@ export const TOOL_LABELS = {
   use_skill: 'Навык',
   check_document: 'Проверка файла',
 };
+
+/** Русское склонение по числу: 1 ссылка, 2 ссылки, 5 ссылок. */
+function plural(count, one, few, many) {
+  const n = Math.abs(Number(count) || 0) % 100;
+  const last = n % 10;
+  if (n > 10 && n < 20) return many;
+  if (last === 1) return one;
+  if (last >= 2 && last <= 4) return few;
+  return many;
+}
 
 export function toolSummary(name, args) {
   if (!args || typeof args !== 'object') return '';
@@ -1247,15 +1374,33 @@ export function toolSummary(name, args) {
     case 'move_path':
       return `${args.from || ''} → ${args.to || ''}`;
     case 'web_search':
-      return args.query || '';
+      return String(args.query || (Array.isArray(args.queries) ? args.queries.join(' | ') : '')).slice(0, 120);
     case 'fetch_url':
+      return `${args.method && args.method !== 'GET' ? `${String(args.method).toUpperCase()} ` : ''}${args.url || ''}`;
+    case 'read_page':
+      return args.url || '';
+    case 'fetch_many': {
+      const count = Array.isArray(args.urls) ? args.urls.length : 0;
+      return count ? `${count} ${plural(count, 'ссылка', 'ссылки', 'ссылок')}` : '';
+    }
+    case 'crawl':
       return args.url || '';
     case 'analyze_data':
       return `${args.path || ''}${args.mode ? ` · ${args.mode}` : ''}`;
     case 'find_in_files':
       return args.query || '';
     case 'run_python':
-      return `${String(args.code || '').split('\n').length} строк кода`;
+    case 'run_js': {
+      const lines = String(args.code || '').split('\n').length;
+      return `${lines} ${plural(lines, 'строка', 'строки', 'строк')} кода`;
+    }
+    case 'spawn_agent': {
+      const list = Array.isArray(args.tasks) ? args.tasks : [];
+      const names = list
+        .map((item, index) => String(typeof item === 'string' ? item : item?.name || `Подзадача ${index + 1}`))
+        .slice(0, 4);
+      return names.join(', ');
+    }
     case 'append_file':
       return args.path || '';
     case 'calculate':
@@ -1274,6 +1419,47 @@ function assertInside(root, full) {
     throw new Error('Путь выходит за пределы проекта');
   }
   return resolved;
+}
+
+/* Инструменты, которые меняют файлы, и аргументы с путями. */
+const WRITE_TARGETS = {
+  write_file: ['path'],
+  append_file: ['path'],
+  edit_file: ['path'],
+  delete_path: ['path'],
+  move_path: ['from', 'to'],
+  create_excel: ['path'],
+  create_word: ['path'],
+  create_pptx: ['path'],
+  create_pdf: ['path'],
+};
+
+/**
+ * Куда можно писать. Основная задача пишет по всему проекту; у субагента
+ * (ctx.writeRoot) есть только своя папка — иначе четыре воркера затирают файлы
+ * друг друга и общий результат превращается в кашу.
+ */
+export function assertWriteScope(ctx, name, args) {
+  const scope = String(ctx?.writeRoot || '')
+    .replace(/\\/g, '/')
+    .replace(/^\/+|\/+$/g, '');
+  if (!scope) return;
+  const keys = WRITE_TARGETS[name];
+  if (!keys) return;
+  const root = ctx.workspace;
+  const base = assertInside(root, resolveSafe(root, scope));
+  for (const key of keys) {
+    const value = String(args?.[key] ?? '').trim();
+    if (!value) continue;
+    const full = assertInside(root, resolveSafe(root, value));
+    if (full !== base && !full.startsWith(base + path.sep)) {
+      const error = new Error(
+        `Твоя рабочая папка — «${scope}». Файлы за её пределы писать нельзя: положи результат в «${scope}/<имя файла>» и укажи путь в отчёте.`,
+      );
+      error.status = 400;
+      throw error;
+    }
+  }
 }
 
 /** Безопасный калькулятор без доступа к окружению: только числа и базовые функции. */
@@ -1323,6 +1509,8 @@ export async function availableToolDefs() {
 
 export async function executeTool(name, args, ctx) {
   const root = ctx.workspace;
+  /* Субагент пишет только в свою папку: проверяем до записи, а не после. */
+  assertWriteScope(ctx, name, args);
   switch (name) {
     case 'list_files': {
       const depth = Math.max(1, Math.min(5, Number(args.depth) || 3));
@@ -1516,7 +1704,23 @@ export async function executeTool(name, args, ctx) {
       return { text: `Распознавание ${args.path}:\n${result.text}`, meta: { path: args.path, vision: true } };
     }
     case 'web_search': {
-      const results = await webSearch(args.query, Math.max(1, Math.min(10, Number(args.limit) || 6)));
+      const limit = Math.max(1, Math.min(10, Number(args.limit) || 6));
+      const queries = Array.isArray(args.queries) ? args.queries : [args.query].filter(Boolean);
+      if (!queries.length) throw new Error('Нужен поисковый запрос');
+      if (queries.length > 1) {
+        const found = await searchMany(queries, { perQuery: Math.max(2, Math.min(limit, 4)) });
+        if (!found.results.length) {
+          return { text: `Поиск не дал результатов.${found.failures.length ? `\nОшибки: ${found.failures.join('; ')}` : ''}` };
+        }
+        const body = found.results
+          .map((r, i) => `${i + 1}. ${r.title}\n${r.url}\n${r.snippet}\n(запрос: ${r.query})`)
+          .join('\n\n');
+        return {
+          text: `Запросы: ${found.queries.join(' | ')}\n\n${body}`,
+          meta: { count: found.results.length, failed: found.failures.length },
+        };
+      }
+      const results = await webSearch(queries[0], limit);
       if (!results.length) return { text: 'Поиск не дал результатов.' };
       return {
         text: results.map((r, i) => `${i + 1}. ${r.title}\n${r.url}\n${r.snippet}`).join('\n\n'),
@@ -1524,8 +1728,66 @@ export async function executeTool(name, args, ctx) {
       };
     }
     case 'fetch_url': {
-      const page = await fetchUrl(args.url, { maxChars: Math.min(60000, Number(args.max_chars) || 24000) });
-      return { text: `Страница ${page.url}\n\n${page.text}`, meta: { url: page.url, bytes: page.bytes } };
+      const page = await fetchUrl(args.url, {
+        maxChars: Math.min(60000, Number(args.max_chars) || 24000),
+        method: args.method || 'GET',
+        headers: args.headers && typeof args.headers === 'object' ? args.headers : {},
+        body: typeof args.body === 'string' ? args.body : null,
+      });
+      const head = `Страница ${page.url} (${page.status || 200}${page.kind !== 'text' ? `, ${page.kind}` : ''})`;
+      return { text: `${head}\n\n${page.text}`, meta: { url: page.url, bytes: page.bytes } };
+    }
+    case 'read_page': {
+      const page = await readPage(args.url, { maxChars: Math.min(60000, Number(args.max_chars) || 32000) });
+      const parts = [`URL: ${page.url}`];
+      if (page.title) parts.push(`Заголовок: ${page.title}`);
+      if (page.description) parts.push(`Описание: ${page.description}`);
+      if (page.headings?.length) {
+        parts.push(`Структура:\n${page.headings.map((h) => `${'  '.repeat(Math.max(0, h.level - 1))}- ${h.text}`).join('\n')}`);
+      }
+      if (page.tables?.length) {
+        const tables = page.tables
+          .slice(0, 3)
+          .map((rows, index) => `Таблица ${index + 1}:\n${rows.map((row) => row.join(' | ')).join('\n')}`)
+          .join('\n\n');
+        parts.push(tables);
+      }
+      if (page.links?.length) {
+        const links = page.links.slice(0, 15).map((link) => `- ${link.text ? `${link.text} — ` : ''}${link.href}`);
+        parts.push(`Ссылки (${page.links.length}):\n${links.join('\n')}`);
+      }
+      parts.push(`Текст:\n${page.text}`);
+      return { text: parts.join('\n\n'), meta: { url: page.url, chars: page.chars } };
+    }
+    case 'fetch_many': {
+      const pages = await fetchMany(args.urls, { maxChars: Math.min(20000, Number(args.max_chars) || 8000) });
+      const ok = pages.filter((page) => !page.error).length;
+      const body = pages
+        .map((page, index) =>
+          page.error
+            ? `### ${index + 1}. ${page.url}\nНе удалось загрузить: ${page.error}`
+            : `### ${index + 1}. ${page.title || page.url}\n${page.url}\n\n${page.text}`,
+        )
+        .join('\n\n');
+      return { text: `Загружено ${ok} из ${pages.length}\n\n${body}`, meta: { ok, total: pages.length } };
+    }
+    case 'crawl': {
+      const result = await crawlSite(args.url, {
+        maxPages: Number(args.max_pages) || 8,
+        maxDepth: Number(args.max_depth) || 0,
+        maxChars: Math.min(12000, Number(args.max_chars) || 4000),
+      });
+      const body = result.pages
+        .map((page, index) =>
+          page.error
+            ? `### ${index + 1}. ${page.url}\nОшибка: ${page.error}`
+            : `### ${index + 1}. ${page.title || page.url}\n${page.url}\n\n${page.text}`,
+        )
+        .join('\n\n');
+      return {
+        text: `Обход ${result.start}: страниц ${result.pages.length}, найдено ссылок ${result.found}\n\n${body}`,
+        meta: { pages: result.pages.length, found: result.found },
+      };
     }
     case 'run_python': {
       const code = String(args.code || '');
@@ -1534,7 +1796,7 @@ export async function executeTool(name, args, ctx) {
       try {
         bin = await findPython();
       } catch {
-        throw new Error('Python в этом окружении недоступен. Для расчётов используй calculate, для таблиц — create_excel, для текста и кода — write_file.');
+        throw new Error('Python в этом окружении недоступен. Для расчётов используй run_js (JavaScript в папке проекта) или calculate, для таблиц — analyze_data и create_excel, для текста и кода — write_file.');
       }
       const tmpDir = path.join(root, '.dshow');
       fs.mkdirSync(tmpDir, { recursive: true });
@@ -1555,6 +1817,39 @@ export async function executeTool(name, args, ctx) {
       if (result.killed) parts.push('Выполнение остановлено по таймауту (60 с).');
       if (!parts.length) parts.push(`Код завершился с кодом ${result.code} и без вывода.`);
       return { text: parts.join('\n\n'), meta: { code: result.code, killed: result.killed } };
+    }
+    case 'run_js': {
+      const result = await runJavascript({
+        code: args.code,
+        root,
+        timeoutMs: args.timeout_ms,
+        signal: ctx.signal,
+        writeRoot: ctx.writeRoot,
+      });
+      const parts = [];
+      if (result.output.trim()) parts.push(`Вывод:\n${truncate(result.output.trim(), 16000)}`);
+      if (result.files.length) parts.push(`Файлы сохранены: ${result.files.join(', ')}`);
+      if (!parts.length) parts.push('Код выполнился без вывода. Верни результат через return или print(...).');
+      return { text: parts.join('\n\n'), meta: { ms: result.ms, files: result.files } };
+    }
+    case 'spawn_agent': {
+      if (typeof ctx.spawnAgent !== 'function') {
+        throw new Error('Субагенты доступны только внутри основной задачи — сделай эту часть сам.');
+      }
+      const reports = await ctx.spawnAgent(args);
+      const blocks = reports.map((report) =>
+        report.error
+          ? `### ${report.name}\nСубагент не справился: ${report.error}`
+          : `### ${report.name}\n${report.text || 'Пустой отчёт.'}`,
+      );
+      const failed = reports.filter((report) => report.error).length;
+      const tail = failed
+        ? `\n\nНе справились: ${reports.filter((report) => report.error).map((report) => report.name).join(', ')}. Сделай эту часть сам.`
+        : '';
+      return {
+        text: `Отчёты субагентов (${reports.length}, ошибок ${failed}):\n\n${blocks.join('\n\n')}${tail}`,
+        meta: { count: reports.length, failed },
+      };
     }
     case 'create_excel': {
       const rel = String(args.path || 'report.xlsx');

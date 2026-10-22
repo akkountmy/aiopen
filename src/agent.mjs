@@ -1,9 +1,21 @@
-import { CONTEXT, MODEL, costUsd } from './config.mjs';
+import { CONTEXT, ESCALATION, MODEL, REVIEW, costUsd } from './config.mjs';
 import { getDeepSeekKey } from './keys.mjs';
+import { chooseProfile } from './model.mjs';
 import { summaryPrompt, systemPrompt } from './prompt.mjs';
+import { describeReview, reviewAnswer } from './review.mjs';
 import { skillsPromptText } from './skills.mjs';
+import { continuePrompt, taskSummaryLine, updateTaskState } from './taskstate.mjs';
 import { availableToolDefs, TOOL_LABELS, executeTool, toolSummary } from './tools.mjs';
-import { estimateTokens, sleep, truncate } from './util.mjs';
+import {
+  compressHistory,
+  createTrimStats,
+  historyTokens,
+  mergeTrim,
+  noteTrim,
+  resolveTrimConfig,
+  trimToolResult,
+} from './trim.mjs';
+import { sha256, sleep } from './util.mjs';
 
 const MAX_IMAGE_PARTS = 6;
 
@@ -18,28 +30,6 @@ const CONTINUE_PROMPT =
 const WRAP_UP_PROMPT =
   'Инструменты больше недоступны. Коротко подведи итог: что уже сделано, какие файлы готовы ' +
   'и что в них. Не задавай вопросов и не предлагай продолжить.';
-
-function contentText(message) {
-  if (!message) return '';
-  const content = message.content;
-  if (typeof content === 'string') return content;
-  if (Array.isArray(content)) {
-    return content
-      .map((part) => (typeof part === 'string' ? part : part?.type === 'text' ? part.text : part?.type === 'image_url' ? '[изображение]' : ''))
-      .join('\n');
-  }
-  return '';
-}
-
-function messageCost(message) {
-  let cost = estimateTokens(contentText(message)) + 4;
-  if (Array.isArray(message.tool_calls)) {
-    for (const call of message.tool_calls) {
-      cost += estimateTokens(call?.function?.name || '') + estimateTokens(call?.function?.arguments || '') + 6;
-    }
-  }
-  return cost;
-}
 
 function friendlyError(error) {
   const status = error?.status;
@@ -138,7 +128,47 @@ async function requestCompletion(body, { signal, onDelta, onReasoning }) {
   return { text, reasoning, toolCalls: toolCalls.filter(Boolean), usage, finishReason };
 }
 
-export async function simpleCompletion(messages, { maxTokens = 500, signal, effort = 'low' } = {}) {
+/**
+ * Запрос к модели с двумя поправками на реальность:
+ * — маршрут может не принимать reasoning_effort — повторяем без него;
+ * — сильной модели может не быть в доступе — откатываемся на рабочую, чтобы
+ *   задача не падала из-за недоступного профиля.
+ * Обе поправки безопасны: сервер отвечает ошибкой до начала потока, поэтому
+ * повтор не дублирует уже показанный текст.
+ */
+async function callModel(body, options, { fallbackModel = '' } = {}) {
+  let current = { ...body };
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      return await requestCompletion(current, options);
+    } catch (error) {
+      const raw = String(error?.raw || '');
+      if (current.reasoning_effort && error?.status === 400 && /reasoning_effort|unsupported|unknown/i.test(raw)) {
+        const { reasoning_effort, ...rest } = current;
+        current = rest;
+        continue;
+      }
+      const modelMissing =
+        (error?.status === 400 || error?.status === 404) &&
+        fallbackModel &&
+        current.model !== fallbackModel &&
+        /model|not found|does not exist|invalid|unknown/i.test(raw);
+      if (modelMissing) {
+        current = { ...current, model: fallbackModel, reasoning_effort: ESCALATION.flashEffort };
+        continue;
+      }
+      throw error;
+    }
+  }
+  throw new Error('Не удалось получить ответ сервиса');
+}
+
+/**
+ * Короткий запрос без потоковой выдачи: конспект истории, проверка ответа,
+ * правка. `onUsage` получает расход, чтобы служебные вызовы попадали в счёт
+ * задачи, а не были бесплатными для владельца сервиса.
+ */
+export async function simpleCompletion(messages, { maxTokens = 500, signal, effort = 'low', onUsage = null } = {}) {
   const key = getDeepSeekKey();
   if (!key) return '';
   const call = (withEffort) => {
@@ -155,52 +185,12 @@ export async function simpleCompletion(messages, { maxTokens = 500, signal, effo
   if (response.status === 400) response = await call(false);
   if (!response.ok) throw new Error(`simple completion ${response.status}`);
   const json = await response.json();
+  if (onUsage && json?.usage) {
+    onUsage(Number(json.usage.prompt_tokens || 0), Number(json.usage.completion_tokens || 0));
+  }
   return String(json?.choices?.[0]?.message?.content || '').trim();
 }
 
-/* Обрезка истории перед обращением к модели. Режем по границе «сообщение
-   пользователя» — тогда вызовы инструментов остаются вместе со своими
-   ответами. Внутри одной задачи такой границы ещё нет, и тогда режем перед
-   следующим вызовом инструментов.
-   Закреплённое сообщение (сама задача) не выбрасываем и порядок не меняем:
-   обрезаем только то, что стоит ДО него. Иначе задача оказывалась бы в начале
-   истории, а ответы на неё — после чужих реплик, и модель видела бы диалог
-   в перепутанном порядке. */
-function trimHistory(chat, budget, pinned = null) {
-  const removed = [];
-  const pinIndex = pinned ? chat.history.indexOf(pinned) : -1;
-  let total = chat.history.reduce((sum, m) => sum + messageCost(m), 0);
-  let guard = 0;
-  while (total > budget && chat.history.length > CONTEXT.keepRecentMessages && guard < 400) {
-    guard++;
-    let cut = 1;
-    while (cut < chat.history.length && chat.history[cut].role !== 'user') cut++;
-    if (cut >= chat.history.length) {
-      cut = -1;
-      for (let i = 1; i < chat.history.length; i++) {
-        const message = chat.history[i];
-        if (message.role === 'assistant' && Array.isArray(message.tool_calls) && message.tool_calls.length) {
-          cut = i;
-          break;
-        }
-      }
-      if (cut < 0) break;
-    }
-    /* Дальше закреплённого сообщения не заходим: всё, что после задачи, — это
-       её собственные шаги, их порядок менять нельзя. */
-    if (pinIndex >= 0) {
-      if (cut > pinIndex) cut = pinIndex;
-      if (cut <= 0) break;
-    }
-    if (chat.history.length - cut < CONTEXT.keepRecentMessages) break;
-    const slice = chat.history.splice(0, cut);
-    for (const message of slice) {
-      total -= messageCost(message);
-      removed.push(message);
-    }
-  }
-  return removed;
-}
 
 function buildUserContent(text, images) {
   if (!images.length) return text;
@@ -213,6 +203,11 @@ function buildUserContent(text, images) {
 
 /**
  * Выполняет один ход агента: стримит ответ и выполняет инструменты.
+ *
+ * Помимо обычной работы умеет запускать субагентов (spawn_agent): каждый
+ * получает изолированную историю, суженный набор инструментов и потолок шагов,
+ * а его расход прибавляется к расходу этого хода.
+ *
  * @param {object} params
  * @param {string} params.workspace путь рабочей папки проекта
  * @param {{history: Array, memory: string}} params.chat
@@ -222,6 +217,93 @@ function buildUserContent(text, images) {
  * @param {Function} params.emit события для UI
  * @param {AbortSignal} params.signal
  */
+/* Что доступно субагенту: чтение, анализ, веб, расчёты и запись — но только в
+   свою папку `parts/<слаг>/`. Так четыре воркера могут готовить четыре части
+   одного отчёта параллельно и не затирать файлы друг друга: основная задача
+   потом читает готовые части и сводит их. */
+const SUBAGENT_TOOLS = [
+  'list_files',
+  'read_file',
+  'read_document',
+  'find_in_files',
+  'analyze_data',
+  'analyze_image',
+  'calculate',
+  'write_file',
+  'append_file',
+  'create_word',
+  'create_excel',
+  'create_pptx',
+  'create_pdf',
+  'run_js',
+  'web_search',
+  'fetch_url',
+  'fetch_many',
+  'crawl',
+  'read_page',
+  'use_skill',
+  'check_document',
+];
+const SUBAGENT_MAX_DEPTH = 1;
+const SUBAGENT_MAX_TASKS = 4;
+const SUBAGENT_STEPS = 14;
+const SUBAGENT_TASK_CHARS = 4000;
+
+const SUBAGENT_BRIEF =
+  'Ты субагент внутри большой задачи. Работай самостоятельно и экономно: ' +
+  'проверь факты инструментами, не пересказывай задание, не задавай вопросов. ' +
+  'Верни сжатый отчёт: что проверил, что получил (числа с источником), где сомнения. ' +
+  'Если для твоей части нужен файл — создай его в своей папке parts/ и укажи путь в отчёте; ' +
+  'файлы вне своей папки писать нельзя, их сведёт основная задача.';
+
+/** Оставляет в списке инструментов только разрешённые имена. */
+function filterToolDefs(defs, allowed) {
+  if (!Array.isArray(allowed) || !allowed.length) return defs;
+  const names = new Set(allowed);
+  const filtered = defs.filter((def) => names.has(def.function.name));
+  return filtered.length ? filtered : defs;
+}
+
+/** Разбирает аргументы spawn_agent: строки или объекты { name, task }. */
+function normalizeSubagentTasks(raw) {
+  const list = Array.isArray(raw) ? raw : [];
+  const tasks = [];
+  for (const item of list.slice(0, SUBAGENT_MAX_TASKS)) {
+    const task = String(typeof item === 'string' ? item : item?.task || '').trim();
+    if (!task) continue;
+    const name = String((typeof item === 'object' && item?.name) || `Подзадача ${tasks.length + 1}`).slice(0, 60);
+    tasks.push({ name, task: task.slice(0, SUBAGENT_TASK_CHARS) });
+  }
+  return tasks;
+}
+
+/** Короткий слаг для папки воркера: латиница/цифры, остальное — дефис. */
+function slugify(text) {
+  const map = { а: 'a', б: 'b', в: 'v', г: 'g', д: 'd', е: 'e', ё: 'e', ж: 'zh', з: 'z', и: 'i', й: 'y', к: 'k', л: 'l', м: 'm', н: 'n', о: 'o', п: 'p', р: 'r', с: 's', т: 't', у: 'u', ф: 'f', х: 'h', ц: 'c', ч: 'ch', ш: 'sh', щ: 'sch', ъ: '', ы: 'y', ь: '', э: 'e', ю: 'yu', я: 'ya' };
+  return String(text || '')
+    .toLowerCase()
+    .split('')
+    .map((char) => (map[char] !== undefined ? map[char] : char))
+    .join('')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 28) || 'part';
+}
+
+/** Параллельный запуск с ограничением числа одновременных работ. */
+async function runLimited(items, limit, worker) {
+  const results = new Array(items.length);
+  let next = 0;
+  const runners = new Array(Math.min(limit, items.length)).fill(0).map(async () => {
+    while (next < items.length) {
+      const index = next++;
+      results[index] = await worker(items[index], index);
+    }
+  });
+  await Promise.all(runners);
+  return results;
+}
+
 export async function runTurn({
   workspace,
   chat,
@@ -237,91 +319,186 @@ export async function runTurn({
      стороной, remember — функция их записи. */
   facts = [],
   remember = null,
+  /* Набор инструментов для этого хода: null — все доступные. Субагенты
+     получают суженный список, чтобы не писать файлы и не зацикливаться. */
+  toolFilter = null,
+  /* Глубина вложенности: субагент субагента уже не запускает. */
+  depth = 0,
+  /* Потолок шагов для вложенной работы (основной ход его не задаёт). */
+  maxSteps = null,
+  /* Папка, за пределы которой субагенту писать нельзя (у основной задачи пусто). */
+  writeRoot = '',
 }) {
   const usage = { tokensIn: 0, tokensOut: 0 };
   const toolsUsed = [];
   const skillsText = skillsPromptText();
-  const removed = trimHistory(chat, CONTEXT.historyTokens);
+  const trimStats = createTrimStats();
+  const trimConfig = resolveTrimConfig(CONTEXT.trim);
+  /* Повторы вызовов внутри хода: отпечаток вызова → {шаг, отпечаток ответа}.
+     Нужен, чтобы не платить дважды за один и тот же результат. */
+  const callIndex = new Map();
+  /* Сводка срезанной части разговора: заказываем моделью, но если её нет —
+     сработает детерминированная выжимка (это внутри compressHistory). */
+  const summarizeGone = (text) =>
+    simpleCompletion([{ role: 'user', content: summaryPrompt(text) }], {
+      maxTokens: 600,
+      signal,
+      onUsage: (tokensIn, tokensOut) => {
+        usage.tokensIn += tokensIn;
+        usage.tokensOut += tokensOut;
+      },
+    });
 
-  if (removed.length) {
-    const removedText = removed.map((m) => `${m.role}: ${contentText(m)}`).join('\n').slice(0, 14000);
-    if (removedText.length > 2500 && !signal.aborted) {
-      try {
-        const summary = await simpleCompletion(
-          [
-            { role: 'user', content: summaryPrompt(removedText) },
-          ],
-          { maxTokens: 600, signal },
-        );
-        if (summary) {
-          const merged = `${chat.memory ? `${chat.memory}\n` : ''}${summary}`;
-          chat.memory = truncate(merged, CONTEXT.summaryChars);
-        }
-      } catch {
-        /* без памяти тоже работает */
-      }
+  /* Автосжатие в начале хода: если история уже тяжёлая, старые сообщения
+     уходят в файл проекта `.trims/…`, а в память чата попадает короткая
+     сводка. Контекст не пропадает — он становится короче. */
+  if (historyTokens(chat.history) > CONTEXT.historyTokens) {
+    try {
+      await compressHistory({
+        chat,
+        workspace,
+        budget: CONTEXT.historyTokens,
+        keepRecent: CONTEXT.keepRecentMessages,
+        memoryChars: CONTEXT.summaryChars,
+        summarize: summarizeGone,
+        config: trimConfig,
+        stats: trimStats,
+      });
+    } catch {
+      if (signal.aborted) throw Object.assign(new Error('aborted'), { name: 'AbortError' });
     }
   }
 
   const turnMessage = { role: 'user', content: buildUserContent(userText, images) };
   chat.history.push(turnMessage);
 
-  const toolDefs = await availableToolDefs();
+  const toolDefs = filterToolDefs(await availableToolDefs(), toolFilter);
+  /* Класс задачи решает, кто её делает: короткий вопрос — быстро и дёшево,
+     аудит/финмодель/ресёрч — сильная модель с максимальным усилием. Профиль
+     выбирается один раз на ход и держится до конца: посреди работы модель не
+     меняется, иначе теряется нить и удваивается плата за разбор. */
+  const route = chooseProfile({
+    text: userText,
+    filesBrief,
+    tools: toolDefs.map((def) => def.function.name),
+    images: images.length,
+    config: ESCALATION,
+  });
+  /* Файл чата — единственный канал, переживающий ход: карточку задачи держим
+     в нём, чтобы «продолжай» и следующий ход начинались с неё. */
+  if (!chat.task) chat.task = updateTaskState(null, { userText });
   /* Задача целиком закрепляется в истории: обрезка контекста её не съедает. */
   const taskMessage = turnMessage;
   const segmentSize = Math.max(1, Number(CONTEXT.maxSteps) || 30);
-  const stepLimit = segmentSize * Math.max(1, Number(CONTEXT.maxSegments) || 1);
+  const stepCeiling = segmentSize * Math.max(1, Number(CONTEXT.maxSegments) || 1);
+  const stepLimit = Number(maxSteps) > 0 ? Math.min(stepCeiling, Number(maxSteps)) : stepCeiling;
   let finalText = '';
   let steps = 0;
   let finished = false;
+
+  /* Субагенты: изолированный контекст, суженный набор инструментов, отчёт
+     текстом. Расход вложенной работы прибавляется к расходу основной задачи,
+     поэтому бюджет и статистика остаются честными. */
+  async function spawnSubagents(args) {
+    if (depth >= SUBAGENT_MAX_DEPTH) {
+      throw new Error('Субагент не может запускать своих субагентов — сделай эту часть сам.');
+    }
+    const tasks = normalizeSubagentTasks(args?.tasks ?? args);
+    if (!tasks.length) throw new Error('Нужен хотя бы один пункт tasks с текстом задачи');
+    const allowed =
+      Array.isArray(args?.tools) && args.tools.length
+        ? SUBAGENT_TOOLS.filter((name) => args.tools.includes(name))
+        : SUBAGENT_TOOLS;
+    const extra = String(args?.context || '').slice(0, 2000);
+    const limit = Math.max(1, Math.min(SUBAGENT_MAX_TASKS, Number(args?.concurrency) || 3));
+
+    return runLimited(tasks, limit, async (task, index) => {
+      const nested = { history: [], memory: null };
+      /* Своя папка на воркера: части одного отчёта не конфликтуют, а основная
+         задача видит, чей файл чей. */
+      const folder = `parts/${String(index + 1).padStart(2, '0')}-${slugify(task.name)}`;
+      try {
+        const outcome = await runTurn({
+          workspace,
+          chat: nested,
+          projectName,
+          userName,
+          userText: `${SUBAGENT_BRIEF}\nТвоя рабочая папка: ${folder}/ — только в неё можно писать файлы.${extra ? `\n\nОбщий контекст задачи: ${extra}` : ''}\n\nТвоя часть: ${task.task}`,
+          filesBrief,
+          images: [],
+          emit: () => {},
+          signal,
+          budget: null,
+          facts,
+          remember: null,
+          toolFilter: allowed,
+          writeRoot: folder,
+          depth: depth + 1,
+          maxSteps: SUBAGENT_STEPS,
+        });
+        usage.tokensIn += outcome.usage.tokensIn;
+        usage.tokensOut += outcome.usage.tokensOut;
+        /* Экономия субагента — тоже часть хода: расход считаем общий. */
+        mergeTrim(trimStats, outcome.trim);
+        const made = outcome.tools.filter((tool) => tool.path && tool.status !== 'error').map((tool) => tool.path);
+        const notes = [
+          outcome.steps ? `шагов ${outcome.steps}` : '',
+          outcome.tools.length ? `инструментов ${outcome.tools.length}` : '',
+          made.length ? `файлы: ${made.join(', ')}` : '',
+        ].filter(Boolean);
+        const tail = notes.length ? `\n\n(${notes.join(', ')})` : '';
+        return { name: task.name, text: `${String(outcome.text || '').trim()}${tail}`, error: null, files: made, folder };
+      } catch (error) {
+        if (error?.name === 'AbortError') throw error;
+        return { name: task.name, text: '', error: String(error?.message || error), files: [], folder };
+      }
+    });
+  }
+
+  const toolCtx = { workspace, signal, remember, projectName, userName, facts, depth, spawnAgent: spawnSubagents };
 
   while (!finished && steps < stepLimit) {
     steps++;
     /* Длинная задача не должна упираться в окно контекста: лишнюю историю
        отрезаем между шагами, а не только в начале хода. Задача закреплена,
-       поэтому агент всегда видит, что от него требуется. */
-    trimHistory(chat, CONTEXT.historyTokens, taskMessage);
-    const system = systemPrompt({ projectName, memory: chat.memory, userName, question: userText, facts, skillsText, filesBrief });
-    const messages = [{ role: 'system', content: system }, ...chat.history];
-
-    let result;
-    try {
-      result = await requestCompletion(
-        {
-          model: MODEL.name,
-          messages,
-          tools: toolDefs,
-          tool_choice: 'auto',
-          max_tokens: CONTEXT.maxOutputTokens,
-          reasoning_effort: MODEL.effort,
-        },
-        {
-          signal,
-          onDelta: (text) => emit({ type: 'delta', text }),
-          onReasoning: () => emit({ type: 'reasoning' }),
-        },
-      );
-    } catch (error) {
-      // Некоторые маршруты не принимают reasoning_effort — повторяем без него.
-      if (error?.status === 400 && /reasoning_effort|unsupported|unknown/i.test(error?.raw || '')) {
-        result = await requestCompletion(
-          {
-            model: MODEL.name,
-            messages,
-            tools: toolDefs,
-            tool_choice: 'auto',
-            max_tokens: CONTEXT.maxOutputTokens,
-          },
-          {
-            signal,
-            onDelta: (text) => emit({ type: 'delta', text }),
-            onReasoning: () => emit({ type: 'reasoning' }),
-          },
-        );
-      } else {
-        throw error;
+       поэтому агент всегда видит, что от него требуется. Сводку заказываем
+       раз в три шага: иначе расход на пересказ съел бы всю экономию. */
+    if (historyTokens(chat.history) > CONTEXT.historyTokens) {
+      try {
+        await compressHistory({
+          chat,
+          workspace,
+          budget: CONTEXT.historyTokens,
+          keepRecent: CONTEXT.keepRecentMessages,
+          pinned: taskMessage,
+          memoryChars: CONTEXT.summaryChars,
+          summarize: steps % 3 === 0 ? summarizeGone : null,
+          config: trimConfig,
+          stats: trimStats,
+        });
+      } catch {
+        if (signal.aborted) throw Object.assign(new Error('aborted'), { name: 'AbortError' });
       }
     }
+    const system = systemPrompt({ projectName, memory: chat.memory, userName, question: userText, facts, skillsText, filesBrief, task: chat.task });
+    const messages = [{ role: 'system', content: system }, ...chat.history];
+
+    const result = await callModel(
+      {
+        model: route.model,
+        messages,
+        tools: toolDefs,
+        tool_choice: 'auto',
+        max_tokens: CONTEXT.maxOutputTokens,
+        reasoning_effort: route.effort,
+      },
+      {
+        signal,
+        onDelta: (text) => emit({ type: 'delta', text }),
+        onReasoning: () => emit({ type: 'reasoning' }),
+      },
+      { fallbackModel: ESCALATION.flashModel },
+    );
 
     if (result.usage) {
       usage.tokensIn += result.usage.prompt_tokens || 0;
@@ -341,7 +518,7 @@ export async function runTurn({
           limitUsd: Math.round(Number(budget.limitUsd) * 100) / 100,
         };
         emit({ type: 'budget', ...budgetHit });
-        return { text: finalText, usage, tools: toolsUsed, steps, memory: chat.memory, budgetHit };
+        return { text: finalText, usage, tools: toolsUsed, steps, memory: chat.memory, budgetHit, trim: trimStats };
       }
     }
 
@@ -378,6 +555,9 @@ export async function runTurn({
       const started = Date.now();
       let content = '';
       let status = 'ok';
+      /* Что инструмент реально создал: путь нужен и карточке задачи, и
+         проверяющему, который сверяет обещанные файлы с готовыми. */
+      let toolPath = '';
       if (brokenArguments) {
         status = 'error';
         content =
@@ -397,8 +577,43 @@ export async function runTurn({
         console.warn(`[tool] ${call.function.name}: аргументы обрезаны`);
       } else {
         try {
-          const executed = await executeTool(call.function.name, args, { workspace, signal, remember });
-          content = truncate(String(executed.text ?? ''), CONTEXT.toolResultChars);
+          const executed = await executeTool(call.function.name, args, toolCtx);
+          /* Обрезка результата (аналог dsh-trim): малый ответ — как есть,
+             крупный детерминированно сжимается, а не влезающий в подсказку
+             уходит в файл проекта с выжимкой и ссылкой на полный текст. */
+          const trimmed = trimToolResult({
+            name: call.function.name,
+            text: String(executed.text ?? ''),
+            workspace,
+            pressure: historyTokens(chat.history),
+            config: trimConfig,
+          });
+          content = trimmed.text;
+          if (trimmed.applied !== 'none') noteTrim(trimStats, trimmed);
+
+          /* Тот же вызов с теми же аргументами даёт тот же ответ: второй раз
+             платить за него токенами незачем — говорим об этом прямо. */
+          const fingerprint = `${call.function.name}:${call.function.arguments || '{}'}`;
+          const seen = callIndex.get(fingerprint);
+          const digest = sha256(content);
+          if (seen && seen.digest === digest) {
+            content = `[Тот же вызов уже был на шаге ${seen.step}, результат не изменился. Не повторяй его — используй то, что уже получил.]`;
+            trimStats.repeated += 1;
+          } else {
+            callIndex.set(fingerprint, { step: steps, digest });
+          }
+          if (trimmed.spill) {
+            console.log(`[trim] ${call.function.name}: ${trimmed.before} → ${trimmed.after} знаков, полный текст ${trimmed.spill}`);
+          }
+
+          const pathDetail = executed.meta?.path ? String(executed.meta.path) : '';
+          toolPath = pathDetail;
+          const trimDetail =
+            trimmed.applied === 'none'
+              ? ''
+              : trimmed.spill
+                ? `сжато ${trimmed.before} → ${trimmed.after}, полный текст ${trimmed.spill}`
+                : `сжато ${trimmed.before} → ${trimmed.after}`;
           emit({
             type: 'tool',
             id: toolId,
@@ -406,7 +621,7 @@ export async function runTurn({
             label,
             summary,
             status: 'ok',
-            detail: executed.meta?.path ? String(executed.meta.path) : '',
+            detail: [pathDetail, trimDetail].filter(Boolean).join(' · '),
             ms: Date.now() - started,
           });
         } catch (error) {
@@ -425,7 +640,7 @@ export async function runTurn({
           });
         }
       }
-      toolsUsed.push({ id: toolId, name: call.function.name, label, summary, status });
+      toolsUsed.push({ id: toolId, name: call.function.name, label, summary, status, ...(toolPath ? { path: toolPath } : {}) });
       chat.history.push({
         role: 'tool',
         tool_call_id: call.id,
@@ -435,36 +650,48 @@ export async function runTurn({
     }
     if (signal.aborted) throw Object.assign(new Error('aborted'), { name: 'AbortError' });
     /* Отрезок шагов закончился, а работа ещё идёт: человека не спрашиваем —
-       агент получает «продолжай» и ведёт задачу дальше сам. Для интерфейса это
-       просто «работаю…», никаких действий в ленте не появляется. */
+       агент получает «продолжай» и ведёт задачу дальше сам. Вместо голого
+       «продолжай» прикладываем карточку задачи: что уже готово и что осталось.
+       Иначе через десяток отрезков модель начинает работу заново. */
     if (steps % segmentSize === 0 && steps < stepLimit) {
-      chat.history.push({ role: 'user', content: CONTINUE_PROMPT });
+      chat.task = updateTaskState(chat.task, {
+        userText,
+        tools: toolsUsed,
+        steps,
+        segments: Math.floor(steps / segmentSize),
+      });
+      chat.history.push({ role: 'user', content: continuePrompt(chat.task, CONTINUE_PROMPT) });
       emit({ type: 'progress', step: steps, limit: stepLimit });
     }
   }
 
   /* Предел исчерпан — в жизни это почти всегда зацикливание, а не настоящая
      работа. Не заставляем человека писать «продолжи»: просим короткий итог
-     без инструментов. */
+     без инструментов, приложив карточку задачи — что успели и что осталось. */
   if (!finished) {
+    chat.task = updateTaskState(chat.task, { userText, tools: toolsUsed, steps });
     try {
-      const system = systemPrompt({ projectName, memory: chat.memory, userName, question: userText, facts, skillsText, filesBrief });
-      const result = await requestCompletion(
+      const system = systemPrompt({ projectName, memory: chat.memory, userName, question: userText, facts, skillsText, filesBrief, task: chat.task });
+      /* Карточка задачи в финальном сообщении помогает итогу быть по делу:
+         модель называет готовые файлы, а не пересказывает процесс. */
+      const card = taskSummaryLine(chat.task);
+      const result = await callModel(
         {
-          model: MODEL.name,
+          model: route.model,
           messages: [
             { role: 'system', content: system },
             ...chat.history,
-            { role: 'user', content: WRAP_UP_PROMPT },
+            { role: 'user', content: card ? `${WRAP_UP_PROMPT}\n\n${card}` : WRAP_UP_PROMPT },
           ],
           max_tokens: CONTEXT.maxOutputTokens,
-          reasoning_effort: MODEL.effort,
+          reasoning_effort: route.effort,
         },
         {
           signal,
           onDelta: (text) => emit({ type: 'delta', text }),
           onReasoning: () => emit({ type: 'reasoning' }),
         },
+        { fallbackModel: ESCALATION.flashModel },
       );
       if (result.usage) {
         usage.tokensIn += result.usage.prompt_tokens || 0;
@@ -478,7 +705,47 @@ export async function runTurn({
     }
   }
 
-  return { text: finalText, usage, tools: toolsUsed, steps, memory: chat.memory };
+  /* Карточка задачи закрывает ход: она же станет началом следующего. */
+  chat.task = updateTaskState(chat.task, { userText, tools: toolsUsed, steps });
+
+  /* Финальный ревью-пасс: сверяем ответ с тем, что вернули инструменты.
+     Дорогой вызов делаем только для содержательных ответов с инструментами;
+     при находках — одна правка, при сбое — исходный текст. */
+  let review = null;
+  if (finalText && REVIEW.enabled) {
+    try {
+      const result = await reviewAnswer({
+        userQuestion: userText,
+        answer: finalText,
+        history: chat.history,
+        createdFiles: toolsUsed.map((tool) => tool.path).filter(Boolean),
+        tools: toolsUsed,
+        depth,
+        complete: (messages, options = {}) =>
+          simpleCompletion(messages, {
+            signal,
+            maxTokens: options.maxTokens || 900,
+            effort: options.effort || 'high',
+            onUsage: (tokensIn, tokensOut) => {
+              usage.tokensIn += tokensIn;
+              usage.tokensOut += tokensOut;
+            },
+          }),
+      });
+      review = result.report;
+      if (result.text && result.text !== finalText) {
+        /* Правка должна попасть и в историю, и в ответ пользователю: иначе
+           следующий ход будет опираться на непроверенный текст. */
+        finalText = result.text;
+        const last = chat.history[chat.history.length - 1];
+        if (last?.role === 'assistant') last.content = finalText;
+      }
+    } catch {
+      review = null;
+    }
+  }
+
+  return { text: finalText, usage, tools: toolsUsed, steps, memory: chat.memory, trim: trimStats, route, review };
 }
 
 export async function generateTitle(text, { signal } = {}) {

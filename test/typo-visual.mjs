@@ -6,7 +6,8 @@
 // Эталон — типографика DSH (dsh-client-ui-theme): 14/22 основной текст, 13/20
 // второй уровень, 12/18 подписи, 11/14 метки, шкала заголовков 16/24 – 21/30,
 // markdown 14/24 с h1 700 21/30, h2 700 19/28, h3 700 18/26, h4 600 14/24,
-// код 11/19, таблица 13/22. Ни один размер не меняется по ширине экрана —
+// код 11/19, таблица 13/22. Кегли подняты на полпикселя по просьбе владельца,
+// высоты строк оставлены прежними. Ни один размер не меняется по ширине экрана —
 // единственное исключение поле ввода на телефоне: 16 px вместо 14, иначе
 // iOS Safari сам увеличивает страницу при фокусе (см. test/ui-keyboard.mjs).
 import fs from 'node:fs';
@@ -102,20 +103,20 @@ function connect(wsUrl) {
 
 // Ожидаемые значения: селектор -> [font-size, line-height, font-weight|null]
 const EXPECTED = {
-  body: ['14px', '22px', null],
-  '.brand-name': ['18px', '24px', '600'],
-  '.project-row': ['14px', '20px', null],
-  '.chat-row': ['14px', '20px', null],
-  '.crumbs': ['14px', '20px', null],
-  '.crumb-chat': ['14px', '20px', '500'],
-  '#input': ['14px', '24px', null],
-  '.empty-title': ['26px', '32px', '500'],
-  '.empty-sub': ['14px', '22px', null],
-  '.suggestion': ['13px', '20px', null],
-  '.btn-primary': ['14px', '22px', '500'],
-  '.files-title': ['14px', '22px', '500'],
-  '.file-row': ['13px', '20px', null],
-  '.modal-title': ['16px', '24px', '600'],
+  body: ['14.5px', '22px', null],
+  '.brand-name': ['18.5px', '24px', '600'],
+  '.project-row': ['14.5px', '20px', null],
+  '.chat-row': ['14.5px', '20px', null],
+  '.crumbs': ['14.5px', '20px', null],
+  '.crumb-chat': ['14.5px', '20px', '500'],
+  '#input': ['14.5px', '24px', null],
+  '.empty-title': ['26.5px', '32px', '500'],
+  '.empty-sub': ['14.5px', '22px', null],
+  '.suggestion': ['13.5px', '20px', null],
+  '.btn-primary': ['14.5px', '22px', '500'],
+  '.files-title': ['14.5px', '22px', '500'],
+  '.file-row': ['13.5px', '20px', null],
+  '.modal-title': ['16.5px', '24px', '600'],
 };
 
 // Осознанное отклонение от «шкала не зависит от ширины»: на телефоне и узком
@@ -169,18 +170,18 @@ const MARKDOWN = `(() => {
 })()`;
 
 const MARKDOWN_EXPECTED = {
-  '.md': ['14px', '24px', null],
-  'md h1': ['21px', '30px', '700'],
-  'md h2': ['19px', '28px', '700'],
-  'md h3': ['18px', '26px', '700'],
-  'md h4': ['14px', '24px', '600'],
-  'md h5': ['14px', '24px', '600'],
-  'md p': ['14px', '24px', null],
-  'md strong': ['14px', '24px', '600'],
-  'md code': ['12.25px', '19px', null],
-  'md pre code': ['11px', '19px', null],
-  'md th': ['13px', '22px', '500'],
-  'md td': ['13px', '22px', null],
+  '.md': ['14.5px', '24px', null],
+  'md h1': ['21.5px', '30px', '700'],
+  'md h2': ['19.5px', '28px', '700'],
+  'md h3': ['18.5px', '26px', '700'],
+  'md h4': ['14.5px', '24px', '600'],
+  'md h5': ['14.5px', '24px', '600'],
+  'md p': ['14.5px', '24px', null],
+  'md strong': ['14.5px', '24px', '600'],
+  'md code': ['12.6875px', '19px', null],
+  'md pre code': ['11.5px', '19px', null],
+  'md th': ['13.5px', '22px', '500'],
+  'md td': ['13.5px', '22px', null],
 };
 
 let baseline = null;

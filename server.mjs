@@ -23,22 +23,32 @@ import {
   taskLimitUsd,
 } from './src/config.mjs';
 import { describeFailure, generateTitle, runTurn } from './src/agent.mjs';
+import {
+  DASHBOARD_FILES_SUBDIR,
+  DASHBOARD_LIMITS,
+  DASHBOARD_TZ,
+  dashboardBlock,
+  dashboardDocsBlock,
+  scheduleText,
+} from './src/dashboard.mjs';
 import { transcribeAudio } from './src/asr.mjs';
 import { detectKind, extractDocumentText, kindLabel } from './src/docparse.mjs';
 import { previewDocument } from './src/docpreview.mjs';
 import { projectFilesBrief } from './src/filebrief.mjs';
 import { docEngines } from './src/doc/index.mjs';
+import { approvalMessage, notifyAdmin, suspicionMessage } from './src/notify.mjs';
+import { issueOpenLink, resolveOpenLink, asciiFileName, OPEN_PREFIX } from './src/openlink.mjs';
+import { proofreadText } from './src/proofread.mjs';
 import {
+  forgetUser as pushForgetUser,
   pushState,
   pushTargets,
   pushToUser,
   pushToUsers,
+  reportDevice as pushReportDevice,
   subscribe as pushSubscribe,
   unsubscribe as pushUnsubscribe,
 } from './src/push.mjs';
-import { approvalMessage, notifyAdmin, suspicionMessage } from './src/notify.mjs';
-import { issueOpenLink, resolveOpenLink, asciiFileName, OPEN_PREFIX } from './src/openlink.mjs';
-import { proofreadText } from './src/proofread.mjs';
 import { keyStatus } from './src/keys.mjs';
 import {
   clearSessionCookie,
@@ -62,6 +72,9 @@ import { pipeZip } from './src/zip.mjs';
 import { nowIso, safeName, uid, uniqueFileName } from './src/util.mjs';
 import { describeImage } from './src/vision.mjs';
 import { webSearch } from './src/search.mjs';
+import { describeTrim } from './src/trim.mjs';
+import { describeProfile } from './src/model.mjs';
+import { describeReview } from './src/review.mjs';
 
 ensureDirs();
 store.init({ adminUsername: ADMIN.username, adminPassword: ADMIN.password });
@@ -252,7 +265,7 @@ function recoverStaleRuns(user) {
       interrupted: true,
       at: nowIso(),
     });
-    store.saveChat(chat.id, { messages: chat.messages, history: chat.history, memory: chat.memory });
+    store.saveChat(chat.id, { messages: chat.messages, history: chat.history, memory: chat.memory, task: chat.task || null });
   }
 }
 
@@ -989,6 +1002,91 @@ async function handleUpload(req, res, user) {
   sendJson(res, 200, { attachment: serializeAttachment(attachment) });
 }
 
+/* ---- документы задания «Дашборда» ----
+   Файлы живут рядом с данными приложения, а не в проекте: проект отчёта можно
+   сменить, материалы при этом остаются. Текст вынимаем сразу при загрузке —
+   во время запуска ждать разбор уже некогда. */
+async function handleDashboardFileUpload(req, res, user, task) {
+  const current = Array.isArray(task.files) ? task.files : [];
+  if (current.length >= DASHBOARD_LIMITS.maxFiles) {
+    return sendError(res, 400, `К одному заданию можно приложить не больше ${DASHBOARD_LIMITS.maxFiles} документов`);
+  }
+  const rawName = decodeURIComponent(String(req.headers['x-filename'] || 'документ'));
+  const name = safeName(rawName).slice(0, 160) || 'документ';
+  const mime = String(req.headers['content-type'] || 'application/octet-stream');
+  const id = uid('df_');
+  const dir = store.dashboardFilesDir(task.id);
+  fs.mkdirSync(dir, { recursive: true });
+  const relPath = `${id}-${name}`;
+  const full = path.join(dir, relPath);
+  if (!(await ensureDiskRoom(res, Number(req.headers['content-length'] || 0)))) return;
+  const size = await receiveToFile(req, LIMITS.maxAttachmentBytes, full);
+  if (!size) {
+    fs.rmSync(full, { force: true });
+    return sendError(res, 400, 'Пустой файл');
+  }
+  const kind = detectKind(name, mime);
+  let text = '';
+  let warnings = [];
+  try {
+    if (kind === 'image') {
+      const described = await describeImage({ buffer: fs.readFileSync(full), mime, name });
+      text = String(described?.text || '');
+    } else if (Number(size) <= LIMITS.maxParseBytes) {
+      const parsed = extractDocumentText(fs.readFileSync(full), name, mime, {
+        maxChars: DASHBOARD_LIMITS.filesContextChars,
+      });
+      text = String(parsed.text || '');
+      warnings = Array.isArray(parsed.warnings) ? parsed.warnings : [];
+    } else {
+      warnings = [
+        `Файл больше ${Math.round(LIMITS.maxParseBytes / 1024 / 1024)} МБ — сохранён, но текст автоматически не извлекался.`,
+      ];
+    }
+  } catch {
+    warnings = ['Текст разобрать не удалось — агент откроет файл в проекте.'];
+  }
+  const textPath = text.trim() ? `${id}.txt` : '';
+  if (textPath) {
+    try {
+      fs.writeFileSync(path.join(dir, textPath), text);
+    } catch {
+      /* без текста задание всё равно получит файл в проекте */
+    }
+  }
+  const file = {
+    id,
+    name,
+    size,
+    mime,
+    kind,
+    relPath,
+    textPath,
+    warnings: warnings.slice(0, 2),
+    createdAt: nowIso(),
+  };
+  const updated = store.addDashboardFile(task.id, user.id, file);
+  if (!updated) {
+    fs.rmSync(full, { force: true });
+    if (textPath) fs.rmSync(path.join(dir, textPath), { force: true });
+    return sendError(res, 400, 'Не удалось сохранить документ');
+  }
+  return sendJson(res, 200, { task: publicDashboardTask(updated, user) });
+}
+
+function handleDashboardFileDelete(res, user, task, fileId) {
+  const removed = store.deleteDashboardFile(task.id, user.id, fileId);
+  if (!removed) return sendError(res, 404, 'Документ не найден');
+  const dir = store.dashboardFilesDir(task.id);
+  try {
+    fs.rmSync(path.join(dir, removed.relPath), { force: true });
+    if (removed.textPath) fs.rmSync(path.join(dir, removed.textPath), { force: true });
+  } catch {
+    /* запись уже удалена — файл мог быть убран вручную */
+  }
+  return sendJson(res, 200, { task: publicDashboardTask(store.getDashboardTask(task.id, user.id), user) });
+}
+
 // Разбор файлов идёт по одному: пики памяти на больших документах не складываются.
 let attachmentChain = Promise.resolve();
 function scheduleAttachment(att, workspace) {
@@ -1248,7 +1346,7 @@ async function executeRun(run, job) {
       at: nowIso(),
     };
     chat.messages.push(userMessage);
-    store.saveChat(chat.id, { messages: chat.messages, history: chat.history, memory: chat.memory });
+    store.saveChat(chat.id, { messages: chat.messages, history: chat.history, memory: chat.memory, task: chat.task || null });
 
     const userText = [text, ctx.text].filter(Boolean).join('\n\n');
     stream.emit({ type: 'start' });
@@ -1274,6 +1372,21 @@ async function executeRun(run, job) {
     });
 
     assistantText = outcome.text || '';
+
+    /* Что дала обрезка контекста в этом ходе: одна строка в лог, без записи
+       отдельного файла — цифры нужны для понимания расходов, не для отчёта. */
+    if (outcome.trim) {
+      const trimLine = describeTrim(outcome.trim);
+      if (trimLine) console.log(`[trim] dialog ${chat.id}: ${trimLine}`);
+    }
+    /* Класс задачи и результат проверки ответа: видно, почему ход ушёл на
+       сильную модель и что нашёл ревью-пасс. */
+    if (outcome.route?.profile === 'pro') {
+      console.log(`[route] dialog ${chat.id}: ${describeProfile(outcome.route)}`);
+    }
+    if (outcome.review?.checked) {
+      console.log(`[review] dialog ${chat.id}: ${describeReview(outcome.review)}`);
+    }
 
     /* Учитываем стоимость: баланс пользователя, расход по проекту и суточная статистика.
        С баланса списывается итоговая сумма (внутренняя наценка уже внутри chargeUsd),
@@ -1323,7 +1436,7 @@ async function executeRun(run, job) {
       at: nowIso(),
       ...(budgetInfo ? { budget: budgetInfo } : {}),
     });
-    store.saveChat(chat.id, { messages: chat.messages, history: chat.history, memory: chat.memory });
+    store.saveChat(chat.id, { messages: chat.messages, history: chat.history, memory: chat.memory, task: chat.task || null });
 
     if (isFirstMessage && (!chat.title || chat.title === 'Новый диалог')) {
       const title = await generateTitle(text || assistantText, { signal: controller.signal }).catch(() => '');
@@ -1346,7 +1459,7 @@ async function executeRun(run, job) {
     } else {
       chat.messages.push({ role: 'assistant', content: '', error: message, at: nowIso() });
     }
-    store.saveChat(chat.id, { messages: chat.messages, history: chat.history, memory: chat.memory });
+    store.saveChat(chat.id, { messages: chat.messages, history: chat.history, memory: chat.memory, task: chat.task || null });
     stream.emit({ type: 'error', message, aborted });
     finishRun(run, aborted ? 'stopped' : 'error');
     notifyRunPush({
@@ -1358,6 +1471,278 @@ async function executeRun(run, job) {
       errorText: message,
     });
   }
+}
+
+/* ---------------------- «Дашборд»: запуск по расписанию ----------------------
+   Постоянное задание — это обычный диалог, который сервер открывает сам, когда
+   подошло время. Браузер при этом может быть закрыт: работа идёт в фоне, ответ
+   складывается в новый диалог и приходит уведомлением на устройства.
+
+   Почему планировщик внутри процесса, а не отдельная служба: приложению нужен
+   ровно один тик в минуту, а состояние (задания, баланс, проекты) и так живёт
+   здесь. Пропущенные из-за простоя запуски не копятся: если окно пропущено
+   больше чем на DASHBOARD_MISS_LIMIT_MS, запуск не догоняется — старый отчёт
+   уже не нужен, лучше дождаться следующего. */
+const DASHBOARD_TICK_MS = Math.max(2000, Number(process.env.DSHOW_DASHBOARD_TICK_MS) || 60 * 1000);
+const DASHBOARD_MISS_LIMIT_MS = 6 * 60 * 60 * 1000;
+/** Сколько запусков «Дашборда» может идти у человека одновременно. */
+const DASHBOARD_RUNS_PER_USER = 2;
+let dashboardBusy = false;
+
+function dashboardRunsFor(userId) {
+  let count = 0;
+  for (const run of runs.values()) {
+    if (run.userId !== userId && run.userId !== String(userId)) continue;
+    if (run.source === 'dashboard' && run.status === 'running') count += 1;
+  }
+  return count;
+}
+
+/** Проект для отчёта: выбранный человеком, иначе первый свой, иначе новый. */
+function dashboardProjectFor(user, task) {
+  const projects = store.projectsFor(user.id);
+  const chosen = task.projectId ? projects.find((project) => project.id === task.projectId) : null;
+  if (chosen) return chosen;
+  if (projects.length) return projects[0];
+  return store.createProject({ ownerId: user.id, name: 'Дашборд' });
+}
+
+/* Документы задания к запуску: файл копируется в папку проекта (агент читает
+   его своими инструментами), а извлечённый при загрузке текст прикладывается к
+   заданию — так отчёт опирается на реальные цифры из бумаг человека, а не на
+   догадки. Текст каждого файла уже посчитан один раз при загрузке. */
+function dashboardDocsFor(task) {
+  const files = Array.isArray(task.files) ? task.files : [];
+  const dir = store.dashboardFilesDir(task.id);
+  const docs = [];
+  let budget = DASHBOARD_LIMITS.filesContextChars;
+  for (const file of files) {
+    let text = '';
+    if (file.textPath && budget > 0) {
+      try {
+        text = fs.readFileSync(path.join(dir, file.textPath), 'utf8');
+      } catch {
+        text = '';
+      }
+      if (text.length > budget) {
+        text = `${text.slice(0, budget)}\n…(документ длинный — прочитай файл целиком)`;
+      }
+      budget -= text.length;
+    }
+    docs.push({ name: file.name, text, file });
+  }
+  return docs;
+}
+
+/** Копии документов в проекте: агент ходит по рабочей папке, а не по данным
+    приложения. Имя не дублируется при повторных запусках. */
+function copyDashboardDocs(project, task, docs) {
+  if (!docs.length) return [];
+  const dir = path.join(store.workspaceDir(project.id), DASHBOARD_FILES_SUBDIR);
+  const paths = [];
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+  } catch (error) {
+    console.error('[dashboard] папка материалов:', error?.message || error);
+    return paths;
+  }
+  for (const doc of docs) {
+    const source = path.join(store.dashboardFilesDir(task.id), doc.file.relPath);
+    const base = safeName(doc.file.name) || 'документ';
+    let name = base;
+    try {
+      const target = path.join(dir, name);
+      const same = fs.existsSync(target) && fs.statSync(target).size === Number(doc.file.size || 0);
+      if (!same) {
+        name = uniqueFileName(dir, base);
+        fs.copyFileSync(source, path.join(dir, name));
+      }
+    } catch (error) {
+      console.error('[dashboard] копирование документа:', error?.message || error);
+      continue;
+    }
+    paths.push(`${DASHBOARD_FILES_SUBDIR}/${name}`);
+  }
+  return paths;
+}
+
+function dashboardTaskText(task, docs = []) {
+  const block = dashboardBlock(task.blockId);
+  const title = block ? block.title : 'Постоянное задание';
+  const base = `Постоянное задание «${title}»\n\n${task.prompt || (block && block.prompt) || ''}`;
+  const notice = dashboardDocsBlock(docs.map((doc) => ({ name: doc.name })));
+  const usable = docs.filter((doc) => String(doc.text || '').trim());
+  const body = usable.length
+    ? `\n\n=== Текст приложенных документов ===\n${usable
+        .map((doc) => `--- ${doc.name} ---\n${doc.text}`)
+        .join('\n\n')}`
+    : '';
+  return `${base}${notice}${body}`;
+}
+
+/**
+ * Готовит запуск задания: диалог, задача, отметки в задании. Саму работу
+ * запускает вызвавший — так ручка успевает ответить, а планировщик не ждёт.
+ * Возвращает причину и подсказку «когда повторить», если запустить нельзя.
+ */
+function beginDashboardRun(task, { manual = false } = {}) {
+  const user = store.getUser(task.ownerId);
+  if (!user || user.disabled) return { ok: false, reason: 'аккаунт недоступен', disable: true };
+  if (!manual && user.role !== 'admin') {
+    const balanceUsd = store.publicUser(user.id).balanceUsd;
+    /* Без денег запуск бессмысленен: ждём пополнения, но не чаще раза в шесть часов. */
+    if (!(balanceUsd > 0)) return { ok: false, reason: 'на балансе нет средств', retryMinutes: 360 };
+  }
+  const project = dashboardProjectFor(user, task);
+  if (!manual && user.role !== 'admin' && store.pendingApprovalFor(project.id)) {
+    return { ok: false, reason: 'ждёт подтверждения администратора', retryMinutes: 60 };
+  }
+  if (dashboardRunsFor(user.id) >= DASHBOARD_RUNS_PER_USER) {
+    return { ok: false, reason: 'агент занят другим заданием', retryMinutes: 15 };
+  }
+  const block = dashboardBlock(task.blockId);
+  const label = new Date().toLocaleDateString('ru-RU', {
+    timeZone: DASHBOARD_TZ,
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+  });
+  const chatMeta = store.createChat({
+    projectId: project.id,
+    ownerId: user.id,
+    title: `${block ? block.title : 'Дашборд'} — ${label}`,
+  });
+  const chat = store.getChat(chatMeta.id, user.id) || chatMeta;
+  const run = createRun({ user, project, chat });
+  run.source = 'dashboard';
+  run.dashboardTaskId = task.id;
+  /* Материалы задания готовим до старта: и копии в проекте, и текст для модели. */
+  const docs = dashboardDocsFor(task);
+  copyDashboardDocs(project, task, docs);
+  store.markDashboardStarted(task.id, { chatId: chat.id, advance: !manual });
+  return {
+    ok: true,
+    chat,
+    run,
+    start: () => {
+      void executeRun(run, {
+        text: dashboardTaskText(task, docs),
+        attachmentIds: [],
+        isFirstMessage: true,
+      })
+        .then(() => store.markDashboardFinished(task.id, run.status))
+        .catch(() => store.markDashboardFinished(task.id, 'error'));
+    },
+  };
+}
+
+function dashboardTick() {
+  if (dashboardBusy) return;
+  dashboardBusy = true;
+  try {
+    const now = Date.now();
+    let launched = 0;
+    for (const task of store.dashboardDue(now)) {
+      if (launched >= 3) break;
+      const scheduled = Date.parse(task.nextRunAt) || now;
+      if (now - scheduled > DASHBOARD_MISS_LIMIT_MS) {
+        store.markDashboardSkipped(task.id, { reason: 'запуск пропущен: сервис был недоступен' });
+        console.log(`[dashboard] задание «${task.blockId}» пропущено (окно прошло)`);
+        continue;
+      }
+      const started = beginDashboardRun(task);
+      if (!started.ok) {
+        /* Временная причина — просто подождать; постоянная — перенести дату. */
+        if (started.retryMinutes) store.postponeDashboardTask(task.id, started.retryMinutes);
+        else store.markDashboardSkipped(task.id, { reason: started.reason, disable: Boolean(started.disable) });
+        continue;
+      }
+      launched += 1;
+      started.start();
+      console.log(`[dashboard] задание «${task.blockId}» → диалог ${started.chat.id}`);
+    }
+  } catch (error) {
+    console.error('[dashboard]', error?.message || error);
+  } finally {
+    dashboardBusy = false;
+  }
+}
+
+function startDashboardScheduler() {
+  /* Первый тик с задержкой: при старте сервиса сначала поднимаются ключи,
+     задачи и перенос хранилища — не надо мешать им своим запуском. */
+  const startDelayMs = Math.max(0, Number(process.env.DSHOW_DASHBOARD_START_MS ?? 20 * 1000) || 0);
+  setTimeout(dashboardTick, startDelayMs).unref?.();
+  const timer = setInterval(dashboardTick, DASHBOARD_TICK_MS);
+  timer.unref?.();
+}
+
+/* Задание глазами браузера: настройки, подписи, расписание и состояние.
+   Внутрь (ownerId, служебные поля) наружу ничего не отдаём. */
+/* Документы задания: отдаём только имя, размер и подсказку — содержимое
+   остаётся на сервере. */
+function publicDashboardFile(file) {
+  return {
+    id: file.id,
+    name: file.name,
+    size: Number(file.size) || 0,
+    warnings: Array.isArray(file.warnings) ? file.warnings.slice(0, 2) : [],
+  };
+}
+
+function publicDashboardTask(task, user) {
+  const block = dashboardBlock(task.blockId) || {};
+  const project = task.projectId ? store.getProject(task.projectId, user.id) : null;
+  return {
+    id: task.id,
+    blockId: task.blockId,
+    title: block.title || task.blockId,
+    short: block.short || '',
+    description: block.description || '',
+    icon: block.icon || 'calendar',
+    skill: block.skill || '',
+    enabled: Boolean(task.enabled),
+    cadence: task.cadence,
+    dayOfMonth: task.dayOfMonth,
+    dayOfWeek: task.dayOfWeek,
+    hour: task.hour,
+    schedule: scheduleText(task),
+    prompt: task.prompt || '',
+    projectId: project ? project.id : '',
+    /* Если проект не выбран, показываем тот, куда отчёт попадёт на самом деле:
+       первый проект аккаунта (его же подставит и планировщик). */
+    projectName: project ? project.name : store.projectsFor(user.id)[0]?.name || '',
+    nextRunAt: task.nextRunAt || null,
+    lastRunAt: task.lastRunAt || null,
+    lastStatus: task.lastStatus || '',
+    lastChatId: task.lastChatId || '',
+    lastError: task.lastError || '',
+    files: (Array.isArray(task.files) ? task.files : []).map(publicDashboardFile),
+    defaults: {
+      cadence: block.cadence || 'monthly',
+      dayOfMonth: block.dayOfMonth || 1,
+      dayOfWeek: block.dayOfWeek || 1,
+      hour: block.hour || 9,
+      prompt: block.prompt || '',
+    },
+  };
+}
+
+function dashboardPayload(user) {
+  store.ensureDashboardTasks(user.id);
+  const tasks = store.dashboardTasks(user.id).map((task) => publicDashboardTask(task, user));
+  const upcoming = tasks
+    .filter((task) => task.enabled && task.nextRunAt)
+    .sort((a, b) => String(a.nextRunAt).localeCompare(String(b.nextRunAt)))[0];
+  const balanceUsd = store.publicUser(user.id)?.balanceUsd ?? 0;
+  return {
+    tasks,
+    nextRunAt: upcoming ? upcoming.nextRunAt : null,
+    tz: DASHBOARD_TZ,
+    balanceUsd,
+    /* Автозапуск тратит баланс — интерфейс обязан сказать это до включения. */
+    canAutoRun: user.role === 'admin' || balanceUsd > 0,
+  };
 }
 
 const gzipCache = new Map();
@@ -1546,8 +1931,9 @@ async function route(req, res) {
       return sendJson(res, 200, { version: assetVersion() }, { 'Cache-Control': 'no-store' });
     }
     if (pathname === '/api/health' && method === 'GET') {
-      /* Число одновременных устройств сейчас не ограничено: max = 0 и
-         unlimited = true. Настройка DSHOW_SESSIONS_MAX возвращает потолок. */
+      /* Сколько устройств аккаунт держит одновременно: сейчас без ограничений —
+         ноутбук, телефон, ярлык и вкладки работают параллельно, не выбивая
+         друг друга. */
       return sendJson(res, 200, {
         ok: true,
         time: nowIso(),
@@ -1570,9 +1956,33 @@ async function route(req, res) {
     }
     if (pathname === '/api/push/subscribe' && method === 'POST') {
       const body = await readJsonBody(req);
-      const result = pushSubscribe(user, body.subscription, req.headers['user-agent']);
+      const device = deviceIdOf(req);
+      const result = pushSubscribe(user, body.subscription, req.headers['user-agent'], {
+        deviceId: body.deviceId || device.id,
+        app: Boolean(body.app),
+      });
       if (!result.ok) return sendError(res, 400, result.error);
       return sendJson(res, 200, { ok: true, subscriptions: result.subscriptions });
+    }
+    /* Состояние уведомлений на устройстве: разрешение браузера, живая подписка,
+       ярлык-приложение. Приходит и тогда, когда уведомления запрещены, — иначе
+       администратор не увидит, что человек выключил их на самом устройстве. */
+    if (pathname === '/api/push/report' && method === 'POST') {
+      const body = await readJsonBody(req);
+      const device = deviceIdOf(req);
+      const result = pushReportDevice(
+        user,
+        {
+          deviceId: body.deviceId || device.id,
+          permission: body.permission,
+          subscribed: body.subscribed,
+          app: body.app,
+        },
+        req.headers['user-agent'],
+      );
+      if (!result.ok) return sendError(res, 400, result.error);
+      const headers = device.fresh && !body.deviceId ? { 'Set-Cookie': deviceCookie(device.id, DEVICE.cookieMs, TRUST_PROXY) } : {};
+      return sendJson(res, 200, result, headers);
     }
     if (pathname === '/api/push/unsubscribe' && method === 'POST') {
       const body = await readJsonBody(req);
@@ -1931,6 +2341,67 @@ async function route(req, res) {
       }
     }
 
+    /* ---- «Дашборд»: постоянные задания ----
+       Шесть блоков есть у каждого аккаунта; человек настраивает расписание,
+       проект и свой текст задания. Запуск по времени делает планировщик
+       (dashboardTick), а «Запустить сейчас» — эта же ручка, но по кнопке. */
+    if (parts[1] === 'dashboard') {
+      if (parts.length === 2 && method === 'GET') return sendJson(res, 200, dashboardPayload(user));
+      if (parts[2] === 'tasks' && parts[3]) {
+        const task = store.getDashboardTask(parts[3], user.id);
+        if (!task) return sendError(res, 404, 'Задание не найдено');
+        if (parts.length === 4 && method === 'PATCH') {
+          const body = await readJsonBody(req);
+          const patch = {};
+          if (body.enabled !== undefined) patch.enabled = Boolean(body.enabled);
+          if (body.cadence !== undefined) patch.cadence = String(body.cadence);
+          if (body.dayOfMonth !== undefined) patch.dayOfMonth = body.dayOfMonth;
+          if (body.dayOfWeek !== undefined) patch.dayOfWeek = body.dayOfWeek;
+          if (body.hour !== undefined) patch.hour = body.hour;
+          if (body.prompt !== undefined) patch.prompt = String(body.prompt);
+          if (body.projectId !== undefined) {
+            const project = body.projectId ? store.getProject(String(body.projectId), user.id) : null;
+            if (body.projectId && !project) return sendError(res, 400, 'Проект не найден');
+            patch.projectId = project ? project.id : '';
+          }
+          store.updateDashboardTask(task.id, user.id, patch);
+          /* Крючок для проверок: расписание срабатывает раз в месяц, а
+             планировщик надо увидеть сейчас. Включается только окружением. */
+          if (process.env.DSHOW_DASHBOARD_TEST === '1' && body.forceDue) store.forceDashboardDue(task.id);
+          return sendJson(res, 200, { task: publicDashboardTask(store.getDashboardTask(task.id, user.id), user) });
+        }
+        if (parts[4] === 'run' && method === 'POST') {
+          const started = beginDashboardRun(task, { manual: true });
+          if (!started.ok) return sendError(res, started.retryMinutes ? 409 : 400, started.reason);
+          /* Отвечаем до начала работы: вкладка откроет диалог и подпишется на
+             поток задачи, а сама задача уже зарегистрирована в runs. */
+          sendJson(res, 200, { chatId: started.chat.id, run: publicRun(started.run) });
+          started.start();
+          return;
+        }
+        if (parts[4] === 'reset' && method === 'POST') {
+          store.resetDashboardTask(task.id, user.id);
+          return sendJson(res, 200, { task: publicDashboardTask(store.getDashboardTask(task.id, user.id), user) });
+        }
+        /* Документы задания: загрузка (тело — сами байты, имя в x-filename),
+           скачивание и удаление. Отдельным путём, чтобы не мешать PATCH. */
+        if (parts[4] === 'files') {
+          if (parts.length === 5 && method === 'POST') return await handleDashboardFileUpload(req, res, user, task);
+          const file = (Array.isArray(task.files) ? task.files : []).find((item) => item.id === parts[5]);
+          if (!file) return sendError(res, 404, 'Документ не найден');
+          if (parts.length === 6 && method === 'DELETE') return handleDashboardFileDelete(res, user, task, file.id);
+          if (parts.length === 6 && method === 'GET') {
+            const full = path.join(store.dashboardFilesDir(task.id), file.relPath);
+            if (!fs.existsSync(full)) return sendError(res, 404, 'Файл не найден');
+            return sendFile(res, full, { download: true, name: file.name });
+          }
+          return sendError(res, 404, 'Не найдено');
+        }
+        return sendError(res, 404, 'Не найдено');
+      }
+      return sendError(res, 404, 'Не найдено');
+    }
+
     if (pathname === '/api/attachments' && method === 'POST') return await handleUpload(req, res, user);
 
     if (parts[1] === 'attachments' && parts[2] && method === 'GET') {
@@ -2019,6 +2490,7 @@ async function route(req, res) {
       if (method === 'DELETE') {
         if (target.id === admin.id) return sendError(res, 400, 'Нельзя удалить свою учётную запись');
         store.deleteUser(target.id);
+        pushForgetUser(target.id);
         return sendJson(res, 200, { ok: true });
       }
     }
@@ -2063,7 +2535,7 @@ async function route(req, res) {
     if (pathname === '/api/admin/push' && method === 'GET') {
       const admin = requireAdmin(req, res);
       if (!admin) return;
-      return sendJson(res, 200, pushTargets(), { 'Cache-Control': 'no-store' });
+      return sendJson(res, 200, pushTargets(store.users()), { 'Cache-Control': 'no-store' });
     }
     if (pathname === '/api/admin/push' && method === 'POST') {
       const admin = requireAdmin(req, res);
@@ -2075,16 +2547,18 @@ async function route(req, res) {
       if (title.length > 80) return sendError(res, 400, 'Заголовок длиннее 80 символов');
       if (!text) return sendError(res, 400, 'Укажите текст уведомления');
       if (text.length > 300) return sendError(res, 400, 'Текст длиннее 300 символов');
-      const targets = pushTargets();
+      const targets = pushTargets(store.users());
       const devicesByUser = new Map(targets.users.map((item) => [item.userId, item.devices]));
       const requested = [...new Set((Array.isArray(body.userIds) ? body.userIds : []).map(String).filter(Boolean))];
       const all = body.all === true;
-      const userIds = all ? [...devicesByUser.keys()] : requested.filter((id) => devicesByUser.has(id));
+      const userIds = all
+        ? [...devicesByUser.keys()].filter((id) => devicesByUser.get(id) > 0)
+        : requested.filter((id) => devicesByUser.get(id) > 0);
       /* Про тех, кому уведомления не придут вовсе, сообщаем отдельно: иначе
          администратор решит, что объявление получили все. */
       const skipped = all
-        ? store.users().filter((item) => !devicesByUser.has(item.id)).length
-        : requested.filter((id) => !devicesByUser.has(id)).length;
+        ? store.users().filter((item) => !devicesByUser.get(item.id)).length
+        : requested.filter((id) => !devicesByUser.get(id)).length;
       if (!userIds.length) {
         return sendError(res, 409, 'Ни у одного из выбранных не включены уведомления');
       }
@@ -2169,8 +2643,13 @@ server.listen(PORT, HOST, () => {
   console.log(`  Адрес:  ${address}`);
   console.log(`  Данные: ${DATA_DIR}`);
   console.log(`  Режим:  ${TRUST_PROXY ? 'за прокси (облако)' : 'локальный'}`);
+  console.log(`  Дашборд: ${process.env.DSHOW_DASHBOARD === '0' ? 'выключен' : 'постоянные задания включены'}`);
   console.log('');
 });
+
+/* Планировщик «Дашборда» поднимается вместе с сервисом. Выключается
+   переменной окружения: это нужно проверкам, которым не нужен фоновой тик. */
+if (process.env.DSHOW_DASHBOARD !== '0') startDashboardScheduler();
 
 process.on('SIGINT', () => {
   console.log('\nОстановка…');

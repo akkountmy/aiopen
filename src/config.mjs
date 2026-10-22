@@ -14,6 +14,9 @@ export const PUBLIC_DIR = path.join(ROOT, 'public');
 export const WORKSPACES_DIR = path.join(DATA_DIR, 'workspaces');
 export const CHATS_DIR = path.join(DATA_DIR, 'chats');
 export const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
+/** Документы, приложенные к заданиям «Дашборда»: живут отдельно от проектов,
+ *  чтобы смена проекта задания не теряла материалы. */
+export const DASHBOARD_FILES_DIR = path.join(DATA_DIR, 'dashboard-files');
 export const LOGS_DIR = path.join(DATA_DIR, 'logs');
 export const INDEX_FILE = path.join(DATA_DIR, 'index.json');
 
@@ -42,6 +45,74 @@ export const CONTEXT = {
      а не настоящая работа. */
   maxSegments: Number(process.env.DSHOW_MAX_SEGMENTS || 12),
   maxOutputTokens: 16000,
+  /* Обрезка результатов инструментов и автосжатие истории (аналог плагина
+     dsh-trim из локального харнесса). Малые ответы не трогаем вовсе, крупные
+     детерминированно сжимаем, а то, что не влезло, выгружаем в файл проекта
+     `.trims/…`, чтобы модель могла открыть его read_file. */
+  trim: {
+    compactAboveChars: Number(process.env.DSHOW_TRIM_ABOVE || 1200),
+    maxInlineChars: Number(process.env.DSHOW_TRIM_INLINE || 8000),
+    headChars: 3200,
+    tailChars: 2200,
+    adaptive: process.env.DSHOW_TRIM_ADAPTIVE !== '0',
+    adaptivePressureTokens: Number(process.env.DSHOW_TRIM_PRESSURE || 20000),
+    keepDiffContextLines: 2,
+    minShrinkRatio: 0.05,
+    spillDir: '.trims',
+    maxSpillFiles: 60,
+    minHistoryChars: 2500,
+  },
+};
+
+/**
+ * Маршрутизация модели по сложности задачи: короткий вопрос идёт на быстрой
+ * модели, аудит, финмодель, ресёрч и сборка документов — на сильной с
+ * максимальным усилием рассуждения. Порог и профили переопределяются
+ * окружением, поэтому на облаке можно поднять планку без пересборки.
+ */
+export const ESCALATION = {
+  enabled: process.env.DSHOW_ESCALATE !== '0',
+  /* Сколько баллов сложности нужно, чтобы включить сильный профиль. */
+  threshold: Number(process.env.DSHOW_ESCALATE_AT || 3),
+  /* Какие модели использовать. Пустое значение pro — работаем на одной. */
+  flashModel: process.env.DSHOW_MODEL || 'deepseek-flash',
+  proModel: process.env.DSHOW_MODEL_PRO || 'deepseek-pro',
+  flashEffort: process.env.DSHOW_EFFORT || 'high',
+  proEffort: process.env.DSHOW_EFFORT_PRO || 'max',
+  /* Сложная задача остаётся на сильной модели до конца хода: не мигаем
+     профилем на каждом шаге и не платим дважды за разбор одного и того же. */
+  stick: process.env.DSHOW_ESCALATE_STICK !== '0',
+};
+
+/**
+ * Финальный ревью-пасс: перед выдачей ответа модель сверяет цифры и файлы с
+ * тем, что реально вернули инструменты. Это защита от выдуманных сумм и
+ * «красивого, но пустого» документа — самая частая претензия к длинным ответам.
+ */
+export const REVIEW = {
+  enabled: process.env.DSHOW_REVIEW !== '0',
+  /* Ниже этого размера ответа проверять нечего: короткие ответы пишутся по
+     фактам из того же контекста и не стоят лишнего вызова. */
+  minAnswerChars: Number(process.env.DSHOW_REVIEW_MIN || 600),
+  /* Сколько знаков выжимки результатов даём проверяющему: ему нужны цифры,
+     а не весь текст страниц. */
+  digestChars: Number(process.env.DSHOW_REVIEW_DIGEST || 9000),
+  /* Правка ответа моделью — только когда найдены серьёзные расхождения. */
+  fix: process.env.DSHOW_REVIEW_FIX !== '0',
+  maxIssues: 12,
+};
+
+/**
+ * Состояние задачи: между отрезками длинной работы модель получает не голое
+ * «продолжай», а короткий структурированный перечень — что сделано, что
+ * осталось, какие файлы готовы. Состояние переживает отрезки и ходы.
+ */
+export const TASK_STATE = {
+  enabled: process.env.DSHOW_TASK_STATE !== '0',
+  /* Сколько пунктов в каждом списке держим: больше — уже не состояние, а лог. */
+  maxItems: 8,
+  /* Бюджет вставки в подсказку. */
+  promptChars: 1400,
 };
 
 const MB = 1024 * 1024;
@@ -272,7 +343,7 @@ export const ASR = {
 };
 
 export function ensureDirs() {
-  for (const dir of [DATA_DIR, WORKSPACES_DIR, CHATS_DIR, UPLOADS_DIR, LOGS_DIR]) {
+  for (const dir of [DATA_DIR, WORKSPACES_DIR, CHATS_DIR, UPLOADS_DIR, LOGS_DIR, DASHBOARD_FILES_DIR]) {
     fs.mkdirSync(dir, { recursive: true });
   }
 }

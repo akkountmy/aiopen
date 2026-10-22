@@ -349,7 +349,7 @@ try {
     : fail('десктоп: центрирование', JSON.stringify({ left: desk.left, right: desk.right, main: [desk.mainLeft, desk.mainRight] }));
   Math.abs(desk.appH - 900) <= 1 ? ok('десктоп: окно занимает всю высоту', `${desk.appH}px`) : fail('десктоп: высота', `${desk.appH}px`);
   desk.overflow <= 0 ? ok('десктоп: нет горизонтального переполнения') : fail('десктоп: переполнение', `${desk.overflow}px`);
-  desk.inputFont === 14 ? ok('десктоп: поле ввода осталось компактным (14 px)') : fail('десктоп: шрифт поля', `${desk.inputFont}px`);
+  desk.inputFont === 14.5 ? ok('десктоп: поле ввода осталось компактным (14.5 px)') : fail('десктоп: шрифт поля', `${desk.inputFont}px`);
 
   // --- уборка ---
   const cleaned = await evaluate(`fetch('/api/projects/' + ${JSON.stringify(project)}, {method:'DELETE'}).then(r => r.status)`);

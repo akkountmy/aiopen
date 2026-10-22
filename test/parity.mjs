@@ -94,7 +94,7 @@ test('память: бюджет промпта соблюдается', () => {
   const facts = Array.from({ length: 40 }, (_, index) => ({ id: `m${index}`, text: `Факт номер ${index} `.padEnd(200, 'я') }));
   const text = memoryPromptText(facts);
   assert.ok(text.length < MEMORY_LIMITS.promptChars + 900, `память в промпте ${text.length} символов`);
-  assert.match(text, /показаны не все/);
+  assert.match(text, /показаны \d+/);
 });
 
 test('память: store пишет, заменяет, удаляет и переживает перезагрузку', () => {
