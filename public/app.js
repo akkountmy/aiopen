@@ -4441,13 +4441,20 @@ async function renderBackups(container) {
     return;
   }
   const wrap = el('div', 'backup-block');
-  wrap.appendChild(el('div', 'admin-section-title', 'Резервные копии диалогов'));
+  wrap.appendChild(el('div', 'admin-section-title', 'Резервные копии диалогов и файлов'));
   const last = data.backups?.[0];
   const schedule = data.automatic
     ? `Копии делаются автоматически раз в сутки, хранится до ${data.keep} штук.`
     : 'Автоматические копии выключены — снимайте их вручную.';
+  const parts = last
+    ? [
+        `${last.chats} ${plural(last.chats, 'диалог', 'диалога', 'диалогов')}`,
+        last.workspaces ? `${last.workspaces} ${plural(last.workspaces, 'проект', 'проекта', 'проектов')} с файлами` : '',
+        fmtSize(last.bytes),
+      ].filter(Boolean)
+    : [];
   const summary = last
-    ? `Последняя копия: ${backupWhen(last)} · диалогов ${last.chats} · ${fmtSize(last.bytes)}.`
+    ? `Последняя копия: ${backupWhen(last)} · ${parts.join(' · ')}.`
     : 'Копий ещё нет: первая появится в течение минуты после запуска сервиса.';
   wrap.appendChild(el('div', 'backup-hint', `${schedule} ${summary}`));
 
@@ -4473,7 +4480,10 @@ async function renderBackups(container) {
     for (const item of data.backups.slice(0, 5)) {
       const row = el('div', 'backup-row');
       row.appendChild(el('div', 'backup-date', backupWhen(item)));
-      row.appendChild(el('div', 'backup-sub', `${item.chats} ${plural(item.chats, 'диалог', 'диалога', 'диалогов')} · ${fmtSize(item.bytes)}`));
+      const line = [`${item.chats} ${plural(item.chats, 'диалог', 'диалога', 'диалогов')}`];
+      if (item.workspaces) line.push(`${item.workspaces} ${plural(item.workspaces, 'проект', 'проекта', 'проектов')}`);
+      line.push(fmtSize(item.bytes));
+      row.appendChild(el('div', 'backup-sub', line.join(' · ')));
       const link = el('a', 'btn', 'Скачать');
       link.href = `/api/admin/backups/download?id=${encodeURIComponent(item.id)}`;
       link.setAttribute('download', '');

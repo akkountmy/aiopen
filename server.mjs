@@ -2618,7 +2618,10 @@ async function route(req, res) {
       if (!admin) return;
       try {
         const result = snapshotState();
-        console.log(`[backup] по кнопке администратора: ${result.id}, диалогов ${result.chats}`);
+        console.log(
+          `[backup] по кнопке администратора: ${result.id}, диалогов ${result.chats}, ` +
+            `проектов ${result.workspaces}, файлов ${result.files}`,
+        );
         return sendJson(res, 200, { ok: true, backup: result, backups: listBackups() });
       } catch (error) {
         return sendError(res, 500, `Не удалось сделать копию: ${error.message}`);
@@ -2632,16 +2635,18 @@ async function route(req, res) {
       if (!backup) return sendError(res, 404, 'Копия не найдена');
       const dir = path.join(backupsDir(), backup.id);
       const files = [];
-      const walk = (base, rel) => {
+      /* Пропускаем только служебные папки в корне копии: `.history` внутри
+         проекта — это срезы разговора, в архиве они нужны. */
+      const walk = (base, rel, depth) => {
         for (const entry of fs.readdirSync(base, { withFileTypes: true })) {
-          if (entry.name.startsWith('.')) continue;
+          if (depth === 0 && entry.name.startsWith('.')) continue;
           const full = path.join(base, entry.name);
           const name = rel ? `${rel}/${entry.name}` : entry.name;
-          if (entry.isDirectory()) walk(full, name);
+          if (entry.isDirectory()) walk(full, name, depth + 1);
           else files.push({ name, path: full });
         }
       };
-      walk(dir, backup.id);
+      walk(dir, backup.id, 0);
       res.writeHead(200, {
         'Content-Type': 'application/zip',
         'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(`dshow-backup-${backup.id}.zip`)}`,

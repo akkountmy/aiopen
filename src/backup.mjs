@@ -1,18 +1,20 @@
 /**
  * Резервные копии состояния сервиса.
  *
- * Что копируем: `index.json` (пользователи, проекты, диалоги, вложения, задания)
- * и папку `chats/` с полными переписками. Именно эти файлы содержат контекст:
- * файлы проектов лежат отдельно и выгружаются кнопкой «Скачать архив», а вот
- * случайно удалённый проект или испорченный индекс раньше было не восстановить.
+ * Что копируем: `index.json` (пользователи, проекты, диалоги, вложения, задания),
+ * папку `chats/` с полными переписками и папку `workspaces/` с файлами проектов,
+ * включая срезы истории (`.history/`). Именно это человек боится потерять:
+ * переписку, вложения проектов и документы, которые он туда загрузил.
  *
  * Как копируем: раз в сутки в `data/backups/<дата>/`, затем ротация — держим
  * последние 7 копий и общий потолок объёма. Копия делается в временную папку и
  * переименовывается, поэтому внезапная остановка не оставит половину архива.
+ * Переписки и индекс копируются всегда; файлы проектов — пока влезают в бюджет
+ * одной копии, начиная с самых свежих.
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { CHATS_DIR, DATA_DIR } from './config.mjs';
+import { CHATS_DIR, DATA_DIR, WORKSPACES_DIR } from './config.mjs';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 export const BACKUP_DEFAULTS = {
@@ -22,10 +24,16 @@ export const BACKUP_DEFAULTS = {
   maxBytes: 400 * 1024 * 1024,
   /* Ниже двух копий не опускаемся никогда: одна свежая, одна предыдущая. */
   minKeep: 2,
+  /* Сколько файлов проектов копировать за один раз: переписки важнее любых файлов. */
+  maxSnapshotBytes: 120 * 1024 * 1024,
 };
 
 export function backupsDir() {
   return path.join(DATA_DIR, 'backups');
+}
+
+export function workspacesDir() {
+  return WORKSPACES_DIR;
 }
 
 function dayStamp(date = new Date()) {
@@ -83,7 +91,15 @@ export function listBackups({ keep = BACKUP_DEFAULTS.keep, maxBytes = BACKUP_DEF
     } catch {
       manifest = null;
     }
-    return { id, bytes: size.total, files: size.count, createdAt: manifest?.createdAt || null, chats: manifest?.chats || 0 };
+    return {
+      id,
+      bytes: size.total,
+      files: size.count,
+      createdAt: manifest?.createdAt || null,
+      chats: manifest?.chats || 0,
+      workspaces: manifest?.workspaces || 0,
+      skippedFiles: manifest?.skippedFiles || 0,
+    };
   });
 }
 
@@ -109,11 +125,75 @@ export function rotateBackups({ keep = BACKUP_DEFAULTS.keep, maxBytes = BACKUP_D
   return removed;
 }
 
+/** Все файлы папки рекурсивно, свежие сверху: при жёстком бюджете успевает главное. */
+function listAllFiles(dir, rel = '', depth = 0) {
+  const out = [];
+  if (depth > 12) return out;
+  let entries = [];
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return out;
+  }
+  for (const entry of entries) {
+    const name = rel ? `${rel}/${entry.name}` : entry.name;
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      out.push(...listAllFiles(full, name, depth + 1));
+      continue;
+    }
+    try {
+      const stat = fs.statSync(full);
+      if (stat.isFile()) out.push({ rel: name, full, size: stat.size, mtime: stat.mtimeMs });
+    } catch {
+      /* файл исчез между листингом и копированием */
+    }
+  }
+  return out;
+}
+
+/** Копирует файлы проектов в копию, пока влезают в бюджет. Возвращает счётчики. */
+function copyWorkspaces(staging, budget) {
+  const from = workspacesDir();
+  const files = listAllFiles(from).sort((a, b) => b.mtime - a.mtime);
+  let copied = 0;
+  let skipped = 0;
+  let bytes = 0;
+  let workspaces = 0;
+  const seen = new Set();
+  for (const file of files) {
+    const project = file.rel.split('/')[0];
+    if (Number.isFinite(budget) && bytes + file.size > budget) {
+      skipped += 1;
+      continue;
+    }
+    const target = path.join(staging, 'workspaces', file.rel);
+    try {
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.copyFileSync(file.full, target);
+    } catch {
+      skipped += 1;
+      continue;
+    }
+    bytes += file.size;
+    copied += 1;
+    if (!seen.has(project)) {
+      seen.add(project);
+      workspaces += 1;
+    }
+  }
+  return { workspaces, files: copied, bytes, skipped };
+}
+
 /**
- * Снимает копию состояния. Возвращает { id, dir, chats, bytes }.
+ * Снимает копию состояния. Возвращает { id, dir, chats, workspaces, bytes }.
  * Повторный вызов в тот же день перезаписывает копию этого дня.
  */
-export function snapshotState({ now = new Date(), keep = BACKUP_DEFAULTS.keep } = {}) {
+export function snapshotState({
+  now = new Date(),
+  keep = BACKUP_DEFAULTS.keep,
+  maxSnapshotBytes = BACKUP_DEFAULTS.maxSnapshotBytes,
+} = {}) {
   const id = dayStamp(now);
   const base = backupsDir();
   fs.mkdirSync(base, { recursive: true });
@@ -147,15 +227,44 @@ export function snapshotState({ now = new Date(), keep = BACKUP_DEFAULTS.keep } 
       /* файл диалога исчез между листингом и копированием */
     }
   }
+  /* Файлы проектов идемпотентно: если бюджета не хватило, копия всё равно целая
+     по перепискам, а в манифесте видно, сколько файлов не поместилось.
+     `maxSnapshotBytes: null` — без ограничения. */
+  const limit =
+    maxSnapshotBytes === null || maxSnapshotBytes === undefined
+      ? Number.POSITIVE_INFINITY
+      : Math.max(0, maxSnapshotBytes - bytes);
+  const docs = copyWorkspaces(staging, limit);
   fs.writeFileSync(
     path.join(staging, 'manifest.json'),
-    JSON.stringify({ createdAt: now.toISOString(), chats, bytes, index: fs.existsSync(indexFile) }, null, 2),
+    JSON.stringify(
+      {
+        createdAt: now.toISOString(),
+        chats,
+        workspaces: docs.workspaces,
+        files: docs.files,
+        skippedFiles: docs.skipped,
+        bytes: bytes + docs.bytes,
+        index: fs.existsSync(indexFile),
+      },
+      null,
+      2,
+    ),
     'utf8',
   );
   fs.rmSync(target, { recursive: true, force: true });
   fs.renameSync(staging, target);
   const removed = rotateBackups({ keep });
-  return { id, dir: path.relative(DATA_DIR, target), chats, bytes, removed };
+  return {
+    id,
+    dir: path.relative(DATA_DIR, target),
+    chats,
+    workspaces: docs.workspaces,
+    files: docs.files,
+    skippedFiles: docs.skipped,
+    bytes: bytes + docs.bytes,
+    removed,
+  };
 }
 
 /**
@@ -163,11 +272,20 @@ export function snapshotState({ now = new Date(), keep = BACKUP_DEFAULTS.keep } 
  * запуск) и далее раз в сутки. Таймер не держит процесс: сервис может
  * останавливаться штатно.
  */
-export function startAutoBackup({ intervalMs = DAY_MS, initialDelayMs = 60 * 1000, keep = BACKUP_DEFAULTS.keep } = {}) {
+export function startAutoBackup({
+  intervalMs = DAY_MS,
+  initialDelayMs = 60 * 1000,
+  keep = BACKUP_DEFAULTS.keep,
+  maxSnapshotBytes = BACKUP_DEFAULTS.maxSnapshotBytes,
+} = {}) {
   const run = (reason) => {
     try {
-      const result = snapshotState({ keep });
-      console.log(`[backup] ${reason}: ${result.id}, диалогов ${result.chats}, ${Math.round(result.bytes / 1024)} КБ`);
+      const result = snapshotState({ keep, maxSnapshotBytes });
+      console.log(
+        `[backup] ${reason}: ${result.id}, диалогов ${result.chats}, проектов ${result.workspaces}, ` +
+          `файлов ${result.files}, ${Math.round(result.bytes / 1024)} КБ` +
+          (result.skippedFiles ? `, не поместилось файлов ${result.skippedFiles}` : ''),
+      );
       if (result.removed?.length) console.log(`[backup] удалены старые копии: ${result.removed.join(', ')}`);
     } catch (error) {
       console.error('[backup]', error?.message || error);
