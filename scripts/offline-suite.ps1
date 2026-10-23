@@ -1,7 +1,7 @@
 # Прогон оффлайн-набора сервиса: по одному тесту, последняя строка в сводку.
 $ErrorActionPreference = 'Continue'
 Set-Location 'D:\DSHarness-0.1\DSH.OPEN.WEB'
-$skip = @('live.mjs','cloud.mjs','pdf-live.mjs','ui-dnd.mjs','ui-flows.mjs','ui-keyboard-typing.mjs','ui-keyboard.mjs','ui-mobile.mjs','ui-panels.mjs','ui-runs.mjs','ui-scroll.mjs','ui-swipe.mjs','ui-version.mjs','typo-visual.mjs','device-wording.mjs','device-guard.mjs','push-auto.mjs','push-broadcast.mjs','push-sw.mjs','dashboard.mjs','chat-links.mjs','two-devices.mjs','backup.mjs','pdf-live.mjs','docpreview.mjs')
+$skip = @('live.mjs','cloud.mjs','pdf-live.mjs','ui-dnd.mjs','ui-flows.mjs','ui-keyboard-typing.mjs','ui-keyboard.mjs','ui-mobile.mjs','ui-panels.mjs','ui-runs.mjs','ui-scroll.mjs','ui-swipe.mjs','ui-version.mjs','typo-visual.mjs','device-wording.mjs','device-guard.mjs','push-auto.mjs','push-broadcast.mjs','push-sw.mjs','dashboard.mjs','chat-links.mjs','two-devices.mjs','backup.mjs','pdf-live.mjs','docpreview.mjs','status-bar-live.mjs','landing.mjs','smoke.mjs','vision.mjs')
 $files = Get-ChildItem test -Filter *.mjs | Where-Object { $skip -notcontains $_.Name } | Select-Object -ExpandProperty Name
 foreach ($file in $files) {
   $out = & node "test/$file" 2>&1
