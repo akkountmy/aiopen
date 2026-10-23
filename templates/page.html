@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Заголовок страницы — утверждение, а не тема</title>
+<!--
+  Каркас страницы: hero, числа, карточки, таблица, финал, подвал, видимая
+  плашка ошибок. Скопируй файл в проект через write_file и замени содержимое.
+  Всё внутри одного файла: ни CDN, ни внешних шрифтов, ни fetch к чужим API —
+  страница обязана открываться офлайн.
+-->
+<style>
+  :root{
+    --bg:#0b0d12; --panel:#141926; --line:#222a3a;
+    --text:#e8eaf0; --muted:#9aa4b8; --accent:#5b8cff;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--text);
+       font:16px/1.6 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+       -webkit-font-smoothing:antialiased}
+  .wrap{max-width:1080px;margin:0 auto;padding:0 24px}
+  header{padding:96px 0 64px;border-bottom:1px solid var(--line)}
+  .eyebrow{color:var(--accent);font-size:13px;letter-spacing:.14em;text-transform:uppercase;margin:0 0 18px}
+  h1{font-size:clamp(28px,4.4vw,52px);line-height:1.1;letter-spacing:-.02em;margin:0 0 18px;max-width:22ch}
+  .lead{color:var(--muted);font-size:clamp(16px,1.7vw,20px);max-width:60ch;margin:0 0 28px}
+  .actions{display:flex;gap:12px;flex-wrap:wrap}
+  .btn{display:inline-block;padding:13px 22px;border-radius:10px;text-decoration:none;
+       font-weight:600;font-size:15px;border:1px solid transparent;transition:transform .15s,background .15s}
+  .btn-primary{background:var(--accent);color:#08111f}
+  .btn-ghost{border-color:var(--line);color:var(--text)}
+  .btn:hover{transform:translateY(-1px)}
+  .btn:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+  section{padding:64px 0;border-bottom:1px solid var(--line)}
+  h2{font-size:clamp(22px,2.6vw,32px);line-height:1.2;margin:0 0 12px;letter-spacing:-.01em}
+  .sub{color:var(--muted);max-width:64ch;margin:0 0 32px}
+  .grid{display:grid;gap:20px;grid-template-columns:repeat(auto-fit,minmax(220px,1fr))}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:22px}
+  .card h3{margin:0 0 8px;font-size:17px}
+  .card p{margin:0;color:var(--muted);font-size:15px}
+  .kpis{display:grid;gap:20px;grid-template-columns:repeat(auto-fit,minmax(180px,1fr))}
+  .kpi{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:22px}
+  .kpi b{display:block;font-size:clamp(26px,3.2vw,38px);line-height:1.1;letter-spacing:-.02em}
+  .kpi span{color:var(--muted);font-size:14px}
+  table{width:100%;border-collapse:collapse;font-size:15px}
+  th,td{text-align:left;padding:12px 14px;border-bottom:1px solid var(--line)}
+  th{color:var(--muted);font-weight:600;font-size:13px;text-transform:uppercase;letter-spacing:.06em}
+  td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
+  footer{padding:40px 0 64px;color:var(--muted);font-size:14px}
+  .err{position:fixed;left:16px;right:16px;bottom:16px;z-index:9;display:none;
+       background:#3a1520;border:1px solid #7d2438;color:#ffd9df;border-radius:12px;
+       padding:14px 18px;font-size:14px}
+  @media (max-width:640px){
+    .wrap{padding:0 16px}
+    header{padding:64px 0 40px}
+    section{padding:44px 0}
+  }
+</style>
+</head>
+<body>
+<div class="err" id="err" role="alert"></div>
+
+<header>
+  <div class="wrap">
+    <p class="eyebrow">Короткая надпись-контекст</p>
+    <h1>Главный вывод страницы одним утверждением с числами</h1>
+    <p class="lead">Одна-две строки пояснения: для кого страница, что человек поймёт за первые десять секунд.</p>
+    <div class="actions">
+      <a class="btn btn-primary" href="#next">Главное действие</a>
+      <a class="btn btn-ghost" href="#facts">Второстепенное</a>
+    </div>
+  </div>
+</header>
+
+<section id="facts">
+  <div class="wrap">
+    <h2>Раздел, который объясняет главный вывод</h2>
+    <p class="sub">Вводная строка: что здесь показано и почему это важно.</p>
+    <div class="kpis">
+      <div class="kpi"><b>1 240</b><span>Что это число значит, период</span></div>
+      <div class="kpi"><b>+18 %</b><span>К чему сравнение</span></div>
+      <div class="kpi"><b>3,4 дня</b><span>Единица и база</span></div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>Три-шесть смысловых блоков</h2>
+    <p class="sub">Каждый блок — одна мысль, не абзац текста.</p>
+    <div class="grid">
+      <div class="card"><h3>Первый блок</h3><p>Два-три предложения по делу.</p></div>
+      <div class="card"><h3>Второй блок</h3><p>Два-три предложения по делу.</p></div>
+      <div class="card"><h3>Третий блок</h3><p>Два-три предложения по делу.</p></div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>Сравнение в таблице</h2>
+    <table>
+      <thead><tr><th>Показатель</th><th class="num">Значение</th><th class="num">Изменение</th></tr></thead>
+      <tbody>
+        <tr><td>Строка данных</td><td class="num">1 000 ₽</td><td class="num">+12 %</td></tr>
+        <tr><td>Строка данных</td><td class="num">840 ₽</td><td class="num">−4 %</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="next">
+  <div class="wrap">
+    <h2>Что делать дальше</h2>
+    <p class="lead">Один шаг, срок и кто отвечает.</p>
+    <div class="actions"><a class="btn btn-primary" href="#">Сделать шаг</a></div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">Подготовлено: дата · источник данных · кто собрал</div>
+</footer>
+
+<script>
+  // Видимая плашка вместо молчаливой поломки: пользователь пришлёт текст ошибки.
+  window.addEventListener('error', function (event) {
+    var box = document.getElementById('err');
+    box.style.display = 'block';
+    box.textContent = 'Ошибка на странице: ' + (event.message || 'неизвестно');
+  });
+</script>
+</body>
+</html>

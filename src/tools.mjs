@@ -13,7 +13,8 @@ import { imageInfo } from './doc/image-info.mjs';
 import { describeImage } from './vision.mjs';
 import { fetchUrl, webSearch, readPage, fetchMany, crawlSite, searchMany } from './search.mjs';
 import { runJavascript } from './jsruntime.mjs';
-import { browserAvailable, checkPage, describePage } from './browser.mjs';
+import { checkPage, describePage } from './browser.mjs';
+import { pageTemplate, staticPageChecks, staticIssueCount } from './pagecheck.mjs';
 import { escapeHtml, formatBytes, safeName, truncate } from './util.mjs';
 import { writeZip } from './zip.mjs';
 
@@ -908,20 +909,30 @@ export const TOOL_DEFS = [
     function: {
       name: 'check_page',
       description:
-        'Открыть страницу в настоящем браузере и посмотреть на неё глазами: скриншот в проект, ошибки консоли, незагруженные файлы, горизонтальная прокрутка на нужной ширине. Годится и для живого сайта по ссылке, и для собранного файла проекта (укажи путь, например index.html).',
+        'Проверить страницу перед сдачей: снимки на 390/768/1440 px прямо в файлах проекта плюс машинный отчёт — горизонтальная прокрутка, ошибки консоли, битые и внешние запросы, картинки без alt, отсутствие h1. Работает и для файла проекта (путь, например index.html), и для живого адреса. В окружении без браузера проверяет по коду: h1, alt, внешние и битые ссылки, фиксированные ширины, парность тегов — и честно пишет, что осталось непроверенным.',
       parameters: {
         type: 'object',
         properties: {
-          url: { type: 'string', description: 'Адрес https://… или путь к файлу проекта.' },
-          width: { type: 'integer', description: 'Ширина окна, 320–2400. По умолчанию 1280.' },
+          url: { type: 'string', description: 'Путь к файлу проекта (index.html) или адрес https://…' },
+          widths: { type: 'string', description: 'Ширины проверки через запятую. По умолчанию 390,768,1440.' },
+          width: { type: 'integer', description: 'Одна ширина вместо набора, 320–2400.' },
           height: { type: 'integer', description: 'Высота окна, 320–2400. По умолчанию 900.' },
           full_page: { type: 'boolean', description: 'Снимать страницу целиком, а не первый экран.' },
-          screenshot: { type: 'string', description: 'Куда положить скриншот в проекте. По умолчанию screens/page-<ширина>.png.' },
+          screenshot: { type: 'string', description: 'Имя снимка в проекте. По умолчанию screens/page-<ширина>.png.' },
           wait_ms: { type: 'integer', description: 'Подождать после загрузки, мс, до 20000.' },
           timeout_ms: { type: 'integer', description: 'Предел ожидания страницы, мс, до 90000.' },
         },
         required: ['url'],
       },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'page_template',
+      description:
+        'Готовый каркас страницы (hero, 2–4 числа, карточки, таблица, финал, подвал, адаптив, видимая плашка ошибок): скопируй в проект и замени содержимое, а не собирай вёрстку с нуля. Возвращает один самодостаточный HTML-файл без внешних запросов.',
+      parameters: { type: 'object', properties: {} },
     },
   },
   {
@@ -1409,7 +1420,7 @@ export function toolSummary(name, args) {
     case 'crawl':
       return args.url || '';
     case 'check_page':
-      return `${args.url || ''}${args.width ? ` · ${args.width} px` : ''}`;
+      return `${args.url || ''}${args.widths ? ` · ${args.widths}` : args.width ? ` · ${args.width} px` : ' · 390/768/1440 px'}`;
     case 'analyze_data':
       return `${args.path || ''}${args.mode ? ` · ${args.mode}` : ''}`;
     case 'find_in_files':
@@ -1528,12 +1539,12 @@ export function pythonAvailable() {
 }
 
 /** Инструменты, доступные в текущем окружении: без run_python, если Python не
- * установлен, и без check_page, если нет браузера (в облаке его нет). */
+ * установлен. check_page остаётся всегда — без браузера он проверяет страницу
+ * по коду, а не исчезает из набора в середине задачи. */
 export async function availableToolDefs() {
-  const [withPython, withBrowser] = await Promise.all([pythonAvailable(), browserAvailable()]);
+  const withPython = await pythonAvailable();
   let defs = TOOL_DEFS;
   if (!withPython) defs = defs.filter((tool) => tool.function.name !== 'run_python');
-  if (!withBrowser) defs = defs.filter((tool) => tool.function.name !== 'check_page');
   return defs;
 }
 
@@ -1822,22 +1833,32 @@ export async function executeTool(name, args, ctx) {
     case 'check_page': {
       const result = await checkPage(args.url, {
         root,
-        width: Number(args.width) || 1280,
+        widths: args.widths !== undefined ? String(args.widths) : Number(args.width) || undefined,
         height: Number(args.height) || 900,
         fullPage: Boolean(args.full_page),
         screenshot: String(args.screenshot || ''),
         waitMs: Number(args.wait_ms) || 0,
         timeoutMs: Number(args.timeout_ms) || 30000,
       });
+      const variants = result.variants || [];
+      const failed = variants.filter((variant) => variant.overflow || variant.consoleErrors.length || variant.broken.length || variant.external.length).length;
       return {
         text: describePage(result),
         meta: {
-          status: result.status,
-          screenshot: result.screenshot,
-          overflow: result.overflow,
-          consoleErrors: result.consoleErrors.length,
-          resourceErrors: result.resourceErrors.length,
+          mode: result.mode,
+          widths: result.widths,
+          screenshots: variants.map((variant) => variant.screenshot),
+          failedWidths: failed,
+          staticIssues: staticIssueCount(result.static || {}),
         },
+      };
+    }
+    case 'page_template': {
+      const html = pageTemplate();
+      const facts = staticPageChecks(html);
+      return {
+        text: `Каркас страницы (${facts.chars} знаков, h1: «${facts.h1}»)\n\n${html}`,
+        meta: { chars: facts.chars },
       };
     }
     case 'run_python': {
