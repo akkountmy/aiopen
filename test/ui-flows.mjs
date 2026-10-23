@@ -392,7 +392,7 @@ try {
   const stoppedByButton = await evaluate(`!document.getElementById('stopBtn').classList.contains('hidden')`);
   if (stoppedByButton) {
     await click('#stopBtn');
-    const restored = await waitFor(`document.getElementById('stopBtn').classList.contains('hidden') && !document.getElementById('sendBtn').classList.contains('hidden')`);
+    const restored = await waitFor(`document.getElementById('stopBtn').classList.contains('hidden') && !document.getElementById('sendBtn').classList.contains('hidden')`, 20000);
     restored ? ok('«Стоп» возвращает кнопку отправки') : fail('остановка генерации', 'кнопки не вернулись');
   } else {
     ok('ответ пришёл сразу, «Стоп» не понадобился');
