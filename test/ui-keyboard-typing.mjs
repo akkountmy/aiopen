@@ -288,6 +288,24 @@ try {
     ? ok('высота окна совпадает с видимой областью на всей анимации')
     : fail('высота окна при анимации', `${wrongHeight} расхождений`);
 
+  // Посимвольный набор: поле не должно «ползти» вверх на несколько пикселей
+  // за каждую букву, пока текст ещё помещается в одну строку.
+  const typingBase = await evaluate(MEASURE);
+  const typedHeights = [];
+  for (const char of 'Проверка') {
+    await cdp.send('Input.insertText', { text: char });
+    await sleep(40);
+    typedHeights.push((await evaluate(MEASURE)).inputH);
+  }
+  const typedSpread = Math.max(...typedHeights) - Math.min(...typedHeights);
+  typedSpread <= 1 && Math.abs(typedHeights[0] - typingBase.inputH) <= 1
+    ? ok('посимвольный набор не дёргает поле ввода', `${typedHeights[0]}px`)
+    : fail('посимвольный набор', JSON.stringify({ base: typingBase.inputH, heights: typedHeights }));
+  await evaluate(
+    `(() => { const i = document.querySelector('#input'); i.value = ''; i.dispatchEvent(new Event('input', { bubbles: true })); i.focus(); return true; })()`,
+  );
+  await sleep(80);
+
   // Набор: поле растёт, но не съедает экран; курсор и последняя строка видны.
   let maxComposer = 0;
   let badBottom = 0;
@@ -388,6 +406,23 @@ try {
   !desk.kb && desk.appH === 900
     ? ok('на компьютере окно занимает всю высоту', `${desk.appH}px`)
     : fail('окно на компьютере', JSON.stringify({ kb: desk.kb, appH: desk.appH }));
+
+  // Та же проверка на широком экране: одна строка не должна расти от буквы к букве.
+  await evaluate(
+    `(() => { const i = document.querySelector('#input'); i.value = ''; i.dispatchEvent(new Event('input', { bubbles: true })); i.focus(); return true; })()`,
+  );
+  await sleep(80);
+  const deskTypingBase = await evaluate(MEASURE);
+  const deskTypedHeights = [];
+  for (const char of 'Проверка ввода') {
+    await cdp.send('Input.insertText', { text: char });
+    await sleep(40);
+    deskTypedHeights.push((await evaluate(MEASURE)).inputH);
+  }
+  const deskSpread = Math.max(...deskTypedHeights) - Math.min(...deskTypedHeights);
+  deskSpread <= 1 && Math.abs(deskTypedHeights[0] - deskTypingBase.inputH) <= 1
+    ? ok('на компьютере посимвольный набор не дёргает поле', `${deskTypedHeights[0]}px`)
+    : fail('посимвольный набор на компьютере', JSON.stringify({ base: deskTypingBase.inputH, heights: deskTypedHeights }));
 
   const cleaned = await evaluate(
     `fetch('/api/projects/' + ${JSON.stringify(ids.project)}, {method:'DELETE'}).then(r => r.status)`,

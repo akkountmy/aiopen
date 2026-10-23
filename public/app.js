@@ -5010,13 +5010,20 @@ function autoResize(force = false) {
   const current = parseFloat(input.style.height) || 0;
   /* Высоту схлопываем только когда текст стал короче (или по просьбе).
      На каждый символ это вызывало пересчёт всей ленты и дёргало экран. */
-  if (force || !current || input.value.length < lastComposerLength || current > max + 1) {
+  const shrink = force || !current || input.value.length < lastComposerLength || current > max + 1;
+  if (shrink) {
     input.style.height = 'auto';
   }
   lastComposerLength = input.value.length;
-  const needed = input.scrollHeight + 3;
-  const next = Math.min(needed, max);
-  if (Math.abs(next - (parseFloat(input.style.height) || 0)) > 0.5) {
+  /* scrollHeight текстового поля никогда не меньше его текущей высоты —
+     он включает clientHeight. Прибавлять к нему +3 на каждом символе нельзя:
+     поле росло на 3 px за нажатие, пока не упиралось в предел, и «скакало».
+     Поэтому, если текст ещё помещается, высоту не трогаем; растём только
+     когда scrollHeight действительно стал больше clientHeight. */
+  const needed = input.scrollHeight;
+  const fits = !shrink && needed <= input.clientHeight + 1;
+  const next = fits ? current : Math.min(needed, max);
+  if (Math.abs(next - current) > 0.5) {
     input.style.height = `${next}px`;
   }
   input.style.overflowY = needed > max ? 'auto' : 'hidden';
