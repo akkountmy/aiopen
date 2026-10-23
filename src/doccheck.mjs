@@ -301,3 +301,74 @@ export function formatCheckReport(check) {
   }
   return parts.join('\n');
 }
+
+/* ----------------------------- Выдержка ----------------------------- */
+
+function unescapeXml(text) {
+  return String(text || '')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, '&');
+}
+
+function squeeze(text) {
+  return String(text || '').replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * Короткая выдержка из готового файла — чтобы проверяющий видел, о чём
+ * документ, а не только его имя. В харнессе для этого есть word_read и
+ * ppt_read; здесь то же самое делается разбором пакета, без Python.
+ * PDF не разбираем: текст в нём сжат, выдержка была бы мусором — честно
+ * возвращаем пустую строку.
+ */
+export async function documentExcerpt(fullPath, { chars = 700 } = {}) {
+  const kind = documentKind(fullPath);
+  if (!kind || kind === 'pdf') return '';
+  let buffer;
+  try {
+    buffer = fs.readFileSync(fullPath);
+  } catch {
+    return '';
+  }
+  try {
+    const zip = await loadZip(buffer);
+    let text = '';
+    let detail = '';
+    if (kind === 'docx') {
+      const xml = (await textOf(zip, 'word/document.xml')) || '';
+      const parts = [...xml.matchAll(/<w:t[^>]*>([\s\S]*?)<\/w:t>/g)].map((match) => unescapeXml(match[1]));
+      text = squeeze(parts.join(' '));
+      const tables = countMatches(xml, /<w:tbl>/g);
+      if (tables) detail = `таблиц ${tables}`;
+    } else if (kind === 'pptx') {
+      const files = zipNames(zip)
+        .filter((name) => /^ppt\/slides\/slide\d+\.xml$/.test(name))
+        .sort((a, b) => Number(/(\d+)\.xml$/.exec(a)[1]) - Number(/(\d+)\.xml$/.exec(b)[1]));
+      const slides = [];
+      for (const file of files.slice(0, 6)) {
+        const xml = (await textOf(zip, file)) || '';
+        const parts = [...xml.matchAll(/<a:t>([\s\S]*?)<\/a:t>/g)].map((match) => unescapeXml(match[1]));
+        const line = squeeze(parts.join(' '));
+        slides.push(line || '(без текста)');
+      }
+      text = slides.map((line, index) => `${index + 1}. ${line}`).join(' ');
+      detail = `слайдов ${files.length}`;
+    } else if (kind === 'xlsx') {
+      const shared = (await textOf(zip, 'xl/sharedStrings.xml')) || '';
+      const strings = [...shared.matchAll(/<t[^>]*>([\s\S]*?)<\/t>/g)].map((match) => unescapeXml(match[1]));
+      text = squeeze(strings.join(' '));
+      const workbook = (await textOf(zip, 'xl/workbook.xml')) || '';
+      const sheets = [...workbook.matchAll(/<sheet\s[^>]*name="([^"]*)"/g)].map((match) => match[1]);
+      detail = sheets.length ? `листы: ${sheets.join(', ')}` : '';
+    }
+    text = squeeze(text);
+    if (!text) return detail ? `(${detail})` : '';
+    const trimmed = text.length > chars ? `${text.slice(0, chars)}…` : text;
+    return detail ? `${trimmed} (${detail})` : trimmed;
+  } catch {
+    return '';
+  }
+}

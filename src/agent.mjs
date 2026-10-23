@@ -1,4 +1,5 @@
-﻿import { CONTEXT, ESCALATION, MODEL, REVIEW, costUsd } from './config.mjs';
+import { CONTEXT, ESCALATION, MODEL, REVIEW, costUsd } from './config.mjs';
+import { documentExcerpt, documentKind } from './doccheck.mjs';
 import { getDeepSeekKey } from './keys.mjs';
 import { chooseProfile } from './model.mjs';
 import { summaryPrompt, systemPrompt } from './prompt.mjs';
@@ -168,11 +169,11 @@ async function callModel(body, options, { fallbackModel = '' } = {}) {
  * правка. `onUsage` получает расход, чтобы служебные вызовы попадали в счёт
  * задачи, а не были бесплатными для владельца сервиса.
  */
-export async function simpleCompletion(messages, { maxTokens = 500, signal, effort = 'low', onUsage = null } = {}) {
+export async function simpleCompletion(messages, { maxTokens = 500, signal, effort = 'low', onUsage = null, model = '' } = {}) {
   const key = getDeepSeekKey();
   if (!key) return '';
-  const call = (withEffort) => {
-    const body = { model: MODEL.name, messages, max_tokens: maxTokens, stream: false };
+  const call = (withEffort, name) => {
+    const body = { model: name || MODEL.name, messages, max_tokens: maxTokens, stream: false };
     if (withEffort) body.reasoning_effort = effort;
     return fetch(`${MODEL.baseURL}/chat/completions`, {
       method: 'POST',
@@ -181,8 +182,17 @@ export async function simpleCompletion(messages, { maxTokens = 500, signal, effo
       signal,
     });
   };
-  let response = await call(true);
-  if (response.status === 400) response = await call(false);
+  /* effort не знает каждая модель: на 400 повторяем тот же запрос без него. */
+  const attempt = async (name) => {
+    let answer = await call(true, name);
+    if (answer.status === 400) answer = await call(false, name);
+    return answer;
+  };
+  let response = await attempt(model);
+  /* Модели проверяющего может не быть в доступе: лучше проверить основной,
+     чем промолчать. */
+  if (!response.ok && model) response = await attempt('');
+  if (!response.ok) throw new Error(`simple completion ${response.status}`);
   if (!response.ok) throw new Error(`simple completion ${response.status}`);
   const json = await response.json();
   if (onUsage && json?.usage) {
@@ -191,6 +201,31 @@ export async function simpleCompletion(messages, { maxTokens = 500, signal, effo
   return String(json?.choices?.[0]?.message?.content || '').trim();
 }
 
+
+/**
+ * Выдержки из готовых файлов для проверяющего: имя, тема и первые строки.
+ * В харнессе это делает чтение документа обратно (word_read/ppt_read); здесь
+ * то же самое без Python. Отсутствующие и нечитаемые файлы пропускаем молча —
+ * ревью не должно падать из-за выдержки.
+ */
+async function buildReviewExcerpts(paths, workspace, { limit = REVIEW.excerptFiles } = {}) {
+  const out = [];
+  const seen = new Set();
+  for (const rel of Array.isArray(paths) ? paths : []) {
+    const name = String(rel || '').trim();
+    if (!name || seen.has(name)) continue;
+    seen.add(name);
+    if (!documentKind(name)) continue;
+    try {
+      const text = await documentExcerpt(path.join(workspace, name), { chars: REVIEW.excerptChars });
+      if (text) out.push({ file: name, text });
+    } catch {
+      /* нечитаемый файл остаётся без выдержки */
+    }
+    if (out.length >= limit) break;
+  }
+  return out;
+}
 
 function buildUserContent(text, images) {
   if (!images.length) return text;
@@ -712,15 +747,21 @@ export async function runTurn({
 
   /* Финальный ревью-пасс: сверяем ответ с тем, что вернули инструменты.
      Дорогой вызов делаем только для содержательных ответов с инструментами;
-     при находках — одна правка, при сбое — исходный текст. */
+     при находках — одна правка, при сбое — исходный текст. Проверяющий
+     получает выдержки готовых файлов и, если настроено, другую модель: одна
+     и та же модель повторяет свои слепые зоны. */
   let review = null;
   if (finalText && REVIEW.enabled) {
     try {
+      const createdFiles = toolsUsed.map((tool) => tool.path).filter(Boolean);
+      const excerpts = await buildReviewExcerpts(createdFiles, workspace);
       const result = await reviewAnswer({
         userQuestion: userText,
         answer: finalText,
         history: chat.history,
-        createdFiles: toolsUsed.map((tool) => tool.path).filter(Boolean),
+        createdFiles,
+        excerpts,
+        routeModel: route.model,
         tools: toolsUsed,
         depth,
         complete: (messages, options = {}) =>
@@ -728,6 +769,7 @@ export async function runTurn({
             signal,
             maxTokens: options.maxTokens || 900,
             effort: options.effort || 'high',
+            model: options.model || '',
             onUsage: (tokensIn, tokensOut) => {
               usage.tokensIn += tokensIn;
               usage.tokensOut += tokensOut;

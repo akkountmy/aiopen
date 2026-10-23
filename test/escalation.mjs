@@ -147,7 +147,10 @@ const {
   needsReview,
   parseVerdict,
   reviewAnswer,
+  reviewModelName,
 } = await import('../src/review.mjs');
+const { documentExcerpt } = await import('../src/doccheck.mjs');
+const { writeZip } = await import('../src/zip.mjs');
 const { continuePrompt, renderTaskState, taskSummaryLine, updateTaskState } = await import('../src/taskstate.mjs');
 const { MEMORY_LIMITS, memoryPromptText, searchFacts } = await import('../src/memory.mjs');
 
@@ -390,6 +393,68 @@ test('ревью правит готовый ответ до выдачи', asyn
   assert.equal(outcome.review.fixed, true, 'правка не применилась');
   assert.match(outcome.text, /250 000/);
   assert.ok(!outcome.text.includes('7 654 321'), 'выдуманная цифра осталась в ответе');
+});
+
+test('проверяющий работает на сильной модели, если задача шла на быстрой', async () => {
+  reset();
+  let step = 0;
+  behavior = () => {
+    step += 1;
+    if (step === 1) return { kind: 'tool', name: 'calculate', args: { expression: '1000000/4' } };
+    return { kind: 'text', text: `${'Проверил данные проекта и подготовил сводку. '.repeat(30)}Итог: 250 000 руб.` };
+  };
+  const outcome = await runTurn(baseTurn({ userText: 'Посчитай итог и подготовь сводку' }));
+  assert.equal(outcome.route.model, 'flash-test', 'сценарий должен идти на быстрой модели');
+  const reviews = requests.filter((item) => item.isReview);
+  assert.ok(reviews.length, 'проверяющий не вызывался');
+  assert.ok(
+    reviews.every((item) => item.model === 'pro-test'),
+    `проверяющий пошёл на модели ${reviews.map((item) => item.model).join(', ')}`,
+  );
+  assert.equal(outcome.review.model, 'pro-test');
+});
+
+test('модель проверяющего: сильная для быстрой задачи, та же для сильной', () => {
+  const escalation = { enabled: true, proModel: 'pro-test', flashModel: 'flash-test' };
+  assert.equal(reviewModelName({ routeModel: 'flash-test', model: '', escalation }), 'pro-test');
+  assert.equal(reviewModelName({ routeModel: 'pro-test', model: '', escalation }), '', 'незачем платить дважды');
+  assert.equal(reviewModelName({ routeModel: 'flash-test', model: 'review-test', escalation }), 'review-test');
+  assert.equal(reviewModelName({ routeModel: 'flash-test', model: '', escalation: { ...escalation, enabled: false } }), '');
+  assert.equal(reviewModelName({ routeModel: 'flash-test', model: '', escalation: { enabled: true, proModel: '' } }), '');
+});
+
+test('выдержка из docx: тема и текст файла, лишнее усечено', async () => {
+  const xml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="x"><w:body>${'<w:p><w:r><w:t>Отчёт по рынку кофе: рост 12%, итог 4 500 000 руб.</w:t></w:r></w:p>'.repeat(20)}<w:tbl></w:tbl></w:body></w:document>`;
+  const docx = path.join(workspace, 'excerpt.docx');
+  fs.writeFileSync(docx, writeZip([{ name: 'word/document.xml', data: xml }]));
+  const text = await documentExcerpt(docx, { chars: 200 });
+  assert.match(text, /Отчёт по рынку кофе/);
+  assert.match(text, /таблиц 1/);
+  assert.ok(text.length <= 240, `выдержка не усечена: ${text.length}`);
+  const missing = await documentExcerpt(path.join(workspace, 'нет.docx'));
+  assert.equal(missing, '');
+  assert.equal(await documentExcerpt(path.join(workspace, 'file.pdf')), '', 'PDF не разбираем');
+});
+
+test('проверяющий видит содержимое созданных файлов', async () => {
+  const prompts = [];
+  const answer = `${'Подготовил документ по рынку. '.repeat(40)}Файл готов.`;
+  const result = await reviewAnswer({
+    userQuestion: 'Сделай отчёт по рынку кофе',
+    answer,
+    history: [{ role: 'tool', content: 'create_word ok' }],
+    createdFiles: ['Отчёт.docx'],
+    excerpts: [{ file: 'Отчёт.docx', text: 'Отчёт по рынку кофе: рост 12%, итог 4 500 000 руб.' }],
+    tools: [{ name: 'create_word', status: 'ok', path: 'Отчёт.docx' }],
+    complete: async (messages) => {
+      prompts.push(String(messages[1]?.content || ''));
+      return JSON.stringify({ verdict: 'ok', issues: [] });
+    },
+  });
+  assert.equal(result.report.checked, true);
+  assert.ok(prompts.length, 'проверяющему нечего было смотреть');
+  assert.match(prompts[0], /Что внутри созданных файлов/);
+  assert.match(prompts[0], /рост 12%/);
 });
 
 test('память помнит 100 фактов и отбирает по теме запроса', () => {

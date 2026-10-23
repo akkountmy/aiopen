@@ -17,6 +17,22 @@
 
 import { ESCALATION, REVIEW } from './config.mjs';
 
+/**
+ * На какой модели проверять ответ. Одна и та же модель повторяет свои слепые
+ * зоны, поэтому ответ, собранный быстрой моделью, проверяет сильная. Если
+ * задача уже шла на сильной — проверяем той же (не платим дважды за одно и то
+ * же). Явный DSHOW_REVIEW_MODEL сильнее автоматики; пустая строка — «как
+ * основная».
+ */
+export function reviewModelName({ routeModel = '', model = REVIEW.model, escalation = ESCALATION } = {}) {
+  const explicit = String(model || '').trim();
+  if (explicit) return explicit;
+  const pro = String(escalation?.proModel || '').trim();
+  if (!escalation?.enabled || !pro) return '';
+  if (routeModel && routeModel === pro) return '';
+  return pro;
+}
+
 /* Мелкие числа (годы, номера, проценты-одиночки) не проверяем: они почти
    всегда повторяются из запроса, а не берутся из расчётов. */
 const MIN_FIGURE_DIGITS = 3;
@@ -166,6 +182,7 @@ const CHECKLIST = `Ты — придирчивый проверяющий гот
 4. Полнота. На каждый пункт запроса есть ответ; нет «красивого, но пустого» текста.
 5. Единицы и период. Рубли/тенге/доллары, тысячи/миллионы и годы не перепутаны.
 6. Обещания. Нет фраз «файл будет создан», «можно добавить» вместо сделанного.
+7. Содержание файлов. В готовом документе должна быть та тема, разделы и итоги, о которых просили; пустой, чужой или «болванка с заголовком» файл — это провал, даже если имя правильное.
 
 Ответ — строгий JSON без пояснений:
 {"verdict":"ok|fix","issues":[{"kind":"figure|file|incomplete|unit|promise","severity":"high|medium","quote":"фрагмент ответа","hint":"что исправить"}]}
@@ -174,22 +191,31 @@ const CHECKLIST = `Ты — придирчивый проверяющий гот
 /**
  * Модельная часть ревью. Возвращает {checked, verdict, issues}; при любой
  * ошибке — {checked:false} и пустой список, чтобы не блокировать ответ.
+ * `excerpts` — короткие выдержки из созданных файлов: проверяющий видит тему
+ * и содержимое, а не только имена.
  */
-export async function reviewWithModel({ userQuestion = '', answer = '', digest = '', createdFiles = [], complete } = {}) {
+export async function reviewWithModel({ userQuestion = '', answer = '', digest = '', createdFiles = [], excerpts = [], modelName = '', complete } = {}) {
   if (typeof complete !== 'function') return { checked: false, verdict: 'ok', issues: [] };
+  const files = Array.isArray(excerpts) ? excerpts.filter((item) => item && item.text) : [];
+  const filesBlock = files.length
+    ? `Что внутри созданных файлов (выдержка):\n${files.map((item) => `— ${item.file}: ${String(item.text).slice(0, REVIEW.excerptChars)}`).join('\n')}`
+    : '';
   const prompt = [
     `Запрос пользователя:\n${String(userQuestion || '').slice(0, 2000)}`,
     `Ответ, который будет выдан:\n${String(answer || '').slice(0, 12000)}`,
     `Результаты инструментов (источник фактов):\n${String(digest || 'инструменты не вызывались').slice(0, REVIEW.digestChars)}`,
     createdFiles.length ? `Созданные файлы: ${createdFiles.join(', ')}` : 'Файлы не создавались.',
-  ].join('\n\n');
+    filesBlock,
+  ]
+    .filter(Boolean)
+    .join('\n\n');
   try {
     const raw = await complete(
       [
         { role: 'system', content: CHECKLIST },
         { role: 'user', content: prompt },
       ],
-      { maxTokens: 900, effort: 'high' },
+      { maxTokens: 900, effort: 'high', model: modelName },
     );
     const parsed = parseVerdict(raw);
     if (!parsed) return { checked: false, verdict: 'ok', issues: [] };
@@ -237,7 +263,7 @@ const FIX_INSTRUCTION = `Ты правишь готовый ответ по за
 — Сохрани структуру, тон и язык исходного ответа, не сокращай полезное.`;
 
 /** Одна правка ответа по замечаниям. Возвращает текст или '' при сбое. */
-export async function reviseAnswer({ userQuestion = '', answer = '', issues = [], digest = '', complete } = {}) {
+export async function reviseAnswer({ userQuestion = '', answer = '', issues = [], digest = '', modelName = '', complete } = {}) {
   if (typeof complete !== 'function' || !issues.length) return '';
   const list = issues
     .slice(0, REVIEW.maxIssues)
@@ -255,7 +281,7 @@ export async function reviseAnswer({ userQuestion = '', answer = '', issues = []
         { role: 'system', content: FIX_INSTRUCTION },
         { role: 'user', content: prompt },
       ],
-      { maxTokens: 4000, effort: 'high' },
+      { maxTokens: 4000, effort: 'high', model: modelName },
     );
     const text = String(raw || '').trim();
     return text.length >= Math.min(80, String(answer).length / 2) ? text : '';
@@ -281,17 +307,19 @@ export function needsReview({ answer = '', tools = [], depth = 0, minChars = REV
  * Полный проход ревью: детерминированные проверки, затем модель, затем
  * одна правка при серьёзных находках. Возвращает итоговый текст и отчёт.
  */
-export async function reviewAnswer({ userQuestion = '', answer = '', history = [], createdFiles = [], complete, depth = 0, tools = [] } = {}) {
-  const report = { checked: false, verdict: 'ok', issues: [], fixed: false, modelChecked: false };
+export async function reviewAnswer({ userQuestion = '', answer = '', history = [], createdFiles = [], excerpts = [], routeModel = '', complete, depth = 0, tools = [] } = {}) {
+  const report = { checked: false, verdict: 'ok', issues: [], fixed: false, modelChecked: false, model: '' };
   if (!needsReview({ answer, tools, depth })) return { text: String(answer || ''), report };
 
+  const modelName = reviewModelName({ routeModel });
+  report.model = modelName;
   const digest = buildDigest(history);
   const deterministic = checkAnswer({ answer, toolDigest: digest, createdFiles });
   let issues = deterministic;
   report.issues = issues.slice();
 
   if (complete) {
-    const model = await reviewWithModel({ userQuestion, answer, digest, createdFiles, complete });
+    const model = await reviewWithModel({ userQuestion, answer, digest, createdFiles, excerpts, modelName, complete });
     report.modelChecked = model.checked;
     if (model.checked) {
       /* Модель может найти другое, чем регулярка: объединяем без повторов. */
@@ -309,7 +337,7 @@ export async function reviewAnswer({ userQuestion = '', answer = '', history = [
     return { text: String(answer || ''), report };
   }
 
-  const revised = await reviseAnswer({ userQuestion, answer, issues: high, digest, complete });
+  const revised = await reviseAnswer({ userQuestion, answer, issues: high, digest, modelName, complete });
   if (!revised) {
     report.verdict = 'issues';
     report.checked = true;
@@ -334,7 +362,8 @@ export async function reviewAnswer({ userQuestion = '', answer = '', history = [
 export function describeReview(report) {
   if (!report?.checked) return '';
   const count = report.issues?.length || 0;
-  if (report.fixed) return `правка ответа по ${count} замечаниям`;
-  if (count) return `${count} замечаний, ответ без правки (${report.verdict})`;
-  return 'замечаний нет';
+  const by = report.model ? ` (проверял ${report.model})` : '';
+  if (report.fixed) return `правка ответа по ${count} замечаниям${by}`;
+  if (count) return `${count} замечаний, ответ без правки (${report.verdict})${by}`;
+  return `замечаний нет${by}`;
 }
