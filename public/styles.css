@@ -3325,7 +3325,11 @@ html.kb-open .scroll-jump {
    на карточки, которые открываются по центру. */
 .toast-root {
   position: fixed;
-  top: calc(var(--head-h) + 10px);
+  /* Если страница всё же уходит под системную полосу (окно Safari с
+     viewport-fit=cover, вырез на телефоне), плашки отступают на неё: иначе
+     первая строка подсказки оказывается под часами. В приложении-ярлыке со
+     style=default этот отступ равен нулю и ничего не сдвигает. */
+  top: calc(var(--head-h) + 10px + env(safe-area-inset-top, 0px));
   right: 16px;
   left: auto;
   bottom: auto;
@@ -3992,7 +3996,7 @@ html.kb-open .scroll-jump {
     left: 10px;
     right: 10px;
     /* На телефоне плашка тоже сверху: внизу она закрывала поле ввода и клавиатуру. */
-    top: calc(var(--head-h) + 8px);
+    top: calc(var(--head-h) + 8px + env(safe-area-inset-top, 0px));
     bottom: auto;
     transform: none;
     align-items: stretch;

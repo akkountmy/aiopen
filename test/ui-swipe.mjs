@@ -175,6 +175,23 @@ try {
     return { projects: false, files: false, missing: true };
   };
 
+  /* Страница может перезагрузиться сама: приложение забирает свежие файлы после
+     выкладки, а сервис-воркер в новом профиле перезапускает вкладку. Кратковременный
+     провал разметки — не провал жеста, поэтому перед жестом ждём, пока документ
+     перестанет меняться, и повторяем жест, если он совпал с перезагрузкой. */
+  const pageStable = async () => {
+    for (let i = 0; i < 16; i += 1) {
+      const first = await evaluate('performance.timeOrigin').catch(() => 0);
+      await sleep(320);
+      const second = await evaluate('performance.timeOrigin').catch(() => 0);
+      if (first && first === second) {
+        const alive = await evaluate(`!!document.getElementById('app')`).catch(() => false);
+        if (alive) return true;
+      }
+    }
+    return false;
+  };
+
   await goto(BASE + '/');
   const loginStatus = await evaluate(
     `fetch('/api/login', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({username:${JSON.stringify(USER)}, password:${JSON.stringify(PASS)}})}).then(r => r.status)`,
@@ -313,13 +330,20 @@ try {
      Даём этому произойти до свайпа, иначе проверяем уже исчезнувшую страницу. */
   await sleep(1200);
   await waitFor(`!!document.getElementById('app') && !document.getElementById('app').classList.contains('hidden')`);
+  await pageStable();
   await swipe(300, 420, 500, 420);
   current = await stateSettled();
   !current.projects && !current.files
     ? ok('на планшете свайп вправо не открывает постоянные «Проекты»')
     : fail('свайп вправо на планшете', JSON.stringify(current));
-  await swipe(700, 420, 500, 420);
-  current = await stateSettled();
+  /* Жест влево повторяем, если он пришёлся на перезагрузку страницы: сама
+     перезагрузка — не провал, а вот три подряд означают, что ящик не выезжает. */
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    await pageStable();
+    await swipe(700, 420, 500, 420);
+    current = await stateSettled();
+    if (current.files && !current.projects) break;
+  }
   current.files && !current.projects
     ? ok('на планшете свайп влево открыл «Файлы проекта»')
     : fail('свайп влево на планшете', JSON.stringify(current));
