@@ -733,7 +733,9 @@ async function startApp(payload) {
   pushRegistered = false;
   void ensurePush();
   checkAppVersion();
-  $('#input').focus();
+  /* На телефоне не забираем фокус сами: при открытии ярлыка клавиатура
+     выезжала поверх ещё не отрисованного диалога. Фокус — только по тапу. */
+  focusComposerOnOpen();
 }
 
 function activeProject() {
@@ -1084,7 +1086,9 @@ async function openChat(chatId) {
     } else {
       setStreaming(false);
     }
-    $('#input').focus();
+    /* Открытие диалога на телефоне не должно само поднимать клавиатуру:
+       человек сначала читает переписку, а поле получает фокус по тапу. */
+    focusComposerOnOpen();
   } catch (error) {
     if (!error.unauthorized) toast(error.message);
   }
@@ -2520,6 +2524,15 @@ function isPhoneUi() {
    на компьютере». */
 function onPhoneWord() {
   return isPhoneUi() ? 'телефоне' : 'компьютере';
+}
+
+/* Открытие диалога на телефоне не должно само поднимать клавиатуру: человек
+   сначала читает переписку, а поле получает фокус по тапу. На узком окне
+   (в том числе в ярлыке-приложении) ведём себя так же. */
+function focusComposerOnOpen() {
+  if (window.matchMedia('(max-width: 860px)').matches || isPhoneUi()) return;
+  const input = $('#input');
+  if (input) input.focus({ preventScroll: true });
 }
 
 /* Внешние Word, Excel и PowerPoint сервис больше не вызывает — ни на телефоне,
@@ -3958,7 +3971,7 @@ function createProjectModal({ workflowId = '', anchor = null } = {}) {
          иначе новый диалог оставался под ним: поля ввода не видно, сообщение
          отправить некуда. На широком экране эта строка ничего не меняет. */
       closeSidebar();
-      $('#input').focus();
+      $('#input').focus({ preventScroll: true });
       toast(`Проект «${project.name}» создан`, 'ok');
       return true;
     } catch (error) {
@@ -4916,21 +4929,53 @@ function renderAdmin(body, users, overview, approvals = [], refresh = null) {
 
 /* ------------------------------ composer ------------------------------ */
 
-function autoResize() {
+/* Сколько места может занять поле ввода. На телефоне считаем от видимой
+   области, а не от полного окна: с открытой клавиатурой прежний предел
+   (42% окна) занимал почти весь экран, и каждая новая строка сдвигала ленту. */
+function composerMaxHeight() {
+  if (window.matchMedia('(max-width: 860px)').matches) {
+    const visible = Math.round(window.visualViewport?.height || window.innerHeight);
+    return Math.max(96, Math.min(200, Math.round(visible * 0.3)));
+  }
+  return Math.max(180, Math.min(420, Math.round(window.innerHeight * 0.42)));
+}
+
+let lastComposerLength = -1;
+
+function autoResize(force = false) {
   const input = $('#input');
   if (!input) return;
+  /* Если лента была у последнего сообщения, после роста поля оставляем её там:
+     иначе при сжатии ленты scrollTop обрезался и сообщения «прыгали» вниз. */
+  const stick = nearBottom();
   // Пустое поле — всегда одна строка: иначе подсказка в тесной строке ввода
   // переносится и раздувает её до двух-трёх строк ещё до начала набора.
   if (!input.value.trim()) {
     input.style.height = '';
     input.style.overflowY = 'hidden';
+    lastComposerLength = 0;
+    if (stick) scrollToBottom(true);
     return;
   }
-  const max = Math.max(180, Math.min(420, Math.round(window.innerHeight * 0.42)));
-  input.style.height = 'auto';
-  const next = Math.min(input.scrollHeight + 3, max);
-  input.style.height = `${next}px`;
-  input.style.overflowY = input.scrollHeight > max ? 'auto' : 'hidden';
+  const max = composerMaxHeight();
+  const current = parseFloat(input.style.height) || 0;
+  /* Высоту схлопываем только когда текст стал короче (или по просьбе).
+     На каждый символ это вызывало пересчёт всей ленты и дёргало экран. */
+  if (force || !current || input.value.length < lastComposerLength || current > max + 1) {
+    input.style.height = 'auto';
+  }
+  lastComposerLength = input.value.length;
+  const needed = input.scrollHeight + 3;
+  const next = Math.min(needed, max);
+  if (Math.abs(next - (parseFloat(input.style.height) || 0)) > 0.5) {
+    input.style.height = `${next}px`;
+  }
+  input.style.overflowY = needed > max ? 'auto' : 'hidden';
+  /* Курсор в конце длинного текста: после смены высоты браузер иногда
+     оставляет поле прокрученным вверх, и последняя строка не видна. */
+  const caret = input.selectionStart ?? input.value.length;
+  if (needed > max && caret >= input.value.length) input.scrollTop = input.scrollHeight;
+  if (stick) scrollToBottom(true);
 }
 
 // На узком экране длинная подсказка переносится в две строки и раздувает поле ввода.
@@ -6196,7 +6241,10 @@ initPanelResize($('#filesResizer'), 'files');
 applyLayout();
 syncFilesPanel();
 
-$('#input').addEventListener('input', autoResize);
+/* Не передаём событие в autoResize: первый аргумент — «пересчитать с нуля»,
+   а объект события всегда истинный. Иначе на каждом символе поле схлопывалось
+   до height:auto и вся лента пересчитывалась — это и выглядело как прыжки. */
+$('#input').addEventListener('input', () => autoResize());
 /* Ширина экрана меняется не только при повороте телефона: её меняет клавиатура
    и перезагрузка страницы. Поэтому ящик закрываем только при переходе с
    широкого экрана на узкий, иначе открытая «Файлы проекта» захлопывалась. */
@@ -6215,6 +6263,15 @@ if (document.fonts && document.fonts.ready) document.fonts.ready.then(autoResize
 
 /* Клавиатура телефона: окно держим по видимой области, иначе поле ввода
    уезжает под клавиатуру или страница прыгает при фокусе. */
+const KB_VIEW = { base: 0, open: false, h: -1, pan: -1 };
+
+function isEditableElement(element) {
+  return (
+    element instanceof HTMLElement &&
+    (element.matches('input, textarea, select') || element.isContentEditable)
+  );
+}
+
 function syncKeyboardViewport() {
   const vv = window.visualViewport;
   if (!vv) return;
@@ -6228,34 +6285,52 @@ function syncKeyboardViewport() {
      сдвиг не уменьшает клавиатуру — высоту клавиатуры считаем отдельно, а
      сдвиг компенсируем отступом сверху (--kb-pan), иначе подвал уезжает выше
      клавиатуры и накрывает поле ввода, а экран «скачет». */
+  const viewH = Math.round(vv.height);
   const pan = Math.max(0, Math.round(vv.offsetTop || 0));
-  const hidden = Math.round(window.innerHeight - vv.height);
-  /* На экране входа клавиатуру считаем открытой и тогда, когда Safari не
-     уменьшает innerHeight: ориентируемся на низкую видимую область. Иначе
-     карточка оставалась по центру и поле пароля уходило под клавиатуру. */
-  const authVisible = !document.getElementById('auth')?.classList.contains('hidden');
-  const compactAuth = authVisible && vv.height < 560;
   /* Масштаб больше 1 — это зум страницы (двойной тап, пинч, авто-увеличение
-     поля), а не клавиатура: видимая область у него тоже меньше окна. Раньше
-     такой зум принимался за клавиатуру, окно подстраивалось под урезанную
-     высоту и оставалось увеличенным, пока страницу не вернут руками. Теперь
-     при зуме вёрстка не трогается. */
+     поля), а не клавиатура: видимая область у него тоже меньше окна. Пока
+     масштаб не вернули, окно не трогаем, иначе вёрстка сжималась бы под зум. */
   const zoomed = Number(vv.scale) > 1.01;
-  /* Порог с запасом в обе стороны: пока клавиатура выезжает, видимая область
-     дёргается на десяток пикселей, и от жёсткого порога подвал «подпрыгивал».
-     Открываем от 140 px, закрываем ниже 70 px — между ними состояние стоит. */
-  const wasOpen = root.classList.contains('kb-open');
-  const shouldOpen = !zoomed && (hidden > (wasOpen ? 70 : 140) || compactAuth);
+  if (zoomed) return;
+  if (!KB_VIEW.base) KB_VIEW.base = Math.round(window.innerHeight || viewH);
+  const active = document.activeElement;
+  const editing = isEditableElement(active);
+  const authVisible = !document.getElementById('auth')?.classList.contains('hidden');
+  const compactAuth = authVisible && viewH < 560;
+  /* Норму запоминаем только когда ничего не редактируется. Иначе высота с
+     открытой клавиатурой запомнилась бы как «полная», и окно осталось бы
+     урезанным после её закрытия. */
+  if (!KB_VIEW.open && !editing && !authVisible) {
+    const full = Math.round(window.innerHeight || viewH);
+    if (full > 0) KB_VIEW.base = full;
+  }
+  /* Никакого порога в 140 px: раньше первые ~120 px выезда клавиатуры окно
+     не замечало, поле оказывалось под ней, а потом всё прыгало вверх на
+     высоту порога. Следим с первого же пикселя. */
+  const shrunk = viewH < KB_VIEW.base - 1;
+  const shouldOpen = shrunk || compactAuth;
   if (shouldOpen) {
-    root.classList.add('kb-open');
-    root.style.setProperty('--app-h', `${Math.round(vv.height)}px`);
-    root.style.setProperty('--kb-offset', `${Math.max(0, hidden)}px`);
-    root.style.setProperty('--kb-pan', `${pan}px`);
-  } else {
+    if (!KB_VIEW.open) {
+      root.classList.add('kb-open');
+      KB_VIEW.open = true;
+      /* Длинный черновик не должен занимать пол-экрана после выезда
+         клавиатуры: пересчитываем предел уже по видимой области. */
+      requestAnimationFrame(() => autoResize(true));
+    }
+    if (KB_VIEW.h !== viewH) {
+      root.style.setProperty('--app-h', `${viewH}px`);
+      KB_VIEW.h = viewH;
+    }
+    if (KB_VIEW.pan !== pan) {
+      root.style.setProperty('--kb-pan', `${pan}px`);
+      KB_VIEW.pan = pan;
+    }
+  } else if (KB_VIEW.open) {
     root.classList.remove('kb-open');
     root.style.removeProperty('--app-h');
-    root.style.removeProperty('--kb-offset');
     root.style.removeProperty('--kb-pan');
+    KB_VIEW.open = false;
+    KB_VIEW.h = KB_VIEW.pan = -1;
   }
   /* Карточка в панели проектов/файлов не должна прятаться за клавиатурой:
      пересчитываем её положение по новой видимой высоте. */
@@ -6267,24 +6342,29 @@ function syncKeyboardViewport() {
 (function watchKeyboard() {
   const vv = window.visualViewport;
   if (!vv) return;
-  let frame = 0;
-  const schedule = () => {
-    if (frame) return;
-    frame = requestAnimationFrame(() => {
-      frame = 0;
-      syncKeyboardViewport();
-    });
-  };
+  /* Пересчитываем сразу, не откладывая до requestAnimationFrame: на телефоне
+     resize и scroll приходят на каждом кадре анимации клавиатуры, а очередь
+     кадров при наборе может отставать — тогда подвал снова оказывался под
+     клавиатурой. Записи в CSS кэшированы, лишней работы нет. */
+  const schedule = () => syncKeyboardViewport();
   syncKeyboardViewport();
   vv.addEventListener('resize', schedule);
   vv.addEventListener('scroll', schedule);
-  window.addEventListener('orientationchange', () => setTimeout(syncKeyboardViewport, 250));
+  /* После поворота «нормальная» высота другая: пересчитываем её от окна,
+     иначе закрытая клавиатура в горизонтальной ориентации считалась бы
+     открытой (видимая область меньше портретной). */
+  window.addEventListener('orientationchange', () =>
+    setTimeout(() => {
+      KB_VIEW.base = Math.round(window.innerHeight || 0);
+      syncKeyboardViewport();
+    }, 250),
+  );
 })();
 
 /* Клавиатура выезжает с анимацией 250–350 мс, на медленных телефонах дольше.
-   Один замер через 300 мс иногда попадал в середину движения, и подвал вставал
-   по промежуточной высоте — поле уезжало под клавиатуру, а потом всё прыгало на
-   место. Поэтому пересчитываем несколько раз подряд. */
+   События visualViewport приходят не на каждом кадре, поэтому дополнительно
+   пересчитываем несколько раз — лишних записей в CSS не будет, значения
+   кэшированы в KB_VIEW. */
 function settleKeyboardViewport() {
   [60, 160, 320, 520, 800].forEach((delay) => setTimeout(syncKeyboardViewport, delay));
 }
@@ -6305,13 +6385,13 @@ document.addEventListener('focusin', (event) => {
     /* Вход: карточка прокручивается внутри видимой области, поэтому поле
        пароля и кнопка «Войти» остаются над клавиатурой и нижней панелью. */
     if (inAuth) {
-      target.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      target.scrollIntoView({ block: 'center' });
       return;
     }
     if (popoverNode && popoverHost) {
       placeInPanel(popoverNode, popoverAnchor, popoverHost);
     }
-    target.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    target.scrollIntoView({ block: 'center' });
   }, 320);
 });
 
@@ -6319,17 +6399,22 @@ document.addEventListener('focusin', (event) => {
    подключаются один раз после отрисовки каркаса. */
 initScrollJump();
 
-// На телефоне фокус в поле ввода поднимает клавиатуру: лента должна
-// остаться у последнего сообщения, а не показывать середину переписки.
+// На телефоне фокус в поле ввода поднимает клавиатуру: если лента была у
+// последнего сообщения, оставляем её там. Если человек читал середину
+// переписки и просто коснулся поля — не выдёргиваем его вниз.
 $('#input').addEventListener('focus', () => {
   if (!window.matchMedia('(max-width: 860px)').matches) return;
   settleKeyboardViewport();
+  const scroll = $('#scroll');
+  if (!scroll) return;
+  const nearBottom = scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 180;
+  if (!nearBottom) return;
   const toBottom = () => {
-    const scroll = $('#scroll');
-    if (scroll) scroll.scrollTop = scroll.scrollHeight;
+    if (scroll.isConnected) scroll.scrollTop = scroll.scrollHeight;
   };
-  /* Ленту подтягиваем к последнему сообщению дважды: сразу и после того, как
-     клавиатура доехала — иначе лента оставалась на середине переписки. */
+  /* Ленту подтягиваем к последнему сообщению сразу и после того, как
+     клавиатура доехала — но без плавной анимации, она и давала «скачки». */
+  requestAnimationFrame(toBottom);
   setTimeout(toBottom, 120);
   setTimeout(toBottom, 420);
 });

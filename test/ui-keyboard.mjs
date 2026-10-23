@@ -201,8 +201,33 @@ try {
        overflow: document.documentElement.scrollWidth - window.innerWidth,
        kbOpen: document.documentElement.classList.contains('kb-open'),
        appVar: getComputedStyle(document.documentElement).getPropertyValue('--app-h').trim(),
-       kbVar: getComputedStyle(document.documentElement).getPropertyValue('--kb-offset').trim(),
        panVar: getComputedStyle(document.documentElement).getPropertyValue('--kb-pan').trim(),
+     };
+   })()`;
+
+  /* Ящики и окна — тоже fixed-слои. При сдвиге visualViewport они должны
+     занимать ровно видимую область (pan … pan + viewH), а не обрезаться на
+     высоту viewH − pan. */
+  const PANELS = `(() => {
+     const app = document.querySelector('.app');
+     const sidebar = document.querySelector('.sidebar');
+     const modal = document.querySelector('#modalRoot');
+     const wasSidebar = app.classList.contains('sidebar-open');
+     const wasHidden = modal.classList.contains('hidden');
+     const hadModal = modal.childElementCount > 0;
+     app.classList.add('sidebar-open');
+     modal.classList.remove('hidden');
+     if (!hadModal) modal.innerHTML = '<div class="modal" style="height:80px"></div>';
+     const s = sidebar.getBoundingClientRect();
+     const m = modal.getBoundingClientRect();
+     if (!wasSidebar) app.classList.remove('sidebar-open');
+     if (wasHidden) modal.classList.add('hidden');
+     if (!hadModal) modal.innerHTML = '';
+     return {
+       sidebarTop: Math.round(s.top),
+       sidebarBottom: Math.round(s.bottom),
+       modalTop: Math.round(m.top),
+       modalBottom: Math.round(m.bottom),
      };
    })()`;
 
@@ -299,6 +324,15 @@ try {
       ? ok(`шапка окна не ушла за верхний край (${width}px)`, `верх ${panned.appTop}`)
       : fail(`шапка окна при сдвиге ${width}px`, `${panned.appTop} < ${pan}`);
 
+    const panels = await evaluate(PANELS);
+    const visibleBottom = panned.pan + (height - keyboard);
+    Math.abs(panels.sidebarTop - panned.pan) <= 1 && Math.abs(panels.sidebarBottom - visibleBottom) <= 2
+      ? ok(`ящик проектов занимает видимую область со сдвигом (${width}px)`, `${panels.sidebarTop}…${panels.sidebarBottom}`)
+      : fail(`ящик проектов при сдвиге ${width}px`, `${panels.sidebarTop}…${panels.sidebarBottom} вместо ${pan}…${visibleBottom}`);
+    Math.abs(panels.modalTop - panned.pan) <= 1 && Math.abs(panels.modalBottom - visibleBottom) <= 2
+      ? ok(`окно поверх страницы занимает видимую область со сдвигом (${width}px)`, `${panels.modalTop}…${panels.modalBottom}`)
+      : fail(`окно при сдвиге ${width}px`, `${panels.modalTop}…${panels.modalBottom} вместо ${pan}…${visibleBottom}`);
+
     if (process.env.DSHOW_KB_SHOT) {
       const shot = await cdp.send('Page.captureScreenshot', { format: 'png' });
       fs.writeFileSync(process.env.DSHOW_KB_SHOT.replace('.png', `-${width}-pan.png`), Buffer.from(shot.data, 'base64'));
@@ -313,9 +347,9 @@ try {
     !closed.kbOpen && Math.abs(closed.appH - height) <= 1
       ? ok(`после закрытия клавиатуры окно снова ${height}px (${width}px)`)
       : fail(`закрытие клавиатуры ${width}px`, JSON.stringify({ kb: closed.kbOpen, appH: closed.appH }));
-    closed.appVar === '' && closed.kbVar === ''
+    closed.appVar === '' && closed.panVar === ''
       ? ok(`переменные клавиатуры убраны (${width}px)`)
-      : fail(`переменные после закрытия ${width}px`, JSON.stringify({ app: closed.appVar, kb: closed.kbVar }));
+      : fail(`переменные после закрытия ${width}px`, JSON.stringify({ app: closed.appVar, pan: closed.panVar }));
   }
 
   for (const [width, height] of [[390, 844], [360, 780], [320, 640]]) await checkWidth(width, height);

@@ -3535,6 +3535,13 @@ html.kb-open .scroll-jump {
   }
   .app,
   .app.with-files {
+    /* Окно выведено из потока: адресная строка и подтягивание страницы к полю
+       ввода больше не могут прокрутить весь интерфейс. Высоту и сдвиг задаём
+       переменными по visualViewport. */
+    position: fixed;
+    top: 0;
+    right: 0;
+    left: 0;
     grid-template-columns: minmax(0, 1fr);
     /* Высота видимой области: при открытой клавиатуре окно не уезжает вниз. */
     height: var(--app-h, 100dvh);
@@ -3543,7 +3550,13 @@ html.kb-open .scroll-jump {
      --kb-pan. Сдвигаем окно на столько же — иначе подвал оказывается выше
      клавиатуры и накрывает поле ввода, а низ экрана остаётся пустым. */
   html.kb-open .app {
-    margin-top: var(--kb-pan, 0px);
+    top: var(--kb-pan, 0px);
+  }
+  /* Программные прыжки к последнему сообщению должны быть мгновенными:
+     плавная прокрутка на телефоне складывалась с анимацией клавиатуры и
+     выглядела как «скачущий» экран. */
+  .scroll {
+    scroll-behavior: auto;
   }
   /* Ящик навигации: выезд сдвигом + затемнение, как у панели файлов. */
   .sidebar {
@@ -3578,11 +3591,13 @@ html.kb-open .scroll-jump {
   }
   /* Ящики проектов и файлов при открытой клавиатуре тоже живут в видимой
      области: поле поиска не должно оказаться под клавиатурой, а низ ящика —
-     за краем экрана. */
+     за краем экрана. Высоту берём ту же, что у окна: top и bottom вместе
+     давали высоту viewH − pan, и при большом сдвиге ящик укорачивался. */
   html.kb-open .sidebar,
   html.kb-open .files-panel {
     top: var(--kb-pan, 0px);
-    bottom: var(--kb-offset, 0px);
+    bottom: auto;
+    height: var(--app-h, 100dvh);
   }
   .mobile-only {
     display: inline-flex;
@@ -3902,8 +3917,9 @@ html.kb-open .scroll-jump {
   /* Клавиатура открыта: окно живёт в видимой части экрана, а не уходит под
      неё. Поле ввода остаётся на виду, кнопки — над клавиатурой. */
   html.kb-open .modal-root {
-    bottom: var(--kb-offset, 0px);
+    bottom: auto;
     top: var(--kb-pan, 0px);
+    height: var(--app-h, 100dvh);
     align-items: flex-start;
     padding-top: 8px;
     padding-bottom: 8px;
