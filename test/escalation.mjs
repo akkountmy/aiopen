@@ -293,7 +293,9 @@ test('правка ответа по замечаниям и отказ от п�
   assert.equal(fixed.report.verdict, 'fixed');
   assert.match(fixed.text, /250 000/);
   assert.ok(!fixed.text.includes('7 654 321'));
-  assert.match(describeReview(fixed.report), /правка ответа/);
+  assert.match(describeReview(fixed.report), /ответ исправлен по \d+ замечани/);
+  assert.ok(fixed.report.fixedCount >= 1, 'в отчёте нет числа закрытых замечаний');
+  assert.ok(!/по 0 замечаниям/.test(describeReview(fixed.report)), 'лог не должен писать «по 0 замечаниям»');
 
   /* Правка, добавившая новую выдуманную цифру, отбрасывается. */
   const bad = await reviewAnswer({

@@ -354,16 +354,35 @@ export async function reviewAnswer({ userQuestion = '', answer = '', history = [
   report.fixed = true;
   report.verdict = 'fixed';
   report.checked = true;
+  /* Сколько замечаний закрыто этой правкой — для строки в логе: после правки в
+     отчёте остаются только незакрытые, и без этого числа лог писал «правка
+     ответа по 0 замечаниям». */
+  report.fixedCount = high.length;
   report.issues = again.slice(0, REVIEW.maxIssues);
   return { text: revised, report };
 }
 
 /** Строка для лога сервера. */
+/** Русское склонение: 1 замечание, 2 замечания, 5 замечаний. */
+function plural(count, one, few, many) {
+  const tail = Math.abs(count) % 100;
+  const last = tail % 10;
+  if (tail > 10 && tail < 20) return many;
+  if (last === 1) return one;
+  if (last >= 2 && last <= 4) return few;
+  return many;
+}
+
 export function describeReview(report) {
   if (!report?.checked) return '';
   const count = report.issues?.length || 0;
   const by = report.model ? ` (проверял ${report.model})` : '';
-  if (report.fixed) return `правка ответа по ${count} замечаниям${by}`;
-  if (count) return `${count} замечаний, ответ без правки (${report.verdict})${by}`;
+  if (report.fixed) {
+    /* Число — сколько замечаний закрыла правка, а не сколько осталось: остаток
+       бывает нулевым, и «правка по 0 замечаниям» читалась как ошибка. */
+    const closed = report.fixedCount ?? count;
+    return `ответ исправлен по ${closed} ${plural(closed, 'замечанию', 'замечаниям', 'замечаниям')}${by}`;
+  }
+  if (count) return `${count} ${plural(count, 'замечание', 'замечания', 'замечаний')}, ответ без правки (${report.verdict})${by}`;
   return `замечаний нет${by}`;
 }
