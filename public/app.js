@@ -6103,11 +6103,22 @@ function initDrawerSwipes() {
     return null;
   }
 
+  /* Выделенный текст — это копирование, а не свайп. Пока в переписке есть
+     выделение, жест не начинается: иначе человек держит палец на своём
+     сообщении, тянет маркер выделения вправо — и вместо копирования выезжают
+     «Проекты». Проверяем именно непустое выделение: схлопнутый курсор в поле
+     ввода жесту не мешает. */
+  function hasTextSelection() {
+    const selection = window.getSelection && window.getSelection();
+    return Boolean(selection && !selection.isCollapsed && String(selection).length > 0);
+  }
+
   function startBlocked(target) {
     if (!(target instanceof Element)) return true;
     if (target.closest('#modalRoot, .modal-root, input, textarea, select, [contenteditable="true"], .resizer, .pdf-box')) {
       return true;
     }
+    if (hasTextSelection()) return true;
     return Boolean(horizontalScroller(target));
   }
 
@@ -6161,6 +6172,9 @@ function initDrawerSwipes() {
     const current = gesture;
     gesture = null;
     if (!current || !current.action) return;
+    /* Выделение могло появиться уже во время жеста (долгое удержание):
+       отпускание пальца в этом случае тоже не должно открывать ящик. */
+    if (hasTextSelection()) return;
     const touch = event.changedTouches && event.changedTouches[0];
     if (!touch) return;
     const dx = touch.clientX - current.x;
@@ -6192,6 +6206,12 @@ function initDrawerSwipes() {
   app.addEventListener('touchcancel', () => {
     gesture = null;
   }, { passive: true });
+  /* Долгое удержание выделяет текст уже после touchstart, и маркеры
+     выделения живут дольше пальца. Как только выделение появилось, начатый
+     жест отменяем: движение маркера — это копирование, а не свайп. */
+  document.addEventListener('selectionchange', () => {
+    if (gesture && hasTextSelection()) gesture = null;
+  });
 }
 initDrawerSwipes();
 /* Заголовок панели «Файлы проекта» — подпись, а не кнопка: проект выбирается

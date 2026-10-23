@@ -322,7 +322,44 @@ try {
     ? ok('свайп закрывает «Файлы проекта», открытые кнопкой')
     : fail('закрытие «Файлов» после кнопки', JSON.stringify(current));
 
-  // 8. Планшет 1000 px: проекты уже стоят на экране, файлы всё ещё ящик.
+  // 8. Выделенный текст — это копирование, а не свайп. Держим палец на своём
+  //    запросе, тянем маркер выделения вправо: «Проекты» открываться не должны.
+  const selection = await evaluate(`(() => {
+     document.getElementById('selection-test')?.remove();
+     const art = document.createElement('article');
+     art.id = 'selection-test';
+     art.className = 'msg msg-user';
+     const box = document.createElement('div');
+     box.className = 'bubble';
+     box.textContent = 'Длинный запрос, который хочется скопировать целиком и отправить в другой чат. Тяну маркер выделения вправо.';
+     art.appendChild(box);
+     document.getElementById('thread').appendChild(art);
+     box.scrollIntoView({ block: 'center' });
+     const range = document.createRange();
+     range.selectNodeContents(box);
+     const sel = getSelection();
+     sel.removeAllRanges();
+     sel.addRange(range);
+     const rect = box.getBoundingClientRect();
+     return { x: Math.round(rect.left + 24), y: Math.round(rect.top + rect.height / 2), length: String(sel).length };
+   })()`);
+  await swipe(selection.x, selection.y, selection.x + 150, selection.y);
+  current = await state();
+  const stillSelected = await evaluate(`String(getSelection()).length`);
+  !current.projects && !current.files && stillSelected > 0
+    ? ok('свайп по выделенному тексту не открывает «Проекты»', `выделено ${stillSelected} символов`)
+    : fail('свайп по выделенному тексту', JSON.stringify({ ...current, stillSelected }));
+  await evaluate(
+    `getSelection().removeAllRanges(); document.getElementById('selection-test')?.remove();`,
+  );
+  await swipe(120, 420, 300, 420);
+  current = await state();
+  current.projects && !current.files
+    ? ok('после снятия выделения свайп снова открывает «Проекты»')
+    : fail('свайп после снятия выделения', JSON.stringify(current));
+  await swipe(290, 420, 110, 420);
+
+  // 9. Планшет 1000 px: проекты уже стоят на экране, файлы всё ещё ящик.
   await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1000, height: 800, deviceScaleFactor: 2, mobile: true });
   await goto(BASE + '/');
   await waitFor(`!!document.getElementById('app') && !document.getElementById('app').classList.contains('hidden')`);
