@@ -163,6 +163,18 @@ try {
       };
     })()`);
 
+  /* Пока страница переезжает на новую версию (приложение само перезагружается
+     после выкладки), разметки может не быть вовсе — это не провал жеста.
+     Дожидаемся #app и читаем состояние снова, иначе проверка врёт. */
+  const stateSettled = async () => {
+    for (let i = 0; i < 20; i += 1) {
+      const current = await state();
+      if (!current.missing) return current;
+      await sleep(150);
+    }
+    return { projects: false, files: false, missing: true };
+  };
+
   await goto(BASE + '/');
   const loginStatus = await evaluate(
     `fetch('/api/login', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({username:${JSON.stringify(USER)}, password:${JSON.stringify(PASS)}})}).then(r => r.status)`,
@@ -300,12 +312,12 @@ try {
   await sleep(1200);
   await waitFor(`!!document.getElementById('app') && !document.getElementById('app').classList.contains('hidden')`);
   await swipe(300, 420, 500, 420);
-  current = await state();
+  current = await stateSettled();
   !current.projects && !current.files
     ? ok('на планшете свайп вправо не открывает постоянные «Проекты»')
     : fail('свайп вправо на планшете', JSON.stringify(current));
   await swipe(700, 420, 500, 420);
-  current = await state();
+  current = await stateSettled();
   current.files && !current.projects
     ? ok('на планшете свайп влево открыл «Файлы проекта»')
     : fail('свайп влево на планшете', JSON.stringify(current));

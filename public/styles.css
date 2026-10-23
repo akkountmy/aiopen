@@ -1654,10 +1654,10 @@ html.kb-open .scroll-jump {
   border: 1px solid var(--line);
   border-radius: var(--radius-md);
   color: var(--text-2);
-  font-size: var(--fs-12);
+  font-size: var(--fs-13);
   cursor: pointer;
   transition: background 0.14s ease, border-color 0.14s ease, color 0.14s ease;
-  line-height: var(--lh-18);
+  line-height: var(--lh-20);
 }
 
 .suggestion:hover {
@@ -3739,9 +3739,8 @@ html.kb-open .scroll-jump {
     -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 18px), transparent);
     mask-image: linear-gradient(to right, #000 calc(100% - 18px), transparent);
   }
-  /* Подсказки на телефоне — по две в ряд и прежним кеглем: три узкие кнопки
-     в строку на 390 px дали бы переносы, а мелкий текст читается хуже. Шесть
-     кнопок занимают ровно три ряда. */
+  /* Подсказки на телефоне — по две в ряд: три узкие кнопки в строку на 390 px
+     дали бы переносы. Шесть кнопок занимают ровно три ряда, кегль общий. */
   .suggestions {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 8px;
@@ -3749,8 +3748,6 @@ html.kb-open .scroll-jump {
   }
   .suggestion {
     padding: 11px 12px;
-    font-size: var(--fs-13);
-    line-height: var(--lh-20);
   }
   .stats {
     grid-template-columns: repeat(2, minmax(0, 1fr));

@@ -199,6 +199,17 @@ async function goto(url) {
   await sleep(350);
 }
 
+/* Настоящая перезагрузка (F5), а не переход по адресу: приложение отличает
+   новый запуск сайта — тогда показывается стартовый экран — от возврата на ту
+   же страницу, когда открывается прежний диалог. Page.navigate даёт тип
+   «navigate» и проверял бы не перезагрузку, а первый вход. */
+async function reload() {
+  loaded = false;
+  await cdp.send('Page.reload', { ignoreCache: false });
+  for (let i = 0; i < 140 && !loaded; i += 1) await sleep(70);
+  await sleep(350);
+}
+
 async function waitFor(expression, timeoutMs = 12000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -338,7 +349,7 @@ try {
   check((await count('.chat-row .c-live')) === 1, 'в списке диалогов горит точка «идёт задача»');
 
   /* Сама перезагрузка: как F5 в браузере. */
-  await goto(BASE);
+  await reload();
   const restored = await waitFor(`document.querySelectorAll('#thread .msg-assistant .md').length > 0`, 15000);
   check(restored, 'после перезагрузки открылся тот же диалог с ответом');
   const afterReload = await answerText();
