@@ -2569,26 +2569,42 @@ async function route(req, res) {
       const devicesByUser = new Map(targets.users.map((item) => [item.userId, item.devices]));
       const requested = [...new Set((Array.isArray(body.userIds) ? body.userIds : []).map(String).filter(Boolean))];
       const all = body.all === true;
-      const userIds = all
-        ? [...devicesByUser.keys()].filter((id) => devicesByUser.get(id) > 0)
-        : requested.filter((id) => devicesByUser.get(id) > 0);
+      /* Пробная отправка — всегда только на устройства самого администратора.
+         Аудиторию из запроса при этом игнорируем: иначе опечатка или старая
+         вкладка превращали проверку в рассылку «Тест» всем пользователям. */
+      const testOnly = body.test === true;
+      const userIds = testOnly
+        ? [admin.id].filter((id) => devicesByUser.get(id) > 0)
+        : all
+          ? [...devicesByUser.keys()].filter((id) => devicesByUser.get(id) > 0)
+          : requested.filter((id) => devicesByUser.get(id) > 0);
       /* Про тех, кому уведомления не придут вовсе, сообщаем отдельно: иначе
          администратор решит, что объявление получили все. */
-      const skipped = all
-        ? store.users().filter((item) => !devicesByUser.get(item.id)).length
-        : requested.filter((id) => !devicesByUser.get(id)).length;
+      const skipped = testOnly
+        ? (devicesByUser.get(admin.id) ? 0 : 1)
+        : all
+          ? store.users().filter((item) => !devicesByUser.get(item.id)).length
+          : requested.filter((id) => !devicesByUser.get(id)).length;
       if (!userIds.length) {
-        return sendError(res, 409, 'Ни у одного из выбранных не включены уведомления');
+        return sendError(
+          res,
+          409,
+          testOnly
+            ? 'На ваших устройствах уведомления ещё не включены — проверять некуда'
+            : 'Ни у одного из выбранных не включены уведомления',
+        );
       }
       const result = await pushToUsers(userIds, {
         title,
         body: text,
         url: '/',
-        kind: 'news',
-        tag: `dsh-news-${Date.now()}`,
+        kind: testOnly ? 'test' : 'news',
+        tag: testOnly ? 'dsh-test' : `dsh-news-${Date.now()}`,
       });
       console.log(
-        `[push] рассылка от ${admin.username}: принято устройств ${result.sent} из ${result.total}, людей ${result.users}`,
+        testOnly
+          ? `[push] проверка от ${admin.username}: принято устройств ${result.sent} из ${result.total}, получатель — только администратор`
+          : `[push] рассылка от ${admin.username}: принято устройств ${result.sent} из ${result.total}, людей ${result.users}`,
       );
       return sendJson(res, 200, { ok: result.sent > 0, ...result, skipped });
     }

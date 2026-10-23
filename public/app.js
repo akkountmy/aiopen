@@ -4557,9 +4557,22 @@ function renderPushBroadcast(body, users) {
   const picker = el('div', 'push-picker');
   form.appendChild(picker);
 
+  const actions = el('div', 'push-actions');
   const sendBtn = el('button', 'btn btn-primary', 'Отправить уведомление');
   sendBtn.type = 'submit';
-  form.appendChild(sendBtn);
+  actions.appendChild(sendBtn);
+
+  /* Проверка — отдельным действием и только на свои устройства. Так админ
+     видит, что уведомление доходит, и не будит весь сервис словом «Тест». */
+  const testBtn = el('button', 'btn btn-quiet', 'Проверить на себе');
+  testBtn.type = 'button';
+  testBtn.title = 'Проверка уходит только на ваши устройства';
+  actions.appendChild(testBtn);
+  form.appendChild(actions);
+
+  const testHint = el('p', 'push-broadcast-hint', 'Проверка уходит только на ваши устройства — остальные пользователи её не получат.');
+  form.appendChild(testHint);
+
   const note = el('p', 'field-error');
   form.appendChild(note);
   const resultLine = el('p', 'push-broadcast-hint');
@@ -4687,6 +4700,36 @@ function renderPushBroadcast(body, users) {
     });
 
   audience.addEventListener('change', syncAudience);
+
+  testBtn.addEventListener('click', async () => {
+    note.textContent = '';
+    resultLine.hidden = true;
+    const title = titleInput.value.trim() || 'DSH Open — проверка уведомлений';
+    const text =
+      textInput.value.trim() || 'Уведомления работают: так придёт сообщение о готовой задаче.';
+    testBtn.disabled = true;
+    const caption = testBtn.textContent;
+    testBtn.textContent = 'Отправляем…';
+    try {
+      const result = await api('/api/admin/push', {
+        method: 'POST',
+        body: { test: true, title, text },
+      });
+      if (result.sent) {
+        toast(
+          `Проверка ушла на ${result.sent} ${plural(result.sent, 'устройство', 'устройства', 'устройств')} — только вам`,
+          'ok',
+        );
+      } else {
+        toast('Ваше устройство не приняло проверочное уведомление', 'error');
+      }
+    } catch (error) {
+      note.textContent = error.message;
+    } finally {
+      testBtn.disabled = false;
+      testBtn.textContent = caption;
+    }
+  });
 
   form.addEventListener('submit', async (event) => {
     event.preventDefault();

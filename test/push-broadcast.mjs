@@ -185,6 +185,21 @@ check('устройство получателя учтено', broadcast.json?.
 check('недоставка видна в отчёте', broadcast.json?.sent === 0 && broadcast.json?.failed === 1);
 check('пользователи без устройств посчитаны', broadcast.json?.skipped === userCount - 1, `${broadcast.json?.skipped} / ${userCount}`);
 
+/* 5б. Пробная отправка не превращается в рассылку: даже если в запросе
+   случайно остались all и чужой id, смотрим только на устройства админа. */
+const testOnly = await admin.call('POST', '/api/admin/push', {
+  test: true,
+  all: true,
+  userIds: [viewerId],
+  title: 'Проверка',
+  text: 'Только администратору.',
+});
+check(
+  'проверка не уходит чужому устройству',
+  testOnly.status === 409,
+  `HTTP ${testOnly.status} ${testOnly.text.slice(0, 120)}`,
+);
+
 /* 6. Выбранным: только адресат из списка. */
 const selected = await admin.call('POST', '/api/admin/push', {
   all: false,

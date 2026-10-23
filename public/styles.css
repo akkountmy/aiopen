@@ -5682,6 +5682,22 @@ html.kb-open .scroll-jump {
   margin-top: 4px;
 }
 
+/* Отправка и проверка стоят рядом: проверка не должна выглядеть как ещё одна
+   рассылка — она уходит только на устройства администратора. */
+.push-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.push-actions .btn {
+  margin-top: 0;
+  height: 40px;
+  padding: 0 14px;
+  font-size: var(--fs-14);
+}
+
 .push-picker-head {
   display: flex;
   align-items: baseline;
