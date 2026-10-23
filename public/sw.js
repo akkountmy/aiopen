@@ -43,6 +43,11 @@ self.addEventListener('push', (event) => {
   const title = String(data.title || 'DSH Open');
   const url = typeof data.url === 'string' && data.url.startsWith('/') ? data.url : '/';
   const tag = String(data.tag || 'dsh');
+  /* Старые сборки не присылают флаг: для них сохраняем прежнее правило —
+     не показывать уведомление при открытом окне. Явный onlyWhenAway: false
+     ставят проверка и объявления: их человек должен увидеть, даже когда
+     приложение открыто. */
+  const onlyWhenAway = data.onlyWhenAway !== false;
   event.waitUntil(
     (async () => {
       /* Приложение прямо сейчас на экране: ответ человек видит в диалоге,
@@ -56,9 +61,9 @@ self.addEventListener('push', (event) => {
         } catch {
           /* вкладка могла закрыться между проверкой и отправкой */
         }
-        return;
+        if (onlyWhenAway) return;
       }
-      await setBadge(1);
+      if (!visible) await setBadge(1);
       await self.registration.showNotification(title, {
         body: String(data.body || 'Есть новое сообщение в DSH Open'),
         icon: APP_ICON,

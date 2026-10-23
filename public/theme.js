@@ -10,6 +10,10 @@
   var root = document.documentElement;
   root.setAttribute('data-theme', theme);
   root.style.colorScheme = theme;
+  /* Тот же цвет сразу уходит в theme-color (полоса приложения-ярлыка) и в фон
+     html (Safari 26 берёт из него цвет полосы до загрузки стилей). */
+  var bg = theme === 'light' ? '#ffffff' : '#151517';
+  root.style.backgroundColor = bg;
   var meta = document.querySelector('meta[name="theme-color"]');
-  if (meta) meta.setAttribute('content', theme === 'light' ? '#ffffff' : '#151517');
+  if (meta) meta.setAttribute('content', bg);
 })();

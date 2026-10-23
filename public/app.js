@@ -732,6 +732,9 @@ async function startApp(payload) {
   /* Уведомления включаются сами после входа: человек ничего не настраивает. */
   pushRegistered = false;
   void ensurePush();
+  /* Сервер должен знать, что человек сейчас в сервисе: тогда пуш о готовой
+     задаче не уйдёт ни на это устройство, ни на телефон. */
+  startPresence();
   checkAppVersion();
   /* На телефоне не забираем фокус сами: при открытии ярлыка клавиатура
      выезжала поверх ещё не отрисованного диалога. Фокус — только по тапу. */
@@ -4305,6 +4308,9 @@ function resetClientState() {
 }
 
 async function logout() {
+  /* Сначала говорим серверу «ушёл»: после сброса состояния он уже не поймёт,
+     чья это была вкладка. */
+  sendPresence(false, { beacon: true });
   try {
     await api('/api/logout', { method: 'POST', body: {} });
   } catch {
@@ -5058,8 +5064,25 @@ function applyTheme(theme, persist = true) {
     if (moon) moon.classList.toggle('hidden', light);
     if (sun) sun.classList.toggle('hidden', !light);
   }
+  syncThemeChrome(light);
+}
+
+/* Верхняя полоса телефона: theme-color для приложения-ярлыка и непрозрачный
+   fixed-слой для Safari 26. Обоим нужен новый цвет сразу после переключения,
+   иначе полоса остаётся старой до следующей перерисовки. */
+function syncThemeChrome(light) {
+  const bg = light ? '#ffffff' : '#151517';
   const meta = document.querySelector('meta[name="theme-color"]');
-  if (meta) meta.setAttribute('content', light ? '#ffffff' : '#151517');
+  if (meta) meta.setAttribute('content', bg);
+  const root = document.documentElement;
+  root.style.backgroundColor = bg;
+  if (document.body) document.body.style.backgroundColor = bg;
+  const app = document.getElementById('app');
+  if (app) app.style.backgroundColor = bg;
+  const tint = document.querySelector('.status-tint');
+  if (tint) tint.style.backgroundColor = bg;
+  /* Принудительный кадр: Safari забирает цвет у fixed-слоя при отрисовке. */
+  void root.offsetHeight;
 }
 
 /* ------------------------------ voice input ------------------------------ */
@@ -6953,6 +6976,90 @@ async function initPush() {
   }
   armPushPermission();
   void reportPushState();
+}
+
+/* ------------------------- присутствие ------------------------- */
+
+/* Пока вкладка на экране, раз в 15 секунд говорим серверу «я здесь». Сервер
+   считает человека активным на любом устройстве и не шлёт пуш о готовой
+   задаче — ни сюда, ни на телефон, который лежит в кармане. Свернули или
+   закрыли — сразу отправляем «ушёл»; если сигнал не дойдёт, отметка устареет
+   сама за 40 секунд. */
+const PRESENCE_BEAT_MS = 15000;
+let presenceStarted = false;
+let presenceClientId = '';
+
+function presenceId() {
+  if (presenceClientId) return presenceClientId;
+  try {
+    presenceClientId = crypto.randomUUID().replace(/-/g, '');
+  } catch {
+    presenceClientId = `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`;
+  }
+  return presenceClientId;
+}
+
+function presencePayload(visible) {
+  return {
+    clientId: presenceId(),
+    visible: Boolean(visible),
+    focused: Boolean(document.hasFocus?.()),
+    deviceId: pushDeviceKey(),
+  };
+}
+
+/* sendBeacon переживает закрытие вкладки, обычный fetch — нет. Для «ушёл»
+   сначала пробуем его, а если браузер отказал — шлём keepalive-запрос. */
+function sendPresence(visible = !document.hidden, { beacon = false } = {}) {
+  if (!state.user) return;
+  const payload = presencePayload(visible);
+  if (beacon && navigator.sendBeacon) {
+    try {
+      const blob = new Blob([JSON.stringify(payload)], { type: 'application/json' });
+      if (navigator.sendBeacon('/api/presence', blob)) return;
+    } catch {
+      /* старый браузер или запрет — ниже обычный запрос */
+    }
+  }
+  try {
+    void fetch('/api/presence', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      credentials: 'same-origin',
+      keepalive: !visible,
+    }).catch(() => {});
+  } catch {
+    /* нет сети — отметка просто устареет */
+  }
+}
+
+function startPresence() {
+  if (!state.user) return;
+  if (!presenceStarted) {
+    presenceStarted = true;
+    setInterval(() => {
+      if (state.user && !document.hidden) sendPresence(true);
+    }, PRESENCE_BEAT_MS);
+    document.addEventListener('visibilitychange', () => {
+      if (!state.user) return;
+      if (document.hidden) {
+        sendPresence(false, { beacon: true });
+        return;
+      }
+      sendPresence(true);
+    });
+    /* Вернулись в окно из другого приложения — подтверждаем, что всё ещё здесь. */
+    window.addEventListener('focus', () => {
+      if (state.user && !document.hidden) sendPresence(true);
+    });
+    window.addEventListener('pageshow', (event) => {
+      if (event.persisted && state.user && !document.hidden) sendPresence(true);
+    });
+    /* Закрытие вкладки или ярлыка-приложения. */
+    window.addEventListener('pagehide', () => sendPresence(false, { beacon: true }));
+  }
+  sendPresence(!document.hidden);
 }
 
 /* ---------------------- ярлык на домашний экран ---------------------- */

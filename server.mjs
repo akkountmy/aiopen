@@ -40,7 +40,9 @@ import { BACKUP_DEFAULTS, backupsDir, listBackups, snapshotState, startAutoBacku
 import { docEngines } from './src/doc/index.mjs';
 import { approvalMessage, notifyAdmin, suspicionMessage } from './src/notify.mjs';
 import { issueOpenLink, resolveOpenLink, asciiFileName, OPEN_PREFIX } from './src/openlink.mjs';
+import { clearPresence, isUserActive, touchPresence } from './src/presence.mjs';
 import { proofreadText } from './src/proofread.mjs';
+import { classifyCompletion } from './src/pushpolicy.mjs';
 import {
   forgetUser as pushForgetUser,
   pushState,
@@ -182,7 +184,7 @@ function publishRun(run, data) {
   else if (data.type === 'tool') {
     const known = run.tools.find((tool) => tool.id === data.id);
     if (known) Object.assign(known, data);
-    else run.tools.push({ id: data.id, label: data.label, summary: data.summary, status: data.status });
+    else run.tools.push({ id: data.id, name: data.name || '', label: data.label, summary: data.summary, status: data.status });
   } else if (data.type === 'title') run.title = data.title || run.title;
   else if (data.type === 'budget') run.budget = { spentUsd: data.spentUsd, limitUsd: data.limitUsd, status: 'pending' };
   else if (data.type === 'approval' && data.approval) run.budget = data.approval;
@@ -773,15 +775,44 @@ function pushSnippet(text, limit = 160) {
 }
 
 /**
- * Уведомление в ярлык-приложение о конце работы. Уходит на все устройства
- * пользователя; если приложение прямо сейчас открыто на экране, сервис-воркер
- * его не показывает — человек и так видит ответ в диалоге.
+ * Уведомление в ярлык-приложение о конце работы. Уходит только по сложным
+ * задачам и только когда человек не работает в сервисе: если приложение
+ * открыто на экране, ответ и так виден в диалоге, а пуш на телефон в этот
+ * момент — лишнее беспокойство.
+ *
+ * Отметки видимости приходят от вкладок; небольшая пауза перед решением нужна,
+ * чтобы сигнал «свернул» успел дойти, если задача закончилась ровно в этот
+ * момент. Сервис-воркер дополнительно не показывает уведомление на том
+ * устройстве, где окно на экране.
  */
-function notifyRunPush({ user, project, chat, status, text = '', errorText = '', approval = null }) {
+const COMPLETION_PUSH_DELAY_MS = 1200;
+
+function notifyRunPush({
+  user,
+  project,
+  chat,
+  run = null,
+  status,
+  text = '',
+  errorText = '',
+  approval = null,
+  outcome = null,
+}) {
   if (!user?.id || status === 'stopped') return;
+  const decision = classifyCompletion({
+    outcome,
+    durationMs: run?.startedMs ? Date.now() - run.startedMs : 0,
+    tools: run?.tools || [],
+    approval,
+    background: run?.source === 'dashboard',
+  });
+  if (!decision.complex) {
+    console.log(`[push] dialog ${chat?.id || '?'}: обычная задача, уведомление не нужно`);
+    return;
+  }
   const chatTitle = chat?.title && chat.title !== 'Новый диалог' ? chat.title : '';
   const where = chatTitle || project?.name || 'DSH Open';
-  let title = where;
+  const title = where;
   let body = '';
   let kind = status;
   if (approval) {
@@ -790,18 +821,33 @@ function notifyRunPush({ user, project, chat, status, text = '', errorText = '',
   } else if (status === 'error') {
     body = `Задача прервалась: ${pushSnippet(errorText, 120) || 'подробности в приложении'}`;
   } else {
-    body = pushSnippet(text, 160) || 'Задача готова.';
+    body = `Готово: ${pushSnippet(text, 150) || 'задача выполнена'}`;
   }
   const url = chat?.id ? `/?chat=${encodeURIComponent(chat.id)}` : '/';
-  pushToUser(user.id, {
-    title,
-    body,
-    url,
-    kind,
-    chatId: chat?.id || null,
-    projectId: project?.id || null,
-    tag: chat?.id ? `chat-${chat.id}` : 'dsh',
-  }).catch((error) => console.warn('[push] отправка не удалась:', error?.message || error));
+  const send = () => {
+    /* Человек вернулся в сервис, пока мы ждали сигнал, — не отвлекаем. */
+    if (isUserActive(user.id)) {
+      console.log(`[push] dialog ${chat?.id || '?'}: человек в сервисе, уведомление не отправляем`);
+      return;
+    }
+    pushToUser(user.id, {
+      title,
+      body,
+      url,
+      kind,
+      chatId: chat?.id || null,
+      projectId: project?.id || null,
+      tag: chat?.id ? `chat-${chat.id}` : 'dsh',
+      /* Воркер не показывает такое уведомление, если окно на экране. */
+      onlyWhenAway: true,
+    }).catch((error) => console.warn('[push] отправка не удалась:', error?.message || error));
+  };
+  if (approval) {
+    send();
+    return;
+  }
+  const timer = setTimeout(send, COMPLETION_PUSH_DELAY_MS);
+  timer.unref?.();
 }
 
 function bootstrapPayload(user) {
@@ -1467,7 +1513,7 @@ async function executeRun(run, job) {
     finishRun(run, 'done');
     /* Работа закончилась, а приложение может быть закрыто или свёрнуто —
        отправляем уведомление на все устройства пользователя. */
-    notifyRunPush({ user, project, chat, status: 'done', text: assistantText, approval: budgetInfo });
+    notifyRunPush({ user, project, chat, run, status: 'done', text: assistantText, approval: budgetInfo, outcome });
   } catch (error) {
     const aborted = error?.name === 'AbortError' || controller.signal.aborted;
     const message = aborted ? 'Остановлено' : describeFailure(error);
@@ -1484,6 +1530,7 @@ async function executeRun(run, job) {
       user,
       project,
       chat,
+      run,
       status: aborted ? 'stopped' : 'error',
       text: assistantText,
       errorText: message,
@@ -1940,7 +1987,10 @@ async function route(req, res) {
     if (pathname === '/api/signup' && method === 'POST') return await handleSignup(req, res);
     if (pathname === '/api/logout' && method === 'POST') {
       const cookies = parseCookies(req.headers.cookie);
-      if (cookies[SESSION.cookie]) store.dropSession(sessionKey(cookies[SESSION.cookie]));
+      const token = cookies[SESSION.cookie];
+      const leaving = token ? store.sessionUser(sessionKey(token)) : null;
+      if (leaving) clearPresence(leaving.id);
+      if (token) store.dropSession(sessionKey(token));
       return sendJson(res, 200, { ok: true }, { 'Set-Cookie': clearSessionCookie(TRUST_PROXY) });
     }
     if (pathname === '/api/version' && method === 'GET') {
@@ -1969,6 +2019,20 @@ async function route(req, res) {
     if (pathname === '/api/bootstrap' && method === 'GET') return sendJson(res, 200, bootstrapPayload(user));
 
     /* --- уведомления в ярлык-приложение --- */
+    /* Вкладка сообщает, на экране она или ушла в фон. Пока хоть одна вкладка
+       пользователя видима, пуш о готовой задаче не отправляем ни на одно его
+       устройство: человек и так увидит ответ. */
+    if (pathname === '/api/presence' && method === 'POST') {
+      const body = await readJsonBody(req, 4096);
+      if (!body || typeof body !== 'object') return sendError(res, 400, 'Некорректный запрос');
+      const clientId = String(body.clientId || '').slice(0, 80);
+      touchPresence(user.id, {
+        clientId,
+        visible: body.visible !== false,
+        focused: body.focused === true,
+      });
+      return sendJson(res, 200, { ok: true, active: isUserActive(user.id) });
+    }
     if (pathname === '/api/push/state' && method === 'GET') {
       return sendJson(res, 200, pushState(user.id), { 'Cache-Control': 'no-store' });
     }
@@ -2017,6 +2081,7 @@ async function route(req, res) {
         url: '/',
         kind: 'test',
         tag: 'dsh-test',
+        onlyWhenAway: false,
       });
       if (!result.total) return sendError(res, 409, 'Сначала включите уведомления на этом устройстве');
       return sendJson(res, 200, { ok: result.sent > 0, ...result });
@@ -2600,6 +2665,9 @@ async function route(req, res) {
         url: '/',
         kind: testOnly ? 'test' : 'news',
         tag: testOnly ? 'dsh-test' : `dsh-news-${Date.now()}`,
+        /* Проверка и объявление — не отчёт о задаче: их показываем, даже если
+           приложение открыто, иначе кнопка «Проверить» выглядит сломанной. */
+        onlyWhenAway: false,
       });
       console.log(
         testOnly

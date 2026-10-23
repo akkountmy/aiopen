@@ -131,6 +131,23 @@ check('открытое приложение не получает систем�
 check('вкладке отправлено событие с диалогом', visible.posted[0]?.type === 'dsh-push' && visible.posted[0]?.payload?.chatId === 'chat-1');
 check('бейдж не выставляется при открытом приложении', visible.badges.length === 0);
 
+/* 3a. Проверка и объявление помечены onlyWhenAway: false — их показываем,
+   даже когда приложение открыто, иначе кнопка «Проверить» выглядит сломанной. */
+const announced = loadWorker({ windows: [{ visible: true, focused: true }] });
+await dispatch(announced, 'push', pushEvent({
+  title: 'DSH Open',
+  body: 'Уведомления работают',
+  kind: 'test',
+  onlyWhenAway: false,
+}));
+check('проверка видна при открытом приложении', announced.shown.length === 1);
+check('проверка не выставляет бейдж поверх открытого окна', announced.badges.length === 0);
+
+/* 3b. Явный onlyWhenAway: true (новая сборка сервера) тоже молчит. */
+const awayOnly = loadWorker({ windows: [{ visible: true }] });
+await dispatch(awayOnly, 'push', pushEvent({ title: 'Готово', onlyWhenAway: true }));
+check('onlyWhenAway: true не показывает уведомление на экране', awayOnly.shown.length === 0);
+
 /* 4. Битое сообщение не должно ломать показ уведомления. */
 const broken = loadWorker();
 await dispatch(broken, 'push', pushEvent(null));
