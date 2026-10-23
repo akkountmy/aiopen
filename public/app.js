@@ -653,9 +653,13 @@ function switchAuthForm(mode) {
 /* ------------------------------ app init ------------------------------ */
 
 async function startApp(payload) {
+  /* Перезагрузку из-за смены темы отличаем от обычного запуска: в ней надо
+     вернуть ровно тот диалог, который был открыт, даже если iOS считает такую
+     навигацию новым входом. */
+  const themeResume = takeThemeReload();
   /* При открытии ярлыка показываем стартовый экран, при обычной перезагрузке
      возвращаем открытый диалог. */
-  const freshOpen = openedFresh();
+  const freshOpen = !themeResume && openedFresh();
   /* Панель файлов, открытую до перезагрузки, запоминаем до сброса состояния:
      resetClientState затирает память вкладки. */
   const savedUi = readFilesUi();
@@ -704,7 +708,17 @@ async function startApp(payload) {
      чтобы работа выглядела непрерывной. */
   for (const run of payload.runs || []) trackRun(run.id, run.chatId);
   renderSidebar();
-  if (freshOpen) {
+  if (themeResume) {
+    /* Смена темы перезагрузила страницу: возвращаем тот же диалог (или тот же
+       стартовый экран), а не «последний» — он мог остаться от прошлой сессии. */
+    const target = themeResume.chatId && findChatProject(themeResume.chatId) ? themeResume.chatId : '';
+    if (target) await openChat(target);
+    else {
+      state.chat = null;
+      state.activeChatId = null;
+      renderThread();
+    }
+  } else if (freshOpen) {
     /* Стартовый экран: поле ввода и подсказки, но без автоматически открытого
        диалога — человек сам решит, продолжить прошлый разговор или начать новый. */
     state.chat = null;
@@ -1059,6 +1073,26 @@ function openedFresh() {
   return true;
 }
 
+/* Перезагрузка ради полосы состояния помечается в адресе: так диалог
+   переживёт её, даже если iOS посчитает перезагрузку новым запуском ярлыка.
+   Метка снимается сразу, чтобы обычное обновление страницы работало как раньше. */
+const THEME_RELOAD_PARAM = 'themeReload';
+
+function takeThemeReload() {
+  try {
+    const params = new URLSearchParams(location.search);
+    if (params.get(THEME_RELOAD_PARAM) !== '1') return null;
+    const chatId = params.get('chat') || '';
+    params.delete(THEME_RELOAD_PARAM);
+    params.delete('chat');
+    const query = params.toString();
+    history.replaceState(null, '', `${location.pathname}${query ? `?${query}` : ''}${location.hash}`);
+    return { chatId };
+  } catch {
+    return null;
+  }
+}
+
 async function openChat(chatId) {
   /* Переключение во время ответа теперь разрешено: работа идёт на сервере, а
      вкладка просто показывает другой диалог и возвращается к потоку позже. */
@@ -1117,6 +1151,9 @@ async function ensureChat() {
   state.chat = chat;
   state.activeChatId = chat.id;
   state.expanded.add(state.activeProjectId);
+  /* Новый диалог, начатый с пустого экрана, тоже должен стать «последним»:
+     иначе после перезагрузки открывался предыдущий разговор. */
+  rememberChat(chat.id);
   renderSidebar();
   updateCrumbs();
   return state.chat;
@@ -5105,7 +5142,10 @@ function syncThemeChrome(light) {
    Поэтому в приложении-ярлыке после смены режима перезапускаем страницу: тема
    сохранена в localStorage, theme.js при загрузке выставит режим до отрисовки, и
    раскладка сразу получит правильный отступ. Цикла нет: после перезапуска
-   значение уже нужное и повторный перезапуск не срабатывает. */
+   значение уже нужное и повторный перезапуск не срабатывает.
+
+   В адрес кладём открытый диалог: иначе перезапуск возвращал «последний» чат,
+   и смена темы выглядела как переход в другой разговор. */
 function syncStatusBarStyle(light) {
   const meta = document.querySelector('meta[name="apple-mobile-web-app-status-bar-style"]');
   if (!meta) return;
@@ -5113,7 +5153,14 @@ function syncStatusBarStyle(light) {
   if (meta.getAttribute('content') === want) return;
   meta.setAttribute('content', want);
   const standalone = window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
-  if (standalone) location.reload();
+  if (!standalone) return;
+  /* Черновик переживает перезапуск, как и при обновлении до новой версии. */
+  saveDraft();
+  const url = new URL(location.href);
+  url.searchParams.set(THEME_RELOAD_PARAM, '1');
+  if (state.activeChatId) url.searchParams.set('chat', state.activeChatId);
+  else url.searchParams.delete('chat');
+  location.replace(url.toString());
 }
 
 /* ------------------------------ voice input ------------------------------ */
