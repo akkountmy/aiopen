@@ -17,6 +17,16 @@
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-title" content="DSH Open" />
+    <!-- Полосу состояния в приложении-ярлыке красит theme-color (iOS 26), а в
+         Safari — непрозрачный fixed-слой у верхнего края (WebKit 301756). Явно
+         «default», а не «black-translucent»: с прозрачной полосой страница
+         уезжает под часы, и iOS 26 кладёт поверх её верха мутное стекло —
+         значки шапки расплываются, а в светлой теме белые часы теряются на
+         белом. При «default» страница начинается ниже полосы,
+         env(safe-area-inset-top) равен нулю, а цвет полосы задаёт theme-color.
+         iOS запоминает стиль полосы при добавлении на домашний экран. Если
+         ярлык добавляли, когда здесь стоял black-translucent, его нужно
+         удалить и добавить заново — иначе он так и останется прозрачным. -->
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <script src="/theme.js?v=__ASSET_VERSION__"></script>
     <link rel="stylesheet" href="/styles.css?v=__ASSET_VERSION__" />

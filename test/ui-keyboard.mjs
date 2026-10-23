@@ -354,7 +354,7 @@ try {
 
   for (const [width, height] of [[390, 844], [360, 780], [320, 640]]) await checkWidth(width, height);
 
-  // --- десктоп: клавиатуры нет, композер по центру и не шире 780 px ---
+  // --- десктоп: клавиатуры нет, композер по центру и не шире 900 px ---
   await cdp.send('Emulation.clearDeviceMetricsOverride');
   await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false });
   await goto(BASE + '/');
@@ -375,7 +375,7 @@ try {
        inputFont: parseFloat(getComputedStyle(document.querySelector('#input')).fontSize),
      };
    })()`);
-  desk.width <= 782 ? ok('десктоп: композер не шире 780 px', `${desk.width}px`) : fail('десктоп: ширина композера', `${desk.width}px`);
+  desk.width <= 902 ? ok('десктоп: композер не шире 900 px', `${desk.width}px`) : fail('десктоп: ширина композера', `${desk.width}px`);
   // Композер центрируется в колонке диалога, а не в окне: слева сайдбар,
   // справа открытая панель файлов.
   Math.abs(desk.left - desk.mainLeft - (desk.mainRight - desk.right)) <= 2

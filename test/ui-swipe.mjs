@@ -200,8 +200,8 @@ try {
 
   // Полоска под системную строку состояния: iOS 26 берёт цвет полосы из
   // fixed-элемента у верхнего края, а не из theme-color (WebKit 301756).
-  // Высота полоски — ровно вырез (env(safe-area-inset-top)): она не должна
-  // накрывать содержимое, иначе срезает верх плашек в шапке панелей.
+  // Высота — ровно вырез (env(safe-area-inset-top)): она не должна накрывать
+  // содержимое. Без выреза цвет системе отдаёт непрозрачный фон .app.
   const tint = await evaluate(`(() => {
     const el = document.querySelector('.status-tint');
     if (!el) return null;
@@ -219,16 +219,18 @@ try {
       safe,
       bg: style.backgroundColor,
       bodyBg: getComputedStyle(document.body).backgroundColor,
+      appBg: getComputedStyle(document.getElementById('app')).backgroundColor,
       z: style.zIndex,
       position: style.position,
       visibility: style.visibility,
       display: style.display,
     };
   })()`);
-  tint && tint.position === 'fixed' && tint.top === 0 && tint.width >= 320 && tint.height === tint.safe &&
+  tint && tint.position === 'fixed' && tint.top === 0 && tint.width >= 320 &&
+  tint.height === tint.safe &&
   tint.visibility === 'visible' && tint.display === 'block' && tint.bg === tint.bodyBg &&
-  Number(tint.z) > 58
-    ? ok('полоска статус-бара — ровно вырез, содержимое не накрыто', `высота ${tint.height} px при вырезе ${tint.safe} px`)
+  tint.appBg === tint.bodyBg && Number(tint.z) > 58
+    ? ok('полоска статус-бара — ровно вырез, у .app цвет темы', `высота ${tint.height} px при вырезе ${tint.safe} px`)
     : fail('полоска статус-бара', JSON.stringify(tint));
 
   let current = await state();

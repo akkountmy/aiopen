@@ -1,4 +1,4 @@
-﻿// Проверка подсказок в мобильной версии в настоящем Chrome через DevTools-протокол (без зависимостей):
+// Проверка подсказок в мобильной версии в настоящем Chrome через DevTools-протокол (без зависимостей):
 //   - шесть коротких карточек «Чем помочь?» стоят по две в ряд на телефоне (390 px и 320 px),
 //     последняя занимает всю ширину;
 //   - ничего не вылезает по горизонтали, текст карточек не обрезан;
@@ -326,9 +326,9 @@ try {
     : fail('иконка папки в шапке не совпала с панелью', JSON.stringify({ filled, folderMatchesPanel }));
 
   // 3.2б. Верх плашек «Новый проект» и «Файлы проекта» не подрезан: полоска под
-  //       системную строку состояния больше не лежит поверх содержимого. Раньше
-  //       у неё был запас 12 px даже без выреза, и она срезала верхнюю рамку и
-  //       скругление обеих плашек на всех версиях.
+  //       системную строку состояния не лежит поверх содержимого. Цвет верхней
+  //       полосы iOS 26 берёт из фона .app — он должен быть непрозрачным и
+  //       совпадать с фоном страницы в обеих темах.
   const plateTops = await evaluate(`(() => {
     const tint = document.querySelector('.status-tint');
     const probe = document.createElement('div');
@@ -342,11 +342,14 @@ try {
       safe,
       newProject: top(document.getElementById('newProjectBtn')),
       filesTitle: top(document.getElementById('filesProjectTitle')),
+      appBg: getComputedStyle(document.getElementById('app')).backgroundColor,
+      bodyBg: getComputedStyle(document.body).backgroundColor,
     };
   })()`);
   plateTops.tint === plateTops.safe &&
-  Math.min(plateTops.newProject, plateTops.filesTitle) >= plateTops.tint
-    ? ok('полоска статус-бара не накрывает верх плашек проектов и файлов', `полоска ${plateTops.tint} px, плашки с ${plateTops.newProject}/${plateTops.filesTitle} px`)
+  Math.min(plateTops.newProject, plateTops.filesTitle) >= plateTops.tint &&
+  plateTops.appBg === plateTops.bodyBg && plateTops.appBg !== 'rgba(0, 0, 0, 0)'
+    ? ok('полоска статус-бара не накрывает верх плашек, у .app цвет темы', `полоска ${plateTops.tint} px, плашки с ${plateTops.newProject}/${plateTops.filesTitle} px`)
     : fail('полоска статус-бара подрезает верх плашек', JSON.stringify(plateTops));
   const dashLabel = await evaluate(`(() => {
     const btn = document.getElementById('dashboardBtn');
