@@ -3,6 +3,8 @@ npm-debug.log*
 data
 .trims
 exports
+.tmp
+temp
 .git
 .gitignore
 .dockerignore
@@ -12,3 +14,4 @@ Dockerfile
 *.tmp
 scripts/*.log
 scripts/*state.json
+screens

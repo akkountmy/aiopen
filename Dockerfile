@@ -34,6 +34,7 @@ ENV NODE_ENV=production \
     PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 
 # python3 — для run_python; tini — корректная остановка по SIGTERM;
+# gosu — переход с root на node после починки прав /data;
 # ca-certificates — исходящие HTTPS-запросы (поиск, загрузка страниц).
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
@@ -41,6 +42,7 @@ RUN apt-get update \
       python3-pip \
       python3-venv \
       tini \
+      gosu \
       ca-certificates \
  && rm -rf /var/lib/apt/lists/*
 
@@ -62,15 +64,18 @@ RUN npx playwright install --with-deps chromium \
 COPY . .
 
 RUN mkdir -p /data \
- && chown -R node:node /app /data
+ && chown -R node:node /app /data \
+ && chmod +x /app/entrypoint.sh
 
-USER node
-
+# Специально без USER node: вход через entrypoint.sh. Постоянное хранилище /data
+# досталось от прежнего окружения nodejs, и его владелец может быть root.
+# Скрипт возвращает владельца пользователю node и уже потом сбрасывает права;
+# если прав не хватило — работает от root, чтобы сервис не падал на старте.
 EXPOSE 3123
 VOLUME ["/data"]
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=25s --retries=3 \
   CMD node -e "fetch('http://127.0.0.1:' + (process.env.DSHOW_PORT || 3123) + '/api/health').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
 
-ENTRYPOINT ["/usr/bin/tini", "--"]
+ENTRYPOINT ["/usr/bin/tini", "--", "/app/entrypoint.sh"]
 CMD ["node", "server.mjs"]
