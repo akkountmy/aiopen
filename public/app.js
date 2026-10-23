@@ -5074,6 +5074,10 @@ function syncThemeChrome(light) {
   const bg = light ? '#ffffff' : '#151517';
   const meta = document.querySelector('meta[name="theme-color"]');
   if (meta) meta.setAttribute('content', bg);
+  /* Полосу состояния ярлыка не переключаем: style=default держим в обеих темах.
+     black-translucent на тёмной теме уводил страницу под часы, и на iOS 26 в
+     приложении-ярлыке верхние кнопки обрезались. Цвет полосы системе отдают
+     непрозрачные html/body/.app — они закрашены тем же bg. */
   const root = document.documentElement;
   root.style.backgroundColor = bg;
   if (document.body) document.body.style.backgroundColor = bg;
