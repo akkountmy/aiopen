@@ -5074,17 +5074,18 @@ function applyTheme(theme, persist = true) {
   syncThemeChrome(light);
 }
 
-/* Верхняя полоса телефона: theme-color для приложения-ярлыка и непрозрачный
-   fixed-слой для Safari 26. Обоим нужен новый цвет сразу после переключения,
-   иначе полоса остаётся старой до следующей перерисовки. */
+/* Верхняя полоса телефона: непрозрачный fixed/sticky-элемент у верхнего края
+   (шапка) и theme-color — для iOS до 26 и Android. Сэмплеру Safari 26 и
+   приложения-ярлыка нужен новый цвет сразу после переключения, иначе полоса
+   остаётся старой до следующей перерисовки. */
 function syncThemeChrome(light) {
   const bg = light ? '#ffffff' : '#151517';
   const meta = document.querySelector('meta[name="theme-color"]');
   if (meta) meta.setAttribute('content', bg);
-  /* Полосу состояния ярлыка не переключаем: style=default держим в обеих темах.
-     black-translucent на тёмной теме уводил страницу под часы, и на iOS 26 в
-     приложении-ярлыке верхние кнопки обрезались. Цвет полосы системе отдают
-     непрозрачные html/body/.app — они закрашены тем же bg. */
+  /* Полоса состояния приложения-ярлыка следует за темой: у тёмной темы страница
+     сама закрашивает полосу (black-translucent), у светлой — системная белая
+     (default). Подробности — в theme.js. */
+  syncStatusBarStyle(light);
   const root = document.documentElement;
   root.style.backgroundColor = bg;
   if (document.body) document.body.style.backgroundColor = bg;
@@ -5092,8 +5093,27 @@ function syncThemeChrome(light) {
   if (app) app.style.backgroundColor = bg;
   const tint = document.querySelector('.status-tint');
   if (tint) tint.style.backgroundColor = bg;
+  const topbar = document.querySelector('.topbar');
+  if (topbar) topbar.style.backgroundColor = bg;
   /* Принудительный кадр: Safari забирает цвет у fixed-слоя при отрисовке. */
   void root.offsetHeight;
+}
+
+/* Смена режима полосы состояния на ходу: iOS перерисовывает полосу сразу, но
+   env(safe-area-inset-top) не пересчитывает — в тёмной теме страница уезжает под
+   часы, кнопки шапки обрезаются (так и было, пока полосу держали на default).
+   Поэтому в приложении-ярлыке после смены режима перезапускаем страницу: тема
+   сохранена в localStorage, theme.js при загрузке выставит режим до отрисовки, и
+   раскладка сразу получит правильный отступ. Цикла нет: после перезапуска
+   значение уже нужное и повторный перезапуск не срабатывает. */
+function syncStatusBarStyle(light) {
+  const meta = document.querySelector('meta[name="apple-mobile-web-app-status-bar-style"]');
+  if (!meta) return;
+  const want = light ? 'default' : 'black-translucent';
+  if (meta.getAttribute('content') === want) return;
+  meta.setAttribute('content', want);
+  const standalone = window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+  if (standalone) location.reload();
 }
 
 /* ------------------------------ voice input ------------------------------ */

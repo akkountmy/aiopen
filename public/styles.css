@@ -1405,8 +1405,18 @@ body.resizing {
   gap: 12px;
   padding: 0 12px 0 16px;
   border-bottom: 1px solid var(--line);
-  /* Непрозрачный фон нужен и Safari 26: цвет верхней полосы он берёт с
-     непрозрачного элемента у края экрана, а не из theme-color. */
+  /* Цвет верхней полосы Safari 26 и приложение-ярлык берут не из theme-color, а
+     с непрозрачного fixed/sticky-элемента у верхнего края (WebKit 301756,
+     325446): «solid background color extension applied for viewport-constrained
+     (fixed or sticky) elements near the viewport edge». Шапка — единственный
+     такой элемент, если её прижать к краю: sticky не меняет раскладку (шапка и
+     так первая в колонке), но делает её кандидатом для сэмплера. Без этого в
+     тёмной теме полоса оставалась системной белой: html/body/.app тоже
+     закрашены цветом темы, но они не fixed/sticky, и iOS их не читает. */
+  position: sticky;
+  top: 0;
+  /* Ниже затемнения ящиков (44/58) и полоски выреза (59), выше ленты. */
+  z-index: 20;
   background-color: var(--bg);
 }
 

@@ -53,7 +53,7 @@ async function snapshot(page) {
       apple: apple ? apple.content : null,
       tint: { rect: rect(tint), bg: tint ? css(tint).backgroundColor : null, z: tint ? css(tint).zIndex : null, safe },
       app: { rect: rect(app), bg: app ? css(app).backgroundColor : null, position: app ? css(app).position : null },
-      topbar: { rect: rect(topbar), bg: topbar ? css(topbar).backgroundColor : null },
+      topbar: { rect: rect(topbar), bg: topbar ? css(topbar).backgroundColor : null, position: topbar ? css(topbar).position : null, top: topbar ? css(topbar).top : null },
       htmlBg: css(document.documentElement).backgroundColor,
       bodyBg: css(document.body).backgroundColor,
       vw: innerWidth,
@@ -98,20 +98,31 @@ async function run(width, height, label, standalone = false) {
     }
     ok(`${label} ${theme}: фон html`, s.htmlBg === rgb(color), s.htmlBg);
     ok(`${label} ${theme}: фон окна`, s.app.bg === rgb(color), s.app.bg);
+    ok(`${label} ${theme}: шапка прижата к верху (sticky)`,
+      s.topbar.position === 'sticky' && s.topbar.top === '0px' && s.topbar.rect.top === 0,
+      `${s.topbar.position} top=${s.topbar.top} y=${s.topbar.rect.top}`);
     if (width <= 1100) {
-      // Цвет полосы состояния системе отдают непрозрачные слои у верхнего края.
-      // Полоска под вырез — только один из них; при нулевом вырезе её нет, и
-      // тогда обязаны быть непрозрачными html, body, .app и шапка.
+      // Цвет полосы состояния системе отдаёт непрозрачный fixed/sticky-слой у
+      // верхнего края. Полоска под вырез годится только при вырезе больше нуля,
+      // поэтому обязательный кандидат — sticky-шапка (она есть всегда): без неё
+      // в тёмной теме ярлык показывал системную белую полосу. Плюс проверяем,
+      // что непрозрачны все «плиты» — на случай, если iOS сэмплит не только
+      // fixed/sticky, но и html/body.
       const hit = s.candidates.find((c) => c.bg === rgb(color) && c.h >= 12);
       const plates = [s.app.bg, s.topbar.bg, s.htmlBg, s.bodyBg];
       const opaque = plates.every((bg) => bg === rgb(color));
-      ok(`${label} ${theme}: система найдёт цвет полосы`, s.tint.safe > 0 ? !!hit : opaque,
-        `${s.tint.safe > 0 ? (hit ? hit.cls + ' ' + hit.w + '×' + hit.h : JSON.stringify(s.candidates)) : plates.join(' / ')}`);
+      ok(`${label} ${theme}: система найдёт цвет полосы`,
+        !!hit && opaque,
+        (hit ? hit.cls + ' ' + hit.w + '×' + hit.h : JSON.stringify(s.candidates)) + ' / ' + plates.join(' / '));
     }
     ok(`${label} ${theme}: нет горизонтальной прокрутки`, s.scrollW <= s.vw, `${s.scrollW}/${s.vw}`);
     if (width <= 860) {
       ok(`${label} ${theme}: шапка 56 px`, Math.round(s.topbar.rect.h) === 56, String(s.topbar.rect.h));
-      ok(`${label} ${theme}: полоса не прозрачная`, s.apple === 'default', String(s.apple));
+      // В тёмной теме полоса прозрачная (страница закрашивает её своим bg — только
+      // так она следует теме, когда системное оформление светлое), в светлой —
+      // системная белая с чёрными значками.
+      ok(`${label} ${theme}: режим полосы под тему`,
+        s.apple === (theme === 'dark' ? 'black-translucent' : 'default'), String(s.apple));
     }
     await page.screenshot({ path: `D:/DSHarness/telegram/tmp/statusbar-${label}-${theme}.png`, clip: { x: 0, y: 0, width, height: Math.min(140, height) } });
   }
@@ -128,6 +139,7 @@ async function run(width, height, label, standalone = false) {
     ok(`${label}: клик сразу меняет theme-color`, s.meta === expected.light, s.meta);
     ok(`${label}: клик сразу меняет полоску`, s.tint.bg === rgb(expected.light), s.tint.bg);
     ok(`${label}: клик сразу меняет фон окна`, s.app.bg === rgb(expected.light), s.app.bg);
+    ok(`${label}: клик меняет режим полосы`, s.apple === 'default', String(s.apple));
   }
 
   if (width <= 1100) {
