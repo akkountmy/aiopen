@@ -4681,6 +4681,76 @@ async function adminModal() {
 }
 
 /* Запросы на подтверждение тяжёлых задач: одобряем или отклоняем прямо здесь. */
+/* --- качество ответов ---
+   Та же информация, что сервис пишет в логи `[route]` и `[review]`, но
+   сведённая по дням и доступная без доступа к журналу сборки: сколько ответов
+   проверили, сколько правили, какие находки повторяются. Считает сервер
+   (/api/admin/quality), здесь только показ — со своим переключателем срока. */
+const QUALITY_DAYS = [7, 30];
+
+function renderQuality(body) {
+  const holder = el('div');
+  body.appendChild(holder);
+  const draw = async (days) => {
+    holder.innerHTML = '';
+    const title = el('div', 'admin-section-title', 'Качество ответов');
+    holder.appendChild(title);
+
+    const switcher = el('div', 'quality-days');
+    for (const value of QUALITY_DAYS) {
+      const button = el('button', `btn ${value === days ? 'btn-primary' : 'btn-ghost'}`, `${value} дн.`);
+      button.type = 'button';
+      button.addEventListener('click', () => void draw(value));
+      switcher.appendChild(button);
+    }
+    holder.appendChild(switcher);
+
+    let data;
+    try {
+      data = await api(`/api/admin/quality?days=${days}`);
+    } catch (error) {
+      holder.appendChild(el('p', 'muted', `Сводка недоступна: ${error.message}`));
+      return;
+    }
+    const totals = data.totals || {};
+    if (!(totals.answers > 0)) {
+      holder.appendChild(el('p', 'muted', 'За этот срок ответов нет — сводка появится вместе с первыми задачами.'));
+      return;
+    }
+    const share = (part, total) => (total > 0 ? `${Math.round((part / total) * 100)}%` : '—');
+    const summary = el('p', 'muted');
+    summary.textContent =
+      `Ответов ${totals.answers}: проверено ${totals.reviewed} (${share(totals.reviewed, totals.answers)}), ` +
+      `правилось ${totals.fixed} (${share(totals.fixed, totals.answers)}), ` +
+      `сильная модель ${totals.pro} (${share(totals.pro, totals.answers)}), ` +
+      `серьёзных находок ${totals.high}.`;
+    holder.appendChild(summary);
+
+    for (const row of data.days || []) {
+      const line = el('div', 'approval done');
+      const main = el('div', 'ap-main');
+      const date = new Date(`${row.day}T12:00:00`);
+      const when = Number.isNaN(date.getTime())
+        ? row.day
+        : date.toLocaleDateString('ru-RU', { day: '2-digit', month: 'long' });
+      main.appendChild(el('div', 'ap-title', when));
+      const parts = [`ответов ${row.answers}`];
+      if (row.reviewed) parts.push(`проверено ${row.reviewed}`);
+      if (row.fixed) parts.push(`правка${row.secondRounds ? ' (со второй)' : ''}`);
+      if (row.kinds?.length) parts.push(row.kinds.map((item) => `${item.label} ${item.count}`).join(', '));
+      main.appendChild(el('div', 'ap-sub', parts.join(' · ')));
+      line.appendChild(main);
+      holder.appendChild(line);
+    }
+    if (totals.kinds?.length) {
+      holder.appendChild(
+        el('p', 'muted', `Находки по видам за ${days} дн.: ${totals.kinds.map((item) => `${item.label} — ${item.count}`).join(', ')}`),
+      );
+    }
+  };
+  void draw(QUALITY_DAYS[0]);
+}
+
 function renderApprovals(body, approvals, refresh) {
   if (!approvals.length) return;
   body.appendChild(el('div', 'admin-section-title', 'Запросы на тяжёлые задачи'));
@@ -5198,6 +5268,8 @@ function renderAdmin(body, users, overview, approvals = [], refresh = null) {
   body.appendChild(form);
 
   renderApprovals(body, approvals, refresh);
+
+  renderQuality(body);
 
   renderPushBroadcast(body, users);
 

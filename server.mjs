@@ -79,6 +79,7 @@ import { webSearch } from './src/search.mjs';
 import { describeTrim } from './src/trim.mjs';
 import { describeProfile } from './src/model.mjs';
 import { describeReview } from './src/review.mjs';
+import { recordQuality, qualityRecord, readQuality, summarizeQuality, formatQuality, kindLabel as qualityKindLabel } from './src/quality.mjs';
 
 ensureDirs();
 store.init({ adminUsername: ADMIN.username, adminPassword: ADMIN.password });
@@ -1506,6 +1507,21 @@ async function executeRun(run, job) {
     if (outcome.review?.checked) {
       console.log(`[review] dialog ${chat.id}: ${describeReview(outcome.review)}`);
     }
+    /* Та же строка, но не в журнал, а в файл на день: журнал читает человек,
+       а сводка нужна цифрами — сколько проверено, что нашли, что правили.
+       Пишется только признак ответа, без текста переписки. */
+    recordQuality(
+      DATA_DIR,
+      qualityRecord({
+        chatId: chat.id,
+        projectId: project?.id,
+        route: outcome.route,
+        answerChars: assistantText.length,
+        tools: [...new Set((outcome.tools || []).map((tool) => tool?.name).filter(Boolean))],
+        review: outcome.review,
+        usage: outcome.usage,
+      }),
+    );
 
     /* Учитываем стоимость: баланс пользователя, расход по проекту и суточная статистика.
        С баланса списывается итоговая сумма (внутренняя наценка уже внутри chargeUsd),
@@ -2695,6 +2711,44 @@ async function route(req, res) {
       const admin = requireAdmin(req, res);
       if (!admin) return;
       return sendJson(res, 200, { overview: store.overview(), keys: keyStatus() });
+    }
+    /* Дневная сводка качества: те же цифры, что в логах `[route]` и `[review]`,
+       но сведённые по дням. Читается из файлов <data>/quality/*.jsonl.
+       Названия видов находок подставляем здесь, чтобы клиент не держал у себя
+       второй список слов и не разошёлся с сервером. */
+    if (pathname === '/api/admin/quality' && method === 'GET') {
+      const admin = requireAdmin(req, res);
+      if (!admin) return;
+      const days = Math.max(1, Math.min(90, Number(url.searchParams.get('days')) || 7));
+      const summary = summarizeQuality(readQuality(DATA_DIR, { days }));
+      const kindsOf = (issues) =>
+        Object.entries(issues || {})
+          .sort((a, b) => b[1] - a[1])
+          .slice(0, 5)
+          .map(([kind, count]) => ({ kind, label: qualityKindLabel(kind), count }));
+      return sendJson(res, 200, {
+        days: summary.days.map((row) => ({
+          day: row.day,
+          answers: row.answers,
+          reviewed: row.reviewed,
+          fixed: row.fixed,
+          secondRounds: row.secondRounds,
+          high: row.high,
+          pro: row.pro,
+          kinds: kindsOf(row.issues),
+        })),
+        totals: {
+          answers: summary.totals.answers,
+          reviewed: summary.totals.reviewed,
+          fixed: summary.totals.fixed,
+          secondRounds: summary.totals.secondRounds,
+          high: summary.totals.high,
+          pro: summary.totals.pro,
+          kinds: kindsOf(summary.totals.issues),
+        },
+        text: formatQuality(summary),
+        checkedAt: summary.checkedAt,
+      });
     }
     /* --- рассылка уведомлений от администратора ---
        Объявление о новой функции уходит всем или выбранным пользователям —

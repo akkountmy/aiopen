@@ -3280,6 +3280,19 @@ html.app-mode .composer-modes {
   font-weight: 500;
 }
 
+/* Переключатель срока в сводке качества: две небольшие кнопки рядом с
+   заголовком, чтобы читать 7 дней или месяц без ухода с экрана админа. */
+.quality-days {
+  display: flex;
+  gap: 6px;
+  margin: 0 0 10px;
+}
+
+.quality-days .btn {
+  padding: 4px 10px;
+  font-size: var(--fs-12);
+}
+
 .approval {
   display: flex;
   align-items: center;
