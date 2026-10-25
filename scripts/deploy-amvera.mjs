@@ -56,6 +56,7 @@ if (mode === 'status') {
           'server.mjs',
           'amvera.yaml',
           'package.json',
+          'package-lock.json',
           'README.md',
           ...walk('src', 'src'),
           ...walk('public', 'public'),
