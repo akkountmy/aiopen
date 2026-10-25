@@ -1516,6 +1516,8 @@ export const TOOL_LABELS = {
   fetch_many: 'Загрузка ссылок',
   crawl: 'Обход сайта',
   check_page: 'Проверка страницы в браузере',
+  scrape_page: 'Разбор страницы',
+  page_template: 'Каркас страницы',
   run_python: 'Расчёты',
   run_js: 'Расчёты',
   spawn_agent: 'Субагенты',
@@ -1571,6 +1573,15 @@ export function toolSummary(name, args) {
       return args.url || '';
     case 'check_page':
       return `${args.url || ''}${args.widths ? ` · ${args.widths}` : args.width ? ` · ${args.width} px` : ' · 390/768/1440 px'}`;
+    case 'scrape_page': {
+      const bits = [args.url || ''];
+      const fields = args.selectors && typeof args.selectors === 'object' ? Object.keys(args.selectors).length : 0;
+      if (fields) bits.push(`${fields} ${plural(fields, 'поле', 'поля', 'полей')}`);
+      if (args.render) bits.push('JS');
+      return bits.filter(Boolean).join(' · ');
+    }
+    case 'page_template':
+      return 'готовый каркас';
     case 'analyze_data':
       return `${args.path || ''}${args.mode ? ` · ${args.mode}` : ''}`;
     case 'extract_archive':

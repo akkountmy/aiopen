@@ -330,6 +330,18 @@ test('новые инструменты объявлены единообраз�
   assert.match(toolSummary('check_links', { urls: ['https://a', 'https://b'] }), /2 ссылки/);
 });
 
+test('у каждого инструмента есть русская метка для строки работы', () => {
+  /* Служебная строка «ИИ-ассистент · …» берёт TOOL_LABELS, а без метки
+     показывает сырое английское имя инструмента. */
+  for (const def of TOOL_DEFS) {
+    const name = def.function.name;
+    assert.ok(TOOL_LABELS[name], `нет русской метки для ${name}`);
+  }
+  assert.equal(TOOL_LABELS.scrape_page, 'Разбор страницы');
+  assert.match(toolSummary('scrape_page', { url: 'https://a', selectors: { title: 'h1' } }), /1 поле/);
+  assert.equal(TOOL_LABELS.page_template, 'Каркас страницы');
+});
+
 /* ---------- итог ---------- */
 
 let failed = 0;
