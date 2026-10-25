@@ -95,7 +95,7 @@ export function skillsPromptText() {
   if (!all.length) return '';
   const lines = ['Доступные навыки (полную инструкцию открывает инструмент use_skill):'];
   for (const skill of all) {
-    const description = String(skill.description || '').replace(/\s+/g, ' ').slice(0, 300);
+    const description = String(skill.description || '').replace(/\s+/g, ' ').slice(0, 240);
     lines.push(`— ${skill.id}: ${description}`);
   }
   lines.push(
