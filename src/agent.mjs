@@ -544,7 +544,7 @@ export async function runTurn({
         if (signal.aborted) throw Object.assign(new Error('aborted'), { name: 'AbortError' });
       }
     }
-    const system = systemPrompt({ projectName, projectContext, memory: chat.memory, userName, question: userText, facts, skillsText, filesBrief, task: chat.task, modes: { thinking, search: search && steps === 1 } });
+    const system = systemPrompt({ projectName, projectContext, memory: chat.memory, userName, question: userText, facts, skillsText, filesBrief, task: chat.task, modes: { thinking, search } });
     const messages = [{ role: 'system', content: system }, ...chat.history];
 
     const result = await callModel(
@@ -744,7 +744,7 @@ export async function runTurn({
   if (!finished) {
     chat.task = updateTaskState(chat.task, { userText, tools: toolsUsed, steps });
     try {
-      const system = systemPrompt({ projectName, projectContext, memory: chat.memory, userName, question: userText, facts, skillsText, filesBrief, task: chat.task, modes: { thinking, search: search && steps === 1 } });
+      const system = systemPrompt({ projectName, projectContext, memory: chat.memory, userName, question: userText, facts, skillsText, filesBrief, task: chat.task, modes: { thinking, search } });
       /* Карточка задачи в финальном сообщении помогает итогу быть по делу:
          модель называет готовые файлы, а не пересказывает процесс. */
       const card = taskSummaryLine(chat.task);

@@ -103,50 +103,46 @@ function emptyDashboardState() {
 }
 
 /* Выбранные режимы ответа. Как в мобильном приложении, это не разовая
-   настройка сообщения: переключатели запоминаются на устройстве и действуют,
-   пока человек сам их не выключит. */
+   настройка сообщения: переключатель запоминается на устройстве и действует,
+   пока человек сам его не выключит.
+   Поиска в интернете здесь нет: он не выключается кнопкой. Сервис ищет сам,
+   когда вопрос держится на свежих фактах, и всегда по максимальному качеству —
+   см. правило в системном запросе (src/prompt.mjs). */
 const ANSWER_MODES_KEY = 'dshow.answerModes';
-const answerModes = { thinking: false, search: false };
+const answerModes = { thinking: false };
 
 function paintAnswerModes() {
   const think = $('#thinkToggle');
-  const search = $('#searchToggle');
   if (think) {
     think.setAttribute('aria-pressed', String(answerModes.thinking));
     think.setAttribute('aria-label', answerModes.thinking ? 'Рассуждения включены' : 'Рассуждения выключены');
   }
-  if (search) {
-    search.setAttribute('aria-pressed', String(answerModes.search));
-    search.setAttribute('aria-label', answerModes.search ? 'Поиск включён' : 'Поиск выключен');
-  }
 }
 
 /* Режимы относятся только к мобильной версии и ярлыку-приложению. На широком
-   экране кнопок нет, поэтому и скрытое состояние из localStorage не должно
+   экране кнопки нет, поэтому и скрытое состояние из localStorage не должно
    влиять на обычный компьютерный диалог. */
 function answerModesAvailable() {
   return openedAsApp() || window.matchMedia('(max-width: 860px)').matches;
 }
 
 function activeAnswerModes() {
-  if (!answerModesAvailable()) return { thinking: false, search: false };
-  return { thinking: answerModes.thinking === true, search: answerModes.search === true };
+  if (!answerModesAvailable()) return { thinking: false };
+  return { thinking: answerModes.thinking === true };
 }
 
 function loadAnswerModes() {
   try {
     const saved = JSON.parse(localStorage.getItem(ANSWER_MODES_KEY) || '{}');
     answerModes.thinking = saved.thinking === true;
-    answerModes.search = saved.search === true;
   } catch {
     answerModes.thinking = false;
-    answerModes.search = false;
   }
   paintAnswerModes();
 }
 
 function toggleAnswerMode(name) {
-  if (name !== 'thinking' && name !== 'search') return;
+  if (name !== 'thinking') return;
   answerModes[name] = !answerModes[name];
   try {
     localStorage.setItem(ANSWER_MODES_KEY, JSON.stringify(answerModes));
@@ -6370,10 +6366,9 @@ $('#authSwitchToLogin').addEventListener('click', () => switchAuthForm('login'))
 $('#userChip').addEventListener('click', openUserMenu);
 $('#newProjectBtn').addEventListener('click', (event) => createProjectModal({ anchor: event.currentTarget }));
 $('#composer').addEventListener('submit', sendMessage);
-/* Две отдельные кнопки режима — не меню и не раскрывающийся список:
-   нажатие сразу включает или выключает режим для следующих сообщений. */
+/* Кнопка режима — не меню и не раскрывающийся список: нажатие сразу
+   включает или выключает режим для следующих сообщений. */
 $('#thinkToggle')?.addEventListener('click', () => toggleAnswerMode('thinking'));
-$('#searchToggle')?.addEventListener('click', () => toggleAnswerMode('search'));
 /* На старых iOS CSS-медиазапрос display-mode может не сработать, хотя ярлык
    уже открыт как приложение. Дублируем состояние классом на <html>. */
 document.documentElement.classList.toggle('app-mode', openedAsApp());

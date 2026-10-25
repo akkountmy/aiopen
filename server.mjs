@@ -1352,13 +1352,17 @@ async function handleMessageStream(req, res, user, chatId) {
   const body = await readJsonBody(req, LIMITS.jsonBody);
   const text = String(body.text || '').trim();
   const attachmentIds = Array.isArray(body.attachmentIds) ? body.attachmentIds.slice(0, LIMITS.maxAttachmentsPerMessage) : [];
-  /* Режимы ответа приходят с мобильного композера двумя независимыми
-     флажками. Читаем и вложенный modes, и плоские поля — старый клиент,
-     который про них не знает, просто не пришлёт ничего. */
+  /* Режим ответа приходит с мобильного композера. Читаем и вложенный modes,
+     и плоские поля — старый клиент, который про них не знает, просто не
+     пришлёт ничего.
+     Поиск в интернете не выключается: кнопки для него в интерфейсе нет, и
+     присланный флаг игнорируется. Сервис ищет сам, когда вопрос держится на
+     свежих фактах, а правило об этом всегда лежит в системном запросе
+     (src/prompt.mjs). */
   const modeSource = body.modes && typeof body.modes === 'object' ? body.modes : body;
   const modes = {
     thinking: modeSource.thinking === true,
-    search: modeSource.search === true,
+    search: true,
   };
   if (!text && !attachmentIds.length) return sendError(res, 400, 'Пустое сообщение');
 
@@ -1405,7 +1409,7 @@ async function handleMessageStream(req, res, user, chatId) {
    события складываются в запуск — подключиться и догнать можно в любой момент. */
 async function executeRun(run, job) {
   const { user, project, chat } = run;
-  const { text, attachmentIds, isFirstMessage, modes = { thinking: false, search: false } } = job;
+  const { text, attachmentIds, isFirstMessage, modes = { thinking: false, search: true } } = job;
   const controller = run.controller;
   const stream = { emit: (data) => publishRun(run, data) };
 
@@ -1550,7 +1554,10 @@ async function executeRun(run, job) {
       tools: outcome.tools.map((tool) => ({ id: tool.id, label: tool.label, summary: tool.summary, status: tool.status })),
       at: nowIso(),
       ...(budgetInfo ? { budget: budgetInfo } : {}),
-      ...(modes.thinking || modes.search ? { modes: { thinking: modes.thinking === true, search: modes.search === true } } : {}),
+      /* Пометку режима пишем только для «Рассуждений»: это выбор человека.
+         Поиск не выбор, а обычная работа сервиса — значок «Поиск» на каждом
+         ответе был бы шумом. */
+      ...(modes.thinking ? { modes: { thinking: true } } : {}),
       ...(outcome.reasoning ? { reasoning: outcome.reasoning } : {}),
     });
     store.saveChat(chat.id, { messages: chat.messages, history: chat.history, memory: chat.memory, task: chat.task || null });

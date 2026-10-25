@@ -878,7 +878,7 @@ export const TOOL_DEFS = [
     function: {
       name: 'web_search',
       description:
-        'Найти актуальную информацию в интернете. Возвращает заголовки, ссылки и сниппеты. Можно передать несколько запросов сразу (queries) — они объединятся в одну выдачу без повторов.',
+        'Найти актуальную информацию в интернете. Возвращает заголовки, ссылки и сниппеты. Можно передать несколько запросов сразу (queries) — они объединятся в одну выдачу без повторов. Для качества давай 2–4 разные формулировки и открывай первоисточники read_page: сниппет годится для выбора страницы, но не для цифр и цитат.',
       parameters: {
         type: 'object',
         properties: {
@@ -1840,7 +1840,9 @@ export async function executeTool(name, args, ctx) {
       const queries = Array.isArray(args.queries) ? args.queries : [args.query].filter(Boolean);
       if (!queries.length) throw new Error('Нужен поисковый запрос');
       if (queries.length > 1) {
-        const found = await searchMany(queries, { perQuery: Math.max(2, Math.min(limit, 4)) });
+        /* Поиск отдаётся по максимальному качеству: на каждый вариант
+           формулировки берём больше адресов, а не два-три сниппета. */
+        const found = await searchMany(queries, { perQuery: Math.max(3, Math.min(limit, 8)) });
         if (!found.results.length) {
           return { text: `Поиск не дал результатов.${found.failures.length ? `\nОшибки: ${found.failures.join('; ')}` : ''}` };
         }

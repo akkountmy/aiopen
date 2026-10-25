@@ -213,18 +213,17 @@
         <div class="composer-wrap">
           <form id="composer" class="composer" autocomplete="off">
             <div id="attachStrip" class="attach-strip hidden"></div>
-            <!-- Режимы ответа — как в мобильном приложении DeepSeek: две
-                 отдельные кнопки-переключателя, а не один «плюс» с
-                 раскрывающимся списком. На компьютере скрыты, показываются
-                 на телефоне и в ярлыке-приложении (см. styles.css). -->
-            <div id="composerModes" class="composer-modes" role="group" aria-label="Режимы ответа">
+            <!-- Режим ответа — как в мобильном приложении DeepSeek: отдельная
+                 кнопка-переключатель, а не «плюс» с раскрывающимся списком.
+                 Кнопки поиска здесь нет намеренно: интернет не выключен и не
+                 включается вручную — сервис ищет сам, когда вопрос требует
+                 свежих фактов, и всегда по максимальному качеству.
+                 На компьютере кнопка скрыта, показывается на телефоне и в
+                 ярлыке-приложении (см. styles.css). -->
+            <div id="composerModes" class="composer-modes" role="group" aria-label="Режим ответа">
               <button id="thinkToggle" class="mode-chip" type="button" aria-pressed="false" title="Рассуждения: сильная модель и глубокий разбор задачи">
                 <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 2.4l1.5 4.1 4.1 1.5-4.1 1.5L10 13.6 8.5 9.5 4.4 8l4.1-1.5L10 2.4z" /><path d="M15.4 12.8l.7 1.9 1.9.7-1.9.7-.7 1.9-.7-1.9-1.9-.7 1.9-.7.7-1.9z" /></svg>
                 <span>Рассуждения</span>
-              </button>
-              <button id="searchToggle" class="mode-chip" type="button" aria-pressed="false" title="Поиск в интернете: свежие данные и ссылки на источники">
-                <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.8" cy="8.8" r="5.5" /><path d="M12.9 12.9l4.1 4.1" /></svg>
-                <span>Поиск</span>
               </button>
             </div>
             <div class="composer-row">
