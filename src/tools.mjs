@@ -17,7 +17,7 @@ import { checkPage, describePage } from './browser.mjs';
 import { pageCheckNote, pageTemplate, staticPageChecks, staticIssueCount } from './pagecheck.mjs';
 import { escapeHtml, formatBytes, safeName, truncate } from './util.mjs';
 import { writeZip } from './zip.mjs';
-import { archiveKind, extractArchiveTo, formatExtraction, gunzipTo } from './archive.mjs';
+import { ARCHIVE_LIMITS, archiveKind, extractArchiveTo, formatExtraction, gunzipTo } from './archive.mjs';
 import { checkLinks, formatLinks, linksFromText } from './linkcheck.mjs';
 import { compareDocuments, formatCompare } from './comparedocs.mjs';
 
@@ -1628,7 +1628,9 @@ const WRITE_TARGETS = {
   create_pptx: ['path'],
   create_pdf: ['path'],
   check_page: ['screenshot'],
-  extract_archive: ['path', 'to'],
+  /* Архив только читаем, пишем в папку распаковки: ограничивать path нельзя,
+     иначе субагент не сможет развернуть архив, лежащий выше его папки. */
+  extract_archive: ['to'],
 };
 
 /**
@@ -2241,18 +2243,31 @@ export async function executeTool(name, args, ctx) {
       if (!rel) throw new Error('Нужен путь к архиву');
       const full = assertInside(root, resolveSafe(root, rel));
       if (!fs.existsSync(full)) throw new Error(`Архива ${rel} нет в проекте`);
+      if (!fs.statSync(full).isFile()) throw new Error(`«${rel}» — это папка, а не архив`);
       const kind = archiveKind(rel);
       if (kind === 'unsupported') {
         throw new Error('Поддерживается только .zip (и одиночный .gz). Для .rar, .7z и .tar попроси пользователя пересобрать архив в zip.');
       }
-      const buf = fs.readFileSync(full);
-      const folder = String(args.to || '').trim() || path.basename(rel).replace(/\.(zip|gz)$/i, '') || 'архив';
+      const size = fs.statSync(full).size;
+      if (size > LIMITS.maxAttachmentBytes) {
+        throw new Error(`Архив больше ${Math.round(LIMITS.maxAttachmentBytes / 1024 / 1024)} МБ — такой не разворачиваю. Попроси прислать частями.`);
+      }
+      const base = path.basename(rel);
+      const folder =
+        String(args.to || '').trim() ||
+        (kind === 'gz' ? base.replace(/\.gz$/i, '').replace(/\.[^.]+$/, '') : base.replace(/\.zip$/i, '')) ||
+        'архив';
       const target = assertInside(root, resolveSafe(root, folder));
-      ensureFreeSpace(Math.min(buf.length * 2, LIMITS.minFreeBytes));
+      /* Запас на диске: распаковка может дать в разы больше, чем сам архив. */
+      ensureFreeSpace(Math.min(size * 4, ARCHIVE_LIMITS.maxTotalBytes));
+      if (fs.existsSync(target) && !fs.statSync(target).isDirectory()) {
+        throw new Error(`«${folder}» — это файл проекта, а не папка. Укажи другую папку в to.`);
+      }
+      const buf = fs.readFileSync(full);
       const result = kind === 'gz'
         ? gunzipTo(buf, target, path.basename(rel), { overwrite: Boolean(args.overwrite) })
         : await extractArchiveTo(buf, target, { overwrite: Boolean(args.overwrite) });
-      const listed = result.files.slice(0, 10).map((file) => file.path);
+      const listed = result.files.slice(0, 10).map((file) => `${folder}/${file.path}`);
       return {
         text: `${formatExtraction(result, { folder })}${listed.length ? `\nДальше читай так: ${listed.map((p) => `read_document «${p}»`).join(', ')}` : ''}`,
         meta: { path: rel, folder, files: result.files.length, skipped: result.skipped.length, bytes: result.totalBytes },
@@ -2261,12 +2276,17 @@ export async function executeTool(name, args, ctx) {
     case 'check_links': {
       let urls = Array.isArray(args.urls) ? args.urls.map((item) => String(item || '')).filter(Boolean) : [];
       if (!urls.length && args.path) {
-        const full = assertInside(root, resolveSafe(root, String(args.path)));
-        if (!fs.existsSync(full)) throw new Error(`Файла ${args.path} нет в проекте`);
+        const rel = String(args.path);
+        const full = assertInside(root, resolveSafe(root, rel));
+        if (!fs.existsSync(full)) throw new Error(`Файла ${rel} нет в проекте`);
+        if (!fs.statSync(full).isFile()) throw new Error(`«${rel}» — это папка: укажи файл со ссылками`);
+        if (fs.statSync(full).size > LIMITS.maxParseBytes) {
+          throw new Error(`Файл больше ${Math.round(LIMITS.maxParseBytes / 1024 / 1024)} МБ — столько в память не беру. Дай ссылки списком в urls.`);
+        }
         const ext = path.extname(full).toLowerCase();
         const text = ['.txt', '.md', '.html', '.htm', '.csv', '.json'].includes(ext)
           ? fs.readFileSync(full, 'utf8')
-          : extractDocumentText(fs.readFileSync(full), String(args.path), '', { maxChars: 200000 }).text || '';
+          : extractDocumentText(fs.readFileSync(full), rel, '', { maxChars: LIMITS.maxFileTextChars }).text || '';
         urls = linksFromText(text);
       }
       if (!urls.length) throw new Error('Не нашёл ссылок: передай urls или укажи файл со ссылками');
@@ -2286,13 +2306,21 @@ export async function executeTool(name, args, ctx) {
       const rightFull = assertInside(root, resolveSafe(root, rightRel));
       if (!fs.existsSync(leftFull)) throw new Error(`Файла ${leftRel} нет в проекте`);
       if (!fs.existsSync(rightFull)) throw new Error(`Файла ${rightRel} нет в проекте`);
+      for (const [label, file] of [['left', leftFull], ['right', rightFull]]) {
+        if (!fs.statSync(file).isFile()) throw new Error(`«${label}» — это папка, а нужно имя файла`);
+        if (fs.statSync(file).size > LIMITS.maxParseBytes) {
+          throw new Error(
+            `Файл ${label} больше ${Math.round(LIMITS.maxParseBytes / 1024 / 1024)} МБ — сравнивать такие целиком не буду. Разбей документ по разделам или выгрузи текст.`,
+          );
+        }
+      }
       const result = compareDocuments(fs.readFileSync(leftFull), fs.readFileSync(rightFull), {
         nameLeft: leftRel,
         nameRight: rightRel,
       });
       return {
         text: formatCompare(result),
-        meta: { left: leftRel, right: rightRel, changed: result.changed, added: result.added, removed: result.removed, exact: result.exact },
+        meta: { left: leftRel, right: rightRel, changed: result.changed, added: result.added, removed: result.removed, exact: result.exact, truncated: result.truncated },
       };
     }
     default:

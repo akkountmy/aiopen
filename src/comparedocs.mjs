@@ -14,30 +14,39 @@ export const COMPARE_LIMITS = {
 
 /** Текст документа в массив значимых строк: пустые строки и отступы не считаем. */
 export function textLines(text = '') {
+  return meaningfulLines(text).slice(0, COMPARE_LIMITS.maxLines);
+}
+
+/* Полный список значимых строк без обрезки: нужен, чтобы честно сказать
+   «сравнил только первые N строк», а не выдать часть за весь документ. */
+function meaningfulLines(text = '') {
   return String(text)
     .replace(/\r\n?/g, '\n')
     .split('\n')
     .map((line) => line.replace(/\s+/g, ' ').trim())
-    .filter(Boolean)
-    .slice(0, COMPARE_LIMITS.maxLines);
+    .filter(Boolean);
 }
 
 /**
  * Сравнение двух текстов построчно.
- * Возвращает {leftLines, rightLines, ops, changed, added, removed, exact}.
+ * Возвращает {leftLines, rightLines, ops, changed, added, removed, exact, truncated}.
  * exact = false означает, что для выравнивания файл был слишком большим и
  * разница посчитана по составу строк (без порядка).
+ * truncated = true означает, что документы длиннее maxLines и сравнены не целиком.
  */
 export function diffLines(leftText, rightText) {
-  const left = textLines(leftText);
-  const right = textLines(rightText);
+  const leftAll = meaningfulLines(leftText);
+  const rightAll = meaningfulLines(rightText);
+  const left = leftAll.slice(0, COMPARE_LIMITS.maxLines);
+  const right = rightAll.slice(0, COMPARE_LIMITS.maxLines);
+  const truncated = leftAll.length > left.length || rightAll.length > right.length;
   const product = left.length * right.length;
   if (product > COMPARE_LIMITS.maxProduct) {
     const { ops, added, removed } = diffByMembership(left, right);
-    return { leftLines: left.length, rightLines: right.length, ops, added, removed, changed: added + removed, exact: false };
+    return { leftLines: left.length, rightLines: right.length, ops, added, removed, changed: added + removed, exact: false, truncated };
   }
   const { ops, added, removed } = diffByAlignment(left, right);
-  return { leftLines: left.length, rightLines: right.length, ops, added, removed, changed: added + removed, exact: true };
+  return { leftLines: left.length, rightLines: right.length, ops, added, removed, changed: added + removed, exact: true, truncated };
 }
 
 /* Классическое выравнивание через наибольшую общую подпоследовательность.
@@ -123,7 +132,10 @@ export function compareDocuments(left, right, { nameLeft = 'первый док�
     throw new Error('В обоих документах не нашлось текста — сравнивать нечего');
   }
   const diff = diffLines(leftText, rightText);
-  return { ...diff, nameLeft, nameRight, leftChars: leftText.length, rightChars: rightText.length };
+  /* Текст мог обрезаться по символам, а не по строкам — это тоже неполное
+     сравнение, и сказать об этом нужно так же честно. */
+  const cut = leftText.length >= COMPARE_LIMITS.maxChars || rightText.length >= COMPARE_LIMITS.maxChars;
+  return { ...diff, truncated: diff.truncated || cut, nameLeft, nameRight, leftChars: leftText.length, rightChars: rightText.length };
 }
 
 export function formatCompare(result) {
@@ -133,7 +145,10 @@ export function formatCompare(result) {
     (result.changed
       ? `Отличий ${result.changed}: удалено ${result.removed}, добавлено ${result.added}.`
       : 'Отличий нет: тексты совпадают.');
-  const note = result.exact ? '' : '\nФайлы слишком большие для построчного выравнивания: показан состав строк без порядка.';
+  const notes = [];
+  if (!result.exact) notes.push('Файлы слишком большие для построчного выравнивания: показан состав строк без порядка.');
+  if (result.truncated) notes.push(`Документы длиннее ${COMPARE_LIMITS.maxLines} строк — сравнил только начало, дальше проверь глазами.`);
+  const note = notes.length ? `\n${notes.join('\n')}` : '';
   if (!result.changed) return `${head}${note}`;
   const shown = result.ops.slice(0, COMPARE_LIMITS.maxHunks);
   const body = shown

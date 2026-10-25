@@ -8,12 +8,14 @@ import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
+import zlib from 'node:zlib';
 import JSZip from 'jszip';
 
-const { archiveKind, extractArchiveTo, safeEntryName, formatExtraction } = await import('../src/archive.mjs');
+const { archiveKind, extractArchiveTo, safeEntryName, formatExtraction, gunzipTo } = await import('../src/archive.mjs');
 const { checkLinks, formatLinks, linksFromText, LINK_LIMITS } = await import('../src/linkcheck.mjs');
-const { compareDocuments, diffLines, formatCompare, textLines } = await import('../src/comparedocs.mjs');
+const { compareDocuments, diffLines, formatCompare, textLines, COMPARE_LIMITS } = await import('../src/comparedocs.mjs');
 const { executeTool, TOOL_DEFS, TOOL_LABELS, toolSummary } = await import('../src/tools.mjs');
+const { LIMITS } = await import('../src/config.mjs');
 
 const tests = [];
 const test = (name, fn) => tests.push({ name, fn });
@@ -95,8 +97,44 @@ test('инструмент extract_archive распаковывает и наз�
   fs.writeFileSync(path.join(project, 'Пакет.zip'), buf);
   const result = await executeTool('extract_archive', { path: 'Пакет.zip' }, { workspace: project });
   assert.match(result.text, /Распаковано 1 файл/);
-  assert.match(result.text, /read_document/);
+  /* Подсказка обязана давать путь от корня проекта: иначе модель зовёт
+     read_document без папки и получает «файла нет». */
+  assert.match(result.text, /Пакет\/текст\.md/);
   assert.ok(fs.existsSync(path.join(project, 'Пакет', 'текст.md')));
+});
+
+test('битый zip объясняется по-русски, а не стеком jszip', async () => {
+  fs.writeFileSync(path.join(project, 'сломанный.zip'), Buffer.from('это точно не zip'));
+  await assert.rejects(() => executeTool('extract_archive', { path: 'сломанный.zip' }, { workspace: project }), /не открывается/);
+});
+
+test('одиночный .gz разворачивается в свою папку', async () => {
+  const url = path.join(project, 'заметки.txt.gz');
+  fs.writeFileSync(url, zlib.gzipSync(Buffer.from('текст из gz', 'utf8')));
+  const result = await executeTool('extract_archive', { path: 'заметки.txt.gz' }, { workspace: project });
+  assert.match(result.text, /Распаковано 1 файл/);
+  assert.match(result.text, /заметки\/заметки\.txt/);
+  assert.equal(fs.readFileSync(path.join(project, 'заметки', 'заметки.txt'), 'utf8'), 'текст из gz');
+});
+
+test('испорченный .gz не роняет инструмент', async () => {
+  fs.writeFileSync(path.join(project, 'битый.gz'), Buffer.from('не gzip'));
+  await assert.rejects(() => executeTool('extract_archive', { path: 'битый.gz' }, { workspace: project }), /не открывается/);
+});
+
+test('файл больше лимита записи пропускается, а не съедает память', async () => {
+  const buf = await makeZip({ 'большой.txt': 'x'.repeat(500), 'маленький.txt': 'ok' });
+  const target = path.join(project, 'архив-4');
+  const result = await extractArchiveTo(buf, target, { limits: { maxFiles: 10, maxEntryBytes: 64, maxTotalBytes: 1024 } });
+  assert.deepEqual(result.files.map((file) => file.path), ['маленький.txt']);
+  assert.match(result.skipped[0].reason, /больше/);
+});
+
+test('папка распаковки не может быть файлом проекта', async () => {
+  const buf = await makeZip({ 'а.txt': 'а' });
+  fs.writeFileSync(path.join(project, 'занято.zip'), buf);
+  fs.writeFileSync(path.join(project, 'занято'), 'это файл', 'utf8');
+  await assert.rejects(() => executeTool('extract_archive', { path: 'занято.zip' }, { workspace: project }), /это файл проекта/);
 });
 
 /* ---------- ссылки ---------- */
@@ -155,6 +193,64 @@ test('check_links с закрытым локальным адресом не в�
   assert.ok(results[0].note.length > 0);
 });
 
+test('переадресацию внутри сайта проверка проходит до конца', async () => {
+  const server = http.createServer((req, res) => {
+    if (req.url === '/start') {
+      res.writeHead(302, { location: '/final' });
+      res.end();
+      return;
+    }
+    res.writeHead(200, { 'content-type': 'text/html' });
+    res.end('готово');
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const port = server.address().port;
+  process.env.DSHOW_ALLOW_PRIVATE_FETCH = '1';
+  try {
+    const results = await checkLinks([`http://127.0.0.1:${port}/start`], { timeoutMs: 4000 });
+    assert.equal(results[0].state, 'alive');
+    assert.equal(results[0].status, 200);
+    assert.match(results[0].finalUrl, /\/final$/);
+  } finally {
+    delete process.env.DSHOW_ALLOW_PRIVATE_FETCH;
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('переадресация на служебный адрес не выполняется', async () => {
+  delete process.env.DSHOW_ALLOW_PRIVATE_FETCH;
+  const original = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls += 1;
+    return new Response(null, { status: 302, headers: { location: 'http://127.0.0.1:9/secret' } });
+  };
+  try {
+    /* Публичный адрес, чтобы первая проверка прошла без сети (IP не резолвим). */
+    const results = await checkLinks(['http://93.184.216.34/start'], { timeoutMs: 3000 });
+    assert.equal(results[0].state, 'unknown');
+    assert.match(results[0].note, /служебный адрес/);
+    assert.equal(calls, 1, 'на служебный адрес ходить нельзя');
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+test('слишком большой файл не разбирается инструментами', async () => {
+  const saved = LIMITS.maxParseBytes;
+  LIMITS.maxParseBytes = 32;
+  try {
+    fs.writeFileSync(path.join(project, 'тяжёлый.txt'), 'x'.repeat(200), 'utf8');
+    await assert.rejects(() => executeTool('check_links', { path: 'тяжёлый.txt' }, { workspace: project }), /столько в память не беру/);
+    await assert.rejects(
+      () => executeTool('compare_documents', { left: 'тяжёлый.txt', right: 'тяжёлый.txt' }, { workspace: project }),
+      /сравнивать такие целиком не буду/,
+    );
+  } finally {
+    LIMITS.maxParseBytes = saved;
+  }
+});
+
 test('инструмент check_links берёт ссылки из файла проекта', async () => {
   fs.writeFileSync(
     path.join(project, 'источники.md'),
@@ -203,6 +299,19 @@ test('сравнение читает настоящие файлы проект
 test('документы без текста дают понятную ошибку', () => {
   const empty = Buffer.from('');
   assert.throws(() => compareDocuments(empty, empty, { nameLeft: 'a.txt', nameRight: 'b.txt' }), /сравнивать нечего/);
+});
+
+test('обрезанное сравнение честно об этом пишет', () => {
+  const saved = COMPARE_LIMITS.maxLines;
+  COMPARE_LIMITS.maxLines = 3;
+  try {
+    const big = Array.from({ length: 10 }, (_, i) => `строка ${i + 1}`).join('\n');
+    const diff = diffLines(big, big);
+    assert.equal(diff.truncated, true);
+    assert.match(formatCompare({ ...diff, nameLeft: 'a.txt', nameRight: 'b.txt' }), /длиннее 3 строк/);
+  } finally {
+    COMPARE_LIMITS.maxLines = saved;
+  }
 });
 
 /* ---------- регистрация ---------- */

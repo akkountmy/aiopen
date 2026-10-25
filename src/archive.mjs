@@ -72,7 +72,7 @@ export async function extractArchiveTo(buffer, targetDir, { overwrite = false, l
     return true;
   };
 
-  const zip = await JSZip.loadAsync(buffer);
+  const zip = await loadZip(buffer);
   const entries = Object.values(zip.files).filter((entry) => !entry.dir);
 
   for (const entry of entries) {
@@ -86,20 +86,27 @@ export async function extractArchiveTo(buffer, targetDir, { overwrite = false, l
       skipped.push({ name: rel, reason: 'лимит общего размера' });
       continue;
     }
-    const size = Number(entry?._data?.uncompressedSize || 0);
-    if (size > limits.maxEntryBytes) {
+    /* Размер из заголовка записи — быстрая отсечка, но верить ей нельзя:
+       архив может её занизить. Настоящий предел держит потоковое чтение. */
+    const declared = Number(entry?._data?.uncompressedSize || 0);
+    if (declared > limits.maxEntryBytes) {
       skipped.push({ name: rel, reason: `файл больше ${Math.round(limits.maxEntryBytes / 1024 / 1024)} МБ` });
       continue;
     }
     let data;
     try {
-      data = await entry.async('nodebuffer');
+      const read = await readEntryLimited(entry, limits.maxEntryBytes);
+      if (read.tooLarge) {
+        skipped.push({ name: rel, reason: `файл больше ${Math.round(limits.maxEntryBytes / 1024 / 1024)} МБ` });
+        continue;
+      }
+      data = read.data;
     } catch (error) {
       skipped.push({ name: rel, reason: `не читается: ${error?.message || 'ошибка распаковки'}` });
       continue;
     }
-    if (data.length > limits.maxEntryBytes) {
-      skipped.push({ name: rel, reason: 'файл больше лимита после распаковки' });
+    if (totalBytes + data.length > limits.maxTotalBytes) {
+      skipped.push({ name: rel, reason: 'лимит общего размера' });
       continue;
     }
     writeEntry(rel, data);
@@ -110,7 +117,15 @@ export async function extractArchiveTo(buffer, targetDir, { overwrite = false, l
 
 /** Одиночный .gz: один файл внутри, имя — без .gz. */
 export function gunzipTo(buffer, targetDir, fileName = 'файл', { overwrite = false } = {}) {
-  const data = zlib.gunzipSync(buffer, { maxOutputLength: ARCHIVE_LIMITS.maxEntryBytes });
+  let data;
+  try {
+    data = zlib.gunzipSync(buffer, { maxOutputLength: ARCHIVE_LIMITS.maxEntryBytes });
+  } catch (error) {
+    if (error?.code === 'ERR_BUFFER_TOO_LARGE' || /maxOutputLength|too large/i.test(String(error?.message))) {
+      throw new Error(`Файл после распаковки больше ${Math.round(ARCHIVE_LIMITS.maxEntryBytes / 1024 / 1024)} МБ — такой .gz не разворачиваю.`);
+    }
+    throw new Error('Файл .gz не открывается: он повреждён или это не gzip. Попроси пересобрать архив в .zip.');
+  }
   const rel = safeEntryName(String(fileName).replace(/\.gz$/i, '')) || 'распакованный-файл';
   const root = path.resolve(targetDir);
   const full = path.resolve(root, rel);
@@ -123,6 +138,59 @@ export function gunzipTo(buffer, targetDir, fileName = 'файл', { overwrite =
   return { files: [{ path: rel, bytes: data.length }], skipped: [], totalBytes: data.length, entries: 1 };
 }
 
+/* zip открывается целиком в память (он и так пришёл буфером), но ломаный или
+   зашифрованный файл должен давать русскую причину, а не английский стек jszip. */
+async function loadZip(buffer) {
+  try {
+    return await JSZip.loadAsync(buffer);
+  } catch (error) {
+    const raw = String(error?.message || '');
+    if (/encrypt/i.test(raw)) {
+      throw new Error('Архив с паролем: такие zip не открываю — попроси прислать без пароля.');
+    }
+    throw new Error('Архив не открывается: файл повреждён или это не zip. Попроси пересобрать архив в .zip.');
+  }
+}
+
+/* Читаем запись потоком и обрываемся на пределе: заявленный размер в архиве
+   может быть занижен, и распаковка «бомбы» не должна съесть память сервиса. */
+async function readEntryLimited(entry, maxBytes) {
+  if (typeof entry.nodeStream !== 'function') {
+    const data = await entry.async('nodebuffer');
+    return data.length > maxBytes ? { tooLarge: true } : { data };
+  }
+  const stream = entry.nodeStream('nodebuffer');
+  const chunks = [];
+  let total = 0;
+  return await new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+    stream.on('data', (chunk) => {
+      total += chunk.length;
+      if (total > maxBytes) {
+        finish({ tooLarge: true });
+        try {
+          stream.destroy();
+        } catch {
+          /* поток уже закрыт */
+        }
+        return;
+      }
+      chunks.push(chunk);
+    });
+    stream.on('end', () => finish({ data: Buffer.concat(chunks, total) }));
+    stream.on('error', (error) => {
+      if (settled) return;
+      settled = true;
+      reject(error);
+    });
+  });
+}
+
 /** Текстовая сводка распаковки для ответа инструмента. */
 export function formatExtraction(result, { folder = '' } = {}) {
   const count = result.files.length;
@@ -130,7 +198,10 @@ export function formatExtraction(result, { folder = '' } = {}) {
   const head = count
     ? `Распаковано ${count} ${plural(count, 'файл', 'файла', 'файлов')} ${placed} (${formatSize(result.totalBytes)}).`
     : `Ничего не распаковано${folder ? ` в папку ${folder}` : ''}.`;
-  const list = result.files.slice(0, 40).map((file) => `— ${file.path} (${formatSize(file.bytes)})`);
+  /* Пути печатаем от корня проекта — ровно такими, какие принимают read_document
+     и analyze_data. Иначе модель зовёт их без папки и получает «файла нет». */
+  const full = (rel) => (folder ? `${folder.replace(/\/+$/, '')}/${rel}` : rel);
+  const list = result.files.slice(0, 40).map((file) => `— ${full(file.path)} (${formatSize(file.bytes)})`);
   const more = count > 40 ? `…и ещё ${count - 40}` : '';
   const skip = result.skipped.length
     ? `\nПропущено: ${result.skipped

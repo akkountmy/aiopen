@@ -80,7 +80,7 @@ function assertPublicHostname(hostname) {
 
 /* Имя может указывать на внутренний адрес (nip.io, свой DNS): разрешаем его
    заранее и проверяем каждый полученный IP. */
-async function assertResolvesPublic(hostname) {
+export async function assertResolvesPublic(hostname) {
   if (allowPrivate() || net.isIP(String(hostname || '').replace(/^\[|\]$/g, ''))) return;
   let addresses = [];
   try {

@@ -1,4 +1,4 @@
-import { assertPublicUrl } from './search.mjs';
+import { assertPublicUrl, assertResolvesPublic } from './search.mjs';
 
 /* Проверка ссылок перед тем, как они попадут в отчёт, договор или ответ.
    Задача не «скачать страницу», а ответить на три вопроса: адрес живой, ведёт
@@ -16,6 +16,8 @@ const UA =
 
 const DEAD_STATUS = new Set([404, 410, 451]);
 const GATED_STATUS = new Set([401, 402, 403, 405, 406, 418, 429]);
+const REDIRECT_STATUS = new Set([301, 302, 303, 307, 308]);
+const MAX_REDIRECTS = 5;
 
 /** Проверяет до LINK_LIMITS.maxUrls адресов параллельно, по 4 за раз. */
 export async function checkLinks(rawUrls, { timeoutMs = LINK_LIMITS.timeoutMs, maxUrls = LINK_LIMITS.maxUrls } = {}) {
@@ -52,20 +54,55 @@ async function probeLink(raw, timeoutMs) {
     return { url: raw, finalUrl: '', status: 0, state: 'unknown', note: error?.message || 'адрес не принят' };
   }
 
+  const seconds = Math.max(2, Math.round(timeoutMs / 1000));
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), Math.max(2000, timeoutMs));
   try {
-    const res = await fetch(url, {
-      method: 'GET',
-      redirect: 'follow',
-      signal: controller.signal,
-      headers: {
-        'User-Agent': UA,
-        Accept: 'text/html,application/xhtml+xml,application/pdf;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'ru-RU,ru;q=0.9,en;q=0.8',
-      },
-    });
-    const finalUrl = res.url || url.href;
+    /* Редиректы разбираем вручную: каждый следующий адрес проходит ту же
+       проверку. Автоматический `redirect: 'follow'` доверяет заголовку Location,
+       и публичный сайт мог бы увести сервис на 127.0.0.1 или в метаданные. */
+    let current = url;
+    let res = null;
+    for (let hop = 0; ; hop += 1) {
+      await assertResolvesPublic(current.hostname);
+      res = await fetch(current, {
+        method: 'GET',
+        redirect: 'manual',
+        signal: controller.signal,
+        headers: {
+          'User-Agent': UA,
+          Accept: 'text/html,application/xhtml+xml,application/pdf;q=0.9,*/*;q=0.8',
+          'Accept-Language': 'ru-RU,ru;q=0.9,en;q=0.8',
+        },
+      });
+      if (!REDIRECT_STATUS.has(res.status)) break;
+      const location = res.headers.get('location');
+      try {
+        await res.body?.cancel();
+      } catch {
+        /* поток уже закрыт — не мешает */
+      }
+      if (!location) break;
+      let next;
+      try {
+        next = new URL(location, current);
+        assertPublicUrl(next.href);
+      } catch {
+        return {
+          url: raw,
+          finalUrl: String(location),
+          status: res.status,
+          state: 'unknown',
+          note: 'ведёт на служебный адрес — такую переадресацию не проверяю',
+        };
+      }
+      if (hop >= MAX_REDIRECTS) {
+        return { url: raw, finalUrl: next.href, status: res.status, state: 'error', note: `больше ${MAX_REDIRECTS} перенаправлений` };
+      }
+      current = next;
+    }
+
+    const finalUrl = current.href;
     const status = res.status;
     const type = String(res.headers.get('content-type') || '').split(';')[0].trim();
     try {
@@ -80,14 +117,22 @@ async function probeLink(raw, timeoutMs) {
     if (state === 'gated') notes.push('сервер закрыл автоматическую проверку');
     if (state === 'error') notes.push(status >= 500 ? 'ошибка на стороне сайта' : 'нестандартный ответ');
     const sameHost = safeHost(finalUrl) === url.hostname.replace(/^www\./, '');
-    if (!sameHost && finalUrl !== url.href) notes.push(`редирект на ${safeHost(finalUrl) || 'другой адрес'}`);
+    if (finalUrl !== url.href) {
+      notes.push(sameHost ? `переадресация внутри сайта на ${safePath(finalUrl)}` : `редирект на ${safeHost(finalUrl) || 'другой адрес'}`);
+    }
     if (state === 'alive' && type && !/(text\/html|application\/pdf|text\/plain|application\/(json|xml)|application\/vnd\.|text\/csv)/.test(type)) {
       notes.push(`тип ${type}`);
     }
     return { url: raw, finalUrl, status, state, type, note: notes.join(', ') };
   } catch (error) {
     const aborted = error?.name === 'AbortError';
-    return { url: raw, finalUrl: '', status: 0, state: 'unknown', note: aborted ? 'не ответил за 10 секунд' : String(error?.message || 'нет соединения') };
+    return {
+      url: raw,
+      finalUrl: '',
+      status: 0,
+      state: 'unknown',
+      note: aborted ? `не ответил за ${seconds} секунд` : String(error?.message || 'нет соединения'),
+    };
   } finally {
     clearTimeout(timer);
   }
@@ -98,6 +143,16 @@ function safeHost(value) {
     return new URL(value).hostname.replace(/^www\./, '');
   } catch {
     return '';
+  }
+}
+
+function safePath(value) {
+  try {
+    const url = new URL(value);
+    const tail = `${url.pathname}${url.search}`;
+    return tail.length > 60 ? `${tail.slice(0, 59)}…` : tail || '/';
+  } catch {
+    return 'другой адрес';
   }
 }
 
