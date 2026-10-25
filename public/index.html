@@ -7,6 +7,10 @@
       content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content"
     />
     <meta name="theme-color" content="#151517" />
+    <!-- Версия статики, из которой собран именно этот документ. По ней app.js
+         понимает, что загруженная страница старше сервера, и обновляется сам:
+         без неё первая же проверка /api/version принимала чужую версию за свою. -->
+    <meta name="dshow-asset-version" content="__ASSET_VERSION__" />
     <title>DSH Open</title>
     <link rel="icon" href="/favicon.svg?v=__ASSET_VERSION__" type="image/svg+xml" />
     <!-- Ярлык на домашнем экране iOS и Android берут только из PNG: SVG они не

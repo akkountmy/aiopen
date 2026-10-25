@@ -1423,7 +1423,7 @@ function renderMessage(message) {
   }
 
   const head = el('div', 'msg-head');
-  head.innerHTML = '<span class="dot"></span><span>AI-ассистент</span><span class="work-label"></span>';
+  head.innerHTML = '<span class="dot"></span><span>ИИ-ассистент</span><span class="work-label"></span>';
   /* Пока ответ идёт, вместо глухого «работаю…» стоит подпись текущего шага —
      текст из события инструмента, поэтому только textContent. */
   head.querySelector('.work-label').textContent = message.streaming && message.workNote ? message.workNote : 'работаю…';
@@ -1988,7 +1988,10 @@ async function syncFromServer() {
 
 /* Версия страниц: когда на сервере выложили новую сборку, вкладка обновляется
    сама, без F5 — но только когда человек ничего не печатает и ответ не идёт. */
-let appVersion = '';
+/* Версию берём из самого документа, а не из первого ответа /api/version:
+   иначе страница, открытая из старого кэша уже после выкладки, запоминала
+   серверную версию как «свою» и больше не обновлялась. */
+let appVersion = document.querySelector('meta[name="dshow-asset-version"]')?.content || '';
 
 function saveDraft() {
   try {
@@ -2040,6 +2043,20 @@ async function checkAppVersion() {
   }
   if (version === appVersion) return;
   appVersion = version;
+  /* Одна попытка на версию: если после перезагрузки сервер отдал тот же старый
+     документ (например, во время выкладки), не устраиваем бесконечный цикл. */
+  let tried = '';
+  try {
+    tried = sessionStorage.getItem('dshow.updateTried') || '';
+  } catch {
+    /* приватный режим — обновимся без страховки */
+  }
+  if (tried === version) return;
+  try {
+    sessionStorage.setItem('dshow.updateTried', version);
+  } catch {
+    /* не критично */
+  }
   reloadForUpdate();
 }
 
@@ -7741,6 +7758,9 @@ async function bootStart() {
     if (event.persisted) {
       resumeLiveRuns();
       syncFromServer();
+      /* Страница вернулась из кэша браузера (телефон свернули и открыли
+         ярлык): сразу сверяем версию, не дожидаясь минутного таймера. */
+      checkAppVersion();
     }
   });
   /* Закрытие ярлыка-приложения: последний проект должен пережить закрытие. */
