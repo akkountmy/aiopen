@@ -144,12 +144,15 @@ const {
   describeReview,
   extractFigures,
   extractFileMentions,
+  extractSources,
+  formatSources,
   needsReview,
   parseVerdict,
   reviewAnswer,
   reviewModelName,
 } = await import('../src/review.mjs');
 const { documentExcerpt } = await import('../src/doccheck.mjs');
+const { CONTEXT } = await import('../src/config.mjs');
 const { writeZip } = await import('../src/zip.mjs');
 const { continuePrompt, renderTaskState, taskSummaryLine, updateTaskState } = await import('../src/taskstate.mjs');
 const { MEMORY_LIMITS, memoryPromptText, searchFacts } = await import('../src/memory.mjs');
@@ -472,6 +475,132 @@ test('память помнит 100 фактов и отбирает по тем
   assert.match(text, /существенность/);
   assert.match(text, /в памяти 61 фактов/);
   assert.ok(text.length <= 3600 + 400, 'память раздула промпт');
+});
+
+test('источники: адрес, год и хост из результатов поиска, без повторов', () => {
+  const history = [
+    { role: 'tool', content: 'Сайт 1. Ставка ЦБ — 16%, 2024. https://cbr.ru/statistics/key-rate/' },
+    { role: 'assistant', content: 'не инструмент' },
+    { role: 'tool', content: 'Дубликат https://cbr.ru/statistics/key-rate/ и ещё https://www.rbc.ru/economics/2025/02/01/stat' },
+  ];
+  const sources = extractSources(history);
+  assert.equal(sources.length, 2, `ожидалось 2 источника, получено ${JSON.stringify(sources)}`);
+  assert.equal(sources[0].host, 'cbr.ru');
+  assert.equal(sources[0].year, '2024');
+  assert.equal(sources[1].host, 'rbc.ru');
+  const block = formatSources(sources);
+  assert.match(block, /Источники, которые принесли инструменты/);
+  assert.match(block, /cbr\.ru: https:\/\/cbr\.ru\/statistics\/key-rate\/ \(2024\)/);
+  assert.equal(formatSources([]), '');
+  assert.equal(extractSources([{ role: 'tool', content: 'без ссылок' }]).length, 0);
+  assert.equal(extractSources([{ role: 'tool', content: 'https://a.ru/1 https://b.ru/2' }], { limit: 1 }).length, 1);
+});
+
+test('проверяющий видит источники и незакрытые пункты карточки', async () => {
+  const prompts = [];
+  const answer = `${'Собрал обзор ставок. '.repeat(40)}Ссылка: https://cbr.ru/statistics/key-rate/`;
+  const result = await reviewAnswer({
+    userQuestion: 'Собери обзор ставок ЦБ',
+    answer,
+    history: [{ role: 'tool', content: 'Ставка 16%, 2024. https://cbr.ru/statistics/key-rate/' }],
+    createdFiles: [],
+    tools: [{ name: 'web_search', status: 'ok' }],
+    task: { goal: 'Обзор ставок', done: ['Поиск'], next: ['Свести таблицу по годам'], files: [], facts: [] },
+    complete: async (messages) => {
+      prompts.push(String(messages[1]?.content || ''));
+      return JSON.stringify({ verdict: 'ok', issues: [] });
+    },
+  });
+  assert.equal(result.report.checked, true);
+  assert.equal(result.report.sources, 1, 'число источников не попало в отчёт');
+  assert.match(prompts[0], /Источники, которые принесли инструменты/);
+  assert.match(prompts[0], /cbr\.ru/);
+  assert.match(prompts[0], /По карточке задачи ещё не закрыто/);
+  assert.match(prompts[0], /Свести таблицу по годам/);
+});
+
+test('«готово» при незакрытых пунктах карточки — замечание', () => {
+  const answer = `${'Отчёт по рынку собран. '.repeat(20)}Задача выполнена, все разделы готовы.`;
+  const issues = checkAnswer({
+    answer,
+    toolDigest: 'ok',
+    createdFiles: [],
+    task: { next: ['Свести таблицу по годам', 'Посчитать юнит-экономику'] },
+  });
+  const incomplete = issues.find((issue) => issue.kind === 'incomplete');
+  assert.ok(incomplete, 'незакрытые пункты не найдены');
+  assert.equal(incomplete.severity, 'medium');
+  assert.match(incomplete.hint, /Свести таблицу по годам/);
+  /* Отчёт о ходе работы, а не о завершении, замечания не даёт. */
+  assert.equal(
+    checkAnswer({ answer: `${'Продолжаю сбор данных. '.repeat(20)}Осталось свести таблицу.`, toolDigest: 'ok', task: { next: ['Свести таблицу'] } })
+      .filter((issue) => issue.kind === 'incomplete').length,
+    0,
+  );
+  /* Пустая карточка ничего не ломает. */
+  assert.equal(checkAnswer({ answer: 'Готово.', toolDigest: 'ok', task: null }).filter((issue) => issue.kind === 'incomplete').length, 0);
+});
+
+test('вторая попытка правки спасает ответ, когда первая выдумала числа', async () => {
+  const answer = `${'Проверил данные проекта. '.repeat(30)}Итог: 7 654 321 руб.`;
+  const tools = [{ name: 'write_file', status: 'ok', path: 'summary.md' }];
+  const history = [{ role: 'tool', content: 'Расчёт: 250 000 руб.' }];
+  let fixes = 0;
+  const result = await reviewAnswer({
+    userQuestion: 'посчитай итог',
+    answer,
+    history,
+    createdFiles: ['summary.md'],
+    tools,
+    complete: async (messages) => {
+      const system = String(messages[0]?.content || '');
+      if (!system.includes(FIX_MARK)) {
+        return JSON.stringify({ verdict: 'fix', issues: [{ kind: 'figure', severity: 'high', quote: '7 654 321', hint: 'нет в источниках' }] });
+      }
+      fixes += 1;
+      if (fixes === 1) {
+        return `Исправленный ответ: проверил данные проекта, всё сходится. Итог 8 888 888 руб., файл summary.md на месте, остальные разделы оставил как были.`;
+      }
+      assert.match(system, /повторная правка/, 'второй круг не помечен как строгий');
+      return 'Итог 250 000 руб. по расчёту проекта, файл summary.md готов. Других цифр в ответе нет, разделы не менял.';
+    },
+  });
+  assert.equal(fixes, 2, `правок было ${fixes}`);
+  assert.equal(result.report.fixed, true, 'вторая правка не применилась');
+  assert.equal(result.report.attempts, 2);
+  assert.match(result.text, /250 000/);
+  assert.ok(!result.text.includes('8 888 888'), 'выдумка второй правки попала в ответ');
+  assert.match(describeReview(result.report), /со второй попытки/);
+});
+
+test('за пять шагов до предела агент получает предупреждение, а человек — строку статуса', async () => {
+  reset();
+  let step = 0;
+  behavior = () => {
+    step += 1;
+    /* Бесконечная работа: без предупреждения агент упёрся бы в предел молча. */
+    return { kind: 'tool', name: 'write_file', args: { path: `part${step}.md`, content: `часть ${step}` } };
+  };
+  const events = [];
+  let outcome;
+  /* Отрезков в этом сценарии мало (DSHOW_MAX_SEGMENTS=2): поднимаем потолок,
+     иначе предел наступает раньше предупреждения. */
+  const savedCeiling = CONTEXT.maxSegments;
+  CONTEXT.maxSegments = 6;
+  try {
+    outcome = await runTurn(baseTurn({ userText: 'Собери большой отчёт частями', maxSteps: 8, emit: (event) => events.push(event) }));
+  } finally {
+    CONTEXT.maxSegments = savedCeiling;
+  }
+  assert.equal(outcome.steps, 8, `шагов было ${outcome.steps}`);
+  assert.ok(
+    requests.some((item) => item.messages.some((message) => typeof message.content === 'string' && /До предела шагов осталось/.test(message.content))),
+    'предупреждение о пределе не дошло до модели',
+  );
+  const warning = events.find((event) => event.type === 'progress' && /осталось \d+ шагов/.test(String(event.note || '')));
+  assert.ok(warning, 'человек не увидел предупреждение в статусе');
+  /* Предупреждение одно на ход, а не на каждом шаге. */
+  assert.equal(events.filter((event) => event.type === 'progress' && event.note && /осталось/.test(event.note)).length, 1);
 });
 
 let failed = 0;

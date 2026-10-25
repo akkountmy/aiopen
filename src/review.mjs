@@ -9,8 +9,9 @@
  *    котором ответ говорит «готов», но которого нет в проекте, — обещание.
  * 2. Модельная, один вызов по чек-листу. Смотрит то, что нельзя проверить
  *    регуляркой: сходятся ли итоги, не подменены ли единицы, нет ли «красивого
- *    но пустого» текста. При серьёзных находках — одна правка ответа, без
- *    второго круга: правка ради правки дороже ошибки.
+ *    но пустого» текста, совпадают ли годы и названия источников. При серьёзных
+ *    находках — правка ответа; если правка сама внесла числа без опоры,
+ *    разрешён второй круг со строгим запретом на выдумку (REVIEW.fixRounds).
  *
  * Ревью факультативно: любой сбой возвращает исходный ответ (fail-open).
  */
@@ -36,6 +37,11 @@ export function reviewModelName({ routeModel = '', model = REVIEW.model, escalat
 /* Мелкие числа (годы, номера, проценты-одиночки) не проверяем: они почти
    всегда повторяются из запроса, а не берутся из расчётов. */
 const MIN_FIGURE_DIGITS = 3;
+
+/* Прямой отчёт о завершении. Именно прямой: «готово», «выполнено», «все
+   пункты закрыты». «Продолжаю», «в работе» и «следующий шаг» — не повод
+   сравнивать ответ с карточкой задачи. */
+const COMPLETION_WORDS = /(всё готово|все готово|готово[.:!,]|задача выполнена|задача решена|работа выполнена|выполнено полностью|все пункты|все разделы готовы|я закончил)/i;
 
 /** Цифры из текста: 4+ знаков или десятичные с разделителями. */
 export function extractFigures(text) {
@@ -100,11 +106,58 @@ function figureSeen(value, haystack) {
 }
 
 /**
+ * Источники, которые принесли инструменты: адрес, год публикации и хост.
+ * Нужны, чтобы проверяющий видел опору фактического утверждения, а не только
+ * цифру без места. Раньше ресёрч с источниками проверялся вслепую: модель
+ * видела цифру в выжимке и не могла отличить «по данным ЦБ за 2024» от
+ * выдуманной ссылки на тот же ЦБ.
+ */
+export function extractSources(history, { limit = REVIEW.sources } = {}) {
+  const seen = new Map();
+  for (const message of Array.isArray(history) ? history : []) {
+    if (message?.role !== 'tool') continue;
+    const text = typeof message.content === 'string' ? message.content : '';
+    if (!text) continue;
+    const re = /https?:\/\/[^\s<>"'»«)\]]+/g;
+    let match;
+    while ((match = re.exec(text))) {
+      const url = match[0].replace(/[.,;:]+$/, '');
+      if (!/^https?:\/\/[^\s/]+/i.test(url)) continue;
+      if (seen.has(url)) continue;
+      /* Год ищем рядом с адресом: в выдаче поиска он идёт обычно в двухстах
+         знаках от ссылки, а брать первый попавшийся год из всего текста —
+         значит приписать статье чужую дату. */
+      const around = text.slice(Math.max(0, match.index - 220), Math.min(text.length, match.index + 220));
+      const year = (around.match(/\b(19|20)\d\d\b/g) || []).pop() || '';
+      let host = '';
+      try {
+        host = new URL(url).host.replace(/^www\./, '');
+      } catch {
+        host = '';
+      }
+      seen.set(url, { url, host, year });
+      if (seen.size >= limit) return [...seen.values()];
+    }
+  }
+  return [...seen.values()];
+}
+
+/** Строка источников для проверяющего: адрес и год, без заголовков статей. */
+export function formatSources(sources) {
+  const list = Array.isArray(sources) ? sources.filter((item) => item?.url) : [];
+  if (!list.length) return '';
+  return `Источники, которые принесли инструменты (адрес; год публикации):\n${list
+    .map((item) => `— ${item.host ? `${item.host}: ` : ''}${item.url}${item.year ? ` (${item.year})` : ''}`)
+    .join('\n')}`;
+}
+
+/**
  * Детерминированные проверки ответа. `toolDigest` — склеенный текст
  * результатов инструментов за ход, `createdFiles` — файлы, которые реально
- * появились в проекте.
+ * появились в проекте. `task` — карточка задачи: по ней видно, закрыты ли
+ * пункты, о которых ответ говорит «готово».
  */
-export function checkAnswer({ answer = '', toolDigest = '', createdFiles = [], maxIssues = 12 } = {}) {
+export function checkAnswer({ answer = '', toolDigest = '', createdFiles = [], task = null, maxIssues = 12 } = {}) {
   const issues = [];
   const digest = String(toolDigest || '');
   const files = (Array.isArray(createdFiles) ? createdFiles : []).map((item) =>
@@ -152,6 +205,21 @@ export function checkAnswer({ answer = '', toolDigest = '', createdFiles = [], m
     });
   }
 
+  /* «Готово», а в карточке задачи ещё висят пункты. Регулярка ловит только
+     прямой отчёт о завершении: «идёт работа» и «продолжу» — не повод для
+     замечания, а «задача выполнена» при открытых пунктах — повод. */
+  const pending = Array.isArray(task?.next) ? task.next.map((item) => String(item || '').trim()).filter(Boolean) : [];
+  if (pending.length && COMPLETION_WORDS.test(answerText)) {
+    issues.push({
+      kind: 'incomplete',
+      severity: 'medium',
+      quote: pending[0].slice(0, 120),
+      hint: `ответ объявляет работу законченной, но по карточке задачи не закрыто: ${pending
+        .slice(0, 3)
+        .join('; ')} — либо доделай, либо назови это прямо`,
+    });
+  }
+
   return issues;
 }
 
@@ -183,6 +251,8 @@ const CHECKLIST = `Ты — придирчивый проверяющий гот
 5. Единицы и период. Рубли/тенге/доллары, тысячи/миллионы и годы не перепутаны.
 6. Обещания. Нет фраз «файл будет создан», «можно добавить» вместо сделанного.
 7. Содержание файлов. В готовом документе должна быть та тема, разделы и итоги, о которых просили; пустой, чужой или «болванка с заголовком» файл — это провал, даже если имя правильное.
+8. Источники. Если цифра подана как «по данным X за N год», такой источник и такой год должны быть в списке источников ниже. Ссылка на источник, которого нет в списке, — выдумка, даже если название звучит правдоподобно.
+9. Карточка задачи. Если в карточке остались пункты «Осталось», а ответ объявляет работу законченной — это замечание: назови недоделанное прямо, не выдавай часть за целое.
 
 Ответ — строгий JSON без пояснений:
 {"verdict":"ok|fix","issues":[{"kind":"figure|file|incomplete|unit|promise","severity":"high|medium","quote":"фрагмент ответа","hint":"что исправить"}]}
@@ -194,18 +264,25 @@ const CHECKLIST = `Ты — придирчивый проверяющий гот
  * `excerpts` — короткие выдержки из созданных файлов: проверяющий видит тему
  * и содержимое, а не только имена.
  */
-export async function reviewWithModel({ userQuestion = '', answer = '', digest = '', createdFiles = [], excerpts = [], modelName = '', complete } = {}) {
+export async function reviewWithModel({ userQuestion = '', answer = '', digest = '', createdFiles = [], excerpts = [], sources = [], task = null, modelName = '', complete } = {}) {
   if (typeof complete !== 'function') return { checked: false, verdict: 'ok', issues: [] };
   const files = Array.isArray(excerpts) ? excerpts.filter((item) => item && item.text) : [];
   const filesBlock = files.length
     ? `Что внутри созданных файлов (выдержка):\n${files.map((item) => `— ${item.file}: ${String(item.text).slice(0, REVIEW.excerptChars)}`).join('\n')}`
     : '';
+  const sourcesBlock = formatSources(sources);
+  const pending = Array.isArray(task?.next) ? task.next.filter(Boolean) : [];
+  const taskBlock = pending.length
+    ? `По карточке задачи ещё не закрыто:\n${pending.slice(0, 6).map((item) => `— ${item}`).join('\n')}`
+    : '';
   const prompt = [
     `Запрос пользователя:\n${String(userQuestion || '').slice(0, 2000)}`,
     `Ответ, который будет выдан:\n${String(answer || '').slice(0, 12000)}`,
     `Результаты инструментов (источник фактов):\n${String(digest || 'инструменты не вызывались').slice(0, REVIEW.digestChars)}`,
+    sourcesBlock,
     createdFiles.length ? `Созданные файлы: ${createdFiles.join(', ')}` : 'Файлы не создавались.',
     filesBlock,
+    taskBlock,
   ]
     .filter(Boolean)
     .join('\n\n');
@@ -262,8 +339,17 @@ const FIX_INSTRUCTION = `Ты правишь готовый ответ по за
 — Файл, которого нет, не упоминай как готовый: либо он есть в списке созданных, либо убери обещание.
 — Сохрани структуру, тон и язык исходного ответа, не сокращай полезное.`;
 
+/* Второй круг — только когда первая правка сама внесла новые цифры. Просить
+   «исправь ещё раз» бесполезно: нужен явный запрет на выдумку и разрешение
+   написать «данных нет». */
+const STRICT_ADDITION = `
+Это повторная правка: предыдущая попытка внесла новые числа, которых нет в результатах инструментов. Поэтому:
+— Не вводи ни одного числа, которого нет в фактах выше. Нужное число не найдено — напиши словами, что данных нет, вместо оценки «примерно».
+— Не ссылайся на источники, которых нет в списке источников.
+— Меняй только проблемные места, остальной текст оставь дословно.`;
+
 /** Одна правка ответа по замечаниям. Возвращает текст или '' при сбое. */
-export async function reviseAnswer({ userQuestion = '', answer = '', issues = [], digest = '', modelName = '', complete } = {}) {
+export async function reviseAnswer({ userQuestion = '', answer = '', issues = [], digest = '', modelName = '', complete, strict = false } = {}) {
   if (typeof complete !== 'function' || !issues.length) return '';
   const list = issues
     .slice(0, REVIEW.maxIssues)
@@ -278,7 +364,7 @@ export async function reviseAnswer({ userQuestion = '', answer = '', issues = []
   try {
     const raw = await complete(
       [
-        { role: 'system', content: FIX_INSTRUCTION },
+        { role: 'system', content: strict ? `${FIX_INSTRUCTION}\n${STRICT_ADDITION}` : FIX_INSTRUCTION },
         { role: 'user', content: prompt },
       ],
       { maxTokens: 4000, effort: 'high', model: modelName },
@@ -305,21 +391,26 @@ export function needsReview({ answer = '', tools = [], depth = 0, minChars = REV
 
 /**
  * Полный проход ревью: детерминированные проверки, затем модель, затем
- * одна правка при серьёзных находках. Возвращает итоговый текст и отчёт.
+ * правка при серьёзных находках (до REVIEW.fixRounds кругов). Возвращает
+ * итоговый текст и отчёт.
  */
-export async function reviewAnswer({ userQuestion = '', answer = '', history = [], createdFiles = [], excerpts = [], routeModel = '', complete, depth = 0, tools = [] } = {}) {
-  const report = { checked: false, verdict: 'ok', issues: [], fixed: false, modelChecked: false, model: '' };
+export async function reviewAnswer({ userQuestion = '', answer = '', history = [], createdFiles = [], excerpts = [], routeModel = '', complete, depth = 0, tools = [], task = null } = {}) {
+  const report = { checked: false, verdict: 'ok', issues: [], fixed: false, modelChecked: false, model: '', attempts: 0 };
   if (!needsReview({ answer, tools, depth })) return { text: String(answer || ''), report };
 
   const modelName = reviewModelName({ routeModel });
   report.model = modelName;
   const digest = buildDigest(history);
-  const deterministic = checkAnswer({ answer, toolDigest: digest, createdFiles });
+  /* Источники — отдельным блоком: без них проверяющий не отличает цифру из
+     статьи от цифры, придуманной вместе со ссылкой на статью. */
+  const sources = extractSources(history);
+  report.sources = sources.length;
+  const deterministic = checkAnswer({ answer, toolDigest: digest, createdFiles, task });
   let issues = deterministic;
   report.issues = issues.slice();
 
   if (complete) {
-    const model = await reviewWithModel({ userQuestion, answer, digest, createdFiles, excerpts, modelName, complete });
+    const model = await reviewWithModel({ userQuestion, answer, digest, createdFiles, excerpts, sources, task, modelName, complete });
     report.modelChecked = model.checked;
     if (model.checked) {
       /* Модель может найти другое, чем регулярка: объединяем без повторов. */
@@ -331,35 +422,49 @@ export async function reviewAnswer({ userQuestion = '', answer = '', history = [
   report.issues = issues.slice(0, REVIEW.maxIssues);
 
   const high = issues.filter((issue) => issue.severity === 'high');
+  const evaluate = (text) => checkAnswer({ answer: text, toolDigest: digest, createdFiles, task });
   if (!high.length || !REVIEW.fix || !complete) {
     report.verdict = issues.length ? 'issues' : 'ok';
     report.checked = true;
     return { text: String(answer || ''), report };
   }
 
-  const revised = await reviseAnswer({ userQuestion, answer, issues: high, digest, modelName, complete });
-  if (!revised) {
-    report.verdict = 'issues';
-    report.checked = true;
-    return { text: String(answer || ''), report };
+  /* Круги правки. Первый круг — обычный. Если правка внесла новые числа без
+     опоры, второй круг просит переписать строго: это дешевле, чем отдать
+     человеку исходный ответ с той ошибкой, из-за которой правка началась. */
+  let current = String(answer || '');
+  let target = high;
+  let best = '';
+  for (let round = 1; round <= REVIEW.fixRounds; round++) {
+    const revised = await reviseAnswer({ userQuestion, answer: current, issues: target, digest, modelName, complete, strict: round > 1 });
+    if (!revised) break;
+    report.attempts = round;
+    const again = evaluate(revised);
+    const newHigh = again.filter((issue) => issue.severity === 'high' && !target.some((item) => item.quote === issue.quote));
+    if (!newHigh.length) {
+      best = revised;
+      report.issues = again.slice(0, REVIEW.maxIssues);
+      break;
+    }
+    /* Правка не прошла: следующий круг правит её же и знает, что именно
+       оказалось выдумкой. Исходный ответ при этом не теряется. */
+    current = revised;
+    target = newHigh;
+    report.issues = again.slice(0, REVIEW.maxIssues);
   }
-  /* Проверяем правку теми же правилами: правка не должна добавить новых цифр. */
-  const again = checkAnswer({ answer: revised, toolDigest: digest, createdFiles });
-  const newHigh = again.filter((issue) => issue.severity === 'high' && !issues.some((item) => item.quote === issue.quote));
-  if (newHigh.length) {
+
+  report.checked = true;
+  if (!best) {
     report.verdict = 'issues';
-    report.checked = true;
     return { text: String(answer || ''), report };
   }
   report.fixed = true;
   report.verdict = 'fixed';
-  report.checked = true;
   /* Сколько замечаний закрыто этой правкой — для строки в логе: после правки в
      отчёте остаются только незакрытые, и без этого числа лог писал «правка
      ответа по 0 замечаниям». */
   report.fixedCount = high.length;
-  report.issues = again.slice(0, REVIEW.maxIssues);
-  return { text: revised, report };
+  return { text: best, report };
 }
 
 /** Строка для лога сервера. */
@@ -381,7 +486,8 @@ export function describeReview(report) {
     /* Число — сколько замечаний закрыла правка, а не сколько осталось: остаток
        бывает нулевым, и «правка по 0 замечаниям» читалась как ошибка. */
     const closed = report.fixedCount ?? count;
-    return `ответ исправлен по ${closed} ${plural(closed, 'замечанию', 'замечаниям', 'замечаниям')}${by}`;
+    const round = Number(report.attempts) > 1 ? ', со второй попытки' : '';
+    return `ответ исправлен по ${closed} ${plural(closed, 'замечанию', 'замечаниям', 'замечаниям')}${round}${by}`;
   }
   if (count) return `${count} ${plural(count, 'замечание', 'замечания', 'замечаний')}, ответ без правки (${report.verdict})${by}`;
   return `замечаний нет${by}`;

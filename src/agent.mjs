@@ -505,8 +505,24 @@ export async function runTurn({
 
   const toolCtx = { workspace, signal, remember, projectName, userName, facts, depth, spawnAgent: spawnSubagents };
 
+  /* За пять шагов до предела модель получает предупреждение, а человек —
+     строку в живом статусе. Раньше предел наступал внезапно: агент упирался в
+     него посреди сборки и выдавал обрубок; теперь у него есть шаги, чтобы
+     закончить главное и честно назвать незаконченное. */
+  const warnAt = Math.max(6, stepLimit - 5);
+  let warnedAboutLimit = false;
+
   while (!finished && steps < stepLimit) {
     steps++;
+    if (!warnedAboutLimit && steps >= warnAt) {
+      warnedAboutLimit = true;
+      const left = Math.max(1, stepLimit - steps + 1);
+      chat.history.push({
+        role: 'user',
+        content: `До предела шагов осталось ${left}. Приоритет: доведи главное до результата, назови готовые файлы и прямо перечисли, что не успел. Не начинай новых крупных разделов.`,
+      });
+      emit({ type: 'progress', step: steps, limit: stepLimit, note: `осталось ${left} шагов до предела` });
+    }
     /* Длинная задача не должна упираться в окно контекста: лишнюю историю
        отрезаем между шагами, а не только в начале хода. Задача закреплена,
        поэтому агент всегда видит, что от него требуется. Сводку заказываем
@@ -786,6 +802,7 @@ export async function runTurn({
         excerpts,
         routeModel: route.model,
         tools: toolsUsed,
+        task: chat.task,
         depth,
         complete: (messages, options = {}) =>
           simpleCompletion(messages, {
