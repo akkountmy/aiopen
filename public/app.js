@@ -3710,10 +3710,56 @@ function openModal({ title, subtitle, headLead, body, actions = [], wide = false
     }
   };
   if (onMount) onMount(bodyNode, modal, apiActions);
-  /* Начальный фокус: поле ввода, если оно есть, иначе первая кнопка окна. */
-  const initial = inputFocusTarget(modal) || focusables()[0] || modal;
+  /* Начальный фокус. На компьютере — поле ввода, если оно есть, иначе первая
+     кнопка окна. На телефоне поле фокус не получает: Safari увеличивает
+     страницу, когда фокус достаётся полю с кеглем меньше 16 px, и окно
+     выглядело «увеличенным», пока масштаб не отожмёшь обратно. Поэтому там
+     фокус достаётся самому листу — он и по экрану не прыгает, и клавиатуру
+     не выдвигает до того, как человек выбрал поле. */
+  const touchPointer = typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches;
+  const initial = touchPointer ? modal : inputFocusTarget(modal) || focusables()[0] || modal;
   initial.focus();
+  enableSheetDrag(modal);
   return modal;
+}
+
+/* Лист на телефоне тянется вниз за шапку и закрывается — как окно в
+   мобильном приложении. Жест живёт только на шапке: прокрутку содержимого он
+   не перехватывает, а крестик и другие кнопки шапки продолжают нажиматься.
+   Порог — 96 px: случайное касание при прокрутке лист не захлопывает. */
+const SHEET_DRAG_CLOSE = 96;
+
+function enableSheetDrag(modal) {
+  const head = modal.querySelector('.modal-head');
+  if (!head) return;
+  const isSheet = () => typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 860px)').matches;
+  let startY = null;
+  let offset = 0;
+  head.addEventListener('pointerdown', (event) => {
+    if (!isSheet() || event.button > 0) return;
+    if (event.target.closest('button, a, input, select, textarea')) return;
+    startY = event.clientY;
+    offset = 0;
+    modal.style.transition = 'none';
+    if (head.setPointerCapture) head.setPointerCapture(event.pointerId);
+  });
+  head.addEventListener('pointermove', (event) => {
+    if (startY === null) return;
+    offset = Math.max(0, event.clientY - startY);
+    modal.style.transform = `translateY(${offset}px)`;
+  });
+  const finish = () => {
+    if (startY === null) return;
+    startY = null;
+    const passed = offset;
+    offset = 0;
+    modal.style.transition = '';
+    modal.style.transform = '';
+    if (passed > SHEET_DRAG_CLOSE) closeModal();
+  };
+  head.addEventListener('pointerup', finish);
+  head.addEventListener('pointercancel', finish);
+  head.addEventListener('lostpointercapture', finish);
 }
 
 let modalCloseHook = null;

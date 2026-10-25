@@ -6552,3 +6552,151 @@ html.app-mode .composer-modes {
     height: 34px;
   }
 }
+
+/* ------------------------ окно-лист на телефоне ------------------------
+   Как в мобильном приложении DeepSeek: диалог не висит посреди экрана
+   маленькой коробкой, а выезжает снизу листом на всю ширину. Сверху
+   «ручка», за неё лист тянется вниз и закрывается, в шапке — заголовок и
+   крестик, содержимое прокручивается внутри, а действия стоят крупными
+   кнопками во всю ширину над домашней полосой телефона.
+
+   Главное здесь — размеры. Высота листа считается от видимой области
+   (--app-h её выставляет пересчёт клавиатуры), поэтому лист всегда входит
+   в экран целиком, а не вылезает за него. Поля внутри получают кегль от
+   16 px: при меньшем Safari приближает страницу, когда в поле ставят
+   курсор, и окно выглядело «увеличенным», пока масштаб не отожмёшь
+   обратно. Это правило стоит в конце файла, чтобы перебить поздние
+   правила полей (например, .dash-prompt с 13,5 px). */
+@media (max-width: 860px) {
+  /* Лист прижат к нижнему краю экрана — как шторка в приложении. */
+  .modal-root:not(.preview-open) {
+    padding: 0;
+    align-items: flex-end;
+  }
+
+  .modal-root:not(.preview-open) > .modal:not(.file-preview-modal) {
+    width: 100%;
+    max-width: 100%;
+    /* Не выше видимой области, и всегда с зазором под строку состояния:
+       лист под «чёлкой» не читается, а без зазора шапка липнет к часам. */
+    max-height: calc(100% - max(20px, env(safe-area-inset-top, 0px)));
+    padding-bottom: 0;
+    border-width: 1px 0 0;
+    border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+    box-shadow: 0 -18px 44px rgba(0, 0, 0, 0.42);
+    animation: sheet-up 0.3s cubic-bezier(0.22, 0.61, 0.36, 1);
+  }
+
+  /* «Ручка» листа: 38 × 4 — как у шторки в приложении. */
+  .modal-root:not(.preview-open) > .modal:not(.file-preview-modal)::before {
+    content: '';
+    flex: none;
+    width: 38px;
+    height: 4px;
+    margin: 8px auto 0;
+    border-radius: 999px;
+    background: var(--line-strong);
+  }
+
+  /* Лист получает фокус на телефоне (клавиатуру он не выдвигает), но рамка
+     фокуса вокруг всего листа читалась бы как ошибка вёрстки. */
+  .modal-root:not(.preview-open) > .modal:focus,
+  .modal-root:not(.preview-open) > .modal:focus-visible {
+    outline: none;
+  }
+
+  .modal-root:not(.preview-open) > .modal > .modal-head {
+    gap: 10px;
+    padding: 6px 12px 10px 16px;
+    /* Шапка — ручка листа: жест по ней не должен прокручивать страницу. */
+    touch-action: none;
+  }
+
+  .modal-root:not(.preview-open) > .modal > .modal-head .modal-close {
+    width: 36px;
+    height: 36px;
+    border-radius: 999px;
+  }
+
+  .modal-root:not(.preview-open) > .modal > .modal-body {
+    padding: 12px 16px calc(8px + env(safe-area-inset-bottom, 0px));
+    overscroll-behavior: contain;
+  }
+
+  /* Действия — столбиком во всю ширину: главная кнопка сверху, отмена
+     текстом под ней. Прежде две кнопки стояли рядом, и на узком экране их
+     подписи сжимались, а цель для пальца была меньше 44 px. */
+  .modal-root:not(.preview-open) > .modal > .modal-foot {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 6px;
+    padding: 10px 16px calc(10px + env(safe-area-inset-bottom, 0px));
+  }
+
+  .modal-root:not(.preview-open) > .modal > .modal-foot .btn,
+  .modal-root:not(.preview-open) > .modal > .modal-foot .btn-primary {
+    width: 100%;
+    height: 46px;
+    padding: 0 16px;
+    border-radius: var(--radius-md);
+    font-size: var(--fs-16);
+  }
+
+  .modal-root:not(.preview-open) > .modal > .modal-foot .btn-primary {
+    font-weight: 500;
+  }
+
+  .modal-root:not(.preview-open) > .modal > .modal-foot .btn-quiet {
+    height: 40px;
+    border-color: transparent;
+    background: transparent;
+    color: var(--text-3);
+    font-size: var(--fs-14);
+  }
+
+  .modal-root:not(.preview-open) > .modal > .modal-foot .btn-quiet:hover:not(:disabled) {
+    background: var(--layer-hover);
+    color: var(--text-2);
+  }
+
+  /* Клавиатура выехала: лист остаётся у нижнего края видимой области.
+     Верхний зазор тот же, что и без клавиатуры. */
+  html.kb-open .modal-root:not(.preview-open) {
+    align-items: flex-end;
+    padding: 0;
+  }
+
+  /* Поле задания: кегль от 16 px, иначе Safari приближает страницу при
+     фокусе; ручку изменения размера на телефоне пальцем не поймать.
+     Высота ровно шесть строк по 20 px плюс отступы и рамка — тогда
+     последняя строка не режется пополам, а длинный текст листается
+     внутри поля. */
+  .dash-prompt {
+    height: 142px;
+    min-height: 142px;
+    font-size: max(16px, var(--fs-14));
+    resize: none;
+  }
+
+  /* Поля дашборда в листе — той же высоты, что и остальные поля формы. */
+  .modal .dash-form .field select,
+  .modal .dash-form .field input {
+    min-height: 44px;
+  }
+}
+
+@keyframes sheet-up {
+  from {
+    transform: translateY(100%);
+  }
+
+  to {
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .modal-root:not(.preview-open) > .modal:not(.file-preview-modal) {
+    animation: none;
+  }
+}

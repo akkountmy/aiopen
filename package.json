@@ -16,6 +16,7 @@
     "test:runs": "node test/runs.mjs",
     "test:ui-runs": "node test/ui-runs.mjs",
     "test:ui-scroll": "node test/ui-scroll.mjs",
+    "test:ui-sheet": "node test/ui-modal-sheet.mjs",
     "test:ui-swipe": "node test/ui-swipe.mjs",
     "test:ui-version": "node test/ui-version.mjs"
   },
