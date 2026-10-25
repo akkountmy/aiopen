@@ -66,12 +66,36 @@ export function formatBytes(n) {
   return `${v >= 10 || i === 0 ? Math.round(v) : v.toFixed(1)} ${units[i]}`;
 }
 
+/* Пишем через временный файл и переименование — читатель никогда не увидит
+   половину JSON. Перед переименованием содержимое сбрасывается на диск (fsync):
+   без этого после внезапного выключения контейнера на диске мог остаться файл
+   нулевой длины, и сервис терял состояние целиком. */
 export function atomicWrite(file, content) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const tmp = `${file}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`;
-  fs.writeFileSync(tmp, content, 'utf8');
+  const fd = fs.openSync(tmp, 'w');
+  try {
+    fs.writeFileSync(fd, content, 'utf8');
+    try {
+      fs.fsyncSync(fd);
+    } catch {
+      /* не на всех файловых системах fsync доступен — запись уже сделана */
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
   try {
     fs.renameSync(tmp, file);
+    try {
+      const dirFd = fs.openSync(path.dirname(file), 'r');
+      try {
+        fs.fsyncSync(dirFd);
+      } finally {
+        fs.closeSync(dirFd);
+      }
+    } catch {
+      /* каталог на Windows не открывается на чтение — переименование уже прошло */
+    }
   } catch {
     fs.writeFileSync(file, content, 'utf8');
     try {

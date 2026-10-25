@@ -29,7 +29,7 @@ fs.mkdirSync(ctx.workspace, { recursive: true });
 test('навыки: каталог читается с диска', () => {
   const skills = listSkills();
   const ids = skills.map((skill) => skill.id);
-  for (const id of ['office-docx', 'office-xlsx', 'office-pptx', 'pdf-report', 'three-js', 'web-page', 'answer-structure', 'answer-visuals']) {
+  for (const id of ['office-docx', 'office-xlsx', 'office-pptx', 'pdf-report', 'three-js', 'web-page', 'web-scraping', 'answer-structure', 'answer-visuals']) {
     assert.ok(ids.includes(id), `нет навыка ${id}`);
   }
   for (const skill of skills) {

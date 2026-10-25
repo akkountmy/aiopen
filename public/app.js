@@ -102,6 +102,67 @@ function emptyDashboardState() {
   return { loaded: false, loading: false, tasks: [], tz: 'Europe/Minsk', nextRunAt: null, canAutoRun: false, balanceUsd: 0 };
 }
 
+/* Выбранные режимы ответа. Как в мобильном приложении, это не разовая
+   настройка сообщения: переключатели запоминаются на устройстве и действуют,
+   пока человек сам их не выключит. */
+const ANSWER_MODES_KEY = 'dshow.answerModes';
+const answerModes = { thinking: false, search: false };
+
+function paintAnswerModes() {
+  const think = $('#thinkToggle');
+  const search = $('#searchToggle');
+  if (think) {
+    think.setAttribute('aria-pressed', String(answerModes.thinking));
+    think.setAttribute('aria-label', answerModes.thinking ? 'Рассуждения включены' : 'Рассуждения выключены');
+  }
+  if (search) {
+    search.setAttribute('aria-pressed', String(answerModes.search));
+    search.setAttribute('aria-label', answerModes.search ? 'Поиск включён' : 'Поиск выключен');
+  }
+}
+
+/* Режимы относятся только к мобильной версии и ярлыку-приложению. На широком
+   экране кнопок нет, поэтому и скрытое состояние из localStorage не должно
+   влиять на обычный компьютерный диалог. */
+function answerModesAvailable() {
+  return openedAsApp() || window.matchMedia('(max-width: 860px)').matches;
+}
+
+function activeAnswerModes() {
+  if (!answerModesAvailable()) return { thinking: false, search: false };
+  return { thinking: answerModes.thinking === true, search: answerModes.search === true };
+}
+
+function loadAnswerModes() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(ANSWER_MODES_KEY) || '{}');
+    answerModes.thinking = saved.thinking === true;
+    answerModes.search = saved.search === true;
+  } catch {
+    answerModes.thinking = false;
+    answerModes.search = false;
+  }
+  paintAnswerModes();
+}
+
+function toggleAnswerMode(name) {
+  if (name !== 'thinking' && name !== 'search') return;
+  answerModes[name] = !answerModes[name];
+  try {
+    localStorage.setItem(ANSWER_MODES_KEY, JSON.stringify(answerModes));
+  } catch {
+    /* приватный режим: режим всё равно работает до перезагрузки */
+  }
+  paintAnswerModes();
+  /* Короткая вибрация — единственный отклик, который видно, когда палец
+     закрывает саму кнопку. На устройствах без вибро вызов просто игнорируется. */
+  try {
+    navigator.vibrate?.(8);
+  } catch {
+    /* ignore */
+  }
+}
+
 function el(tag, cls, text) {
   const node = document.createElement(tag);
   if (cls) node.className = cls;
@@ -202,7 +263,21 @@ function toast(message, type = 'error') {
 /* ------------------------------ markdown ------------------------------ */
 
 const copyStore = new Map();
+/* Каждая перерисовка ответа (а во время потока их десятки) создаёт новые
+   идентификаторы блоков кода. Без предела карта росла бы вместе со всей
+   перепиской, поэтому держим только свежие: кнопки старых блоков всё равно
+   перерисованы, а текст для них берём прямо из разметки. */
+const COPY_STORE_LIMIT = 300;
 let copySeq = 0;
+
+function rememberCode(id, code) {
+  copyStore.set(id, code);
+  while (copyStore.size > COPY_STORE_LIMIT) {
+    const oldest = copyStore.keys().next();
+    if (oldest.done) break;
+    copyStore.delete(oldest.value);
+  }
+}
 
 /* Файл проекта, упомянутый в ответе, открывается кликом в окне просмотра —
    как двойной щелчок в панели «Файлы проекта». Адрес собираем здесь, а не в
@@ -358,7 +433,7 @@ function renderMarkdown(raw) {
       closeLists();
       const block = codeBlocks[Number(codeMatch[1])];
       const id = `code-${++copySeq}`;
-      copyStore.set(id, block.code);
+      rememberCode(id, block.code);
       const lang = block.lang ? `<span>${escapeHtml(block.lang)}</span>` : '<span>код</span>';
       out.push(
         `<pre><div class="code-head">${lang}<button type="button" data-copy-code="${id}">Копировать</button></div><code>${escapeHtml(block.code)}</code></pre>`,
@@ -807,10 +882,7 @@ function projectNode(project) {
     `project${project.id === state.activeProjectId ? ' active' : ''}${project.workflowId ? ' in-workflow' : ''}${collapsed ? ' collapsed' : ''}${hasLiveRun ? ' live' : ''}`,
   );
   const row = el('div', 'project-row');
-  row.setAttribute('role', 'button');
-  row.tabIndex = 0;
   row.title = chats.length ? (open ? 'Свернуть диалоги' : 'Раскрыть диалоги') : project.name;
-  if (chats.length) row.setAttribute('aria-expanded', String(open));
   /* Треугольник слева — та же деталь, что у папок: по нему видно, раскрыт ли
      список диалогов. У проекта без диалогов место остаётся пустым, чтобы
      имена не прыгали. */
@@ -820,9 +892,16 @@ function projectNode(project) {
   /* Открытый проект — открытая папка (как в рабочей области Harness):
      переключатель состояния виден прямо на значке строки. */
   const projectIcon = project.id === state.activeProjectId ? ICONS.folderOpen : ICONS.folder;
-  row.innerHTML = `<span class="p-caret${chats.length ? '' : ' is-empty'}"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M6 8l4 4 4-4"/></svg></span><span class="f-icon">${projectIcon}</span><span class="p-name">${escapeHtml(project.name)}</span>`;
+  /* Открыть проект — настоящая кнопка: в строке есть ещё «плюс» и меню, а
+     вложенные интерактивные элементы недоступны с клавиатуры и путают
+     озвучку. */
+  const main = el('button', 'row-main');
+  main.type = 'button';
+  main.innerHTML = `<span class="p-caret${chats.length ? '' : ' is-empty'}"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M6 8l4 4 4-4"/></svg></span><span class="f-icon">${projectIcon}</span><span class="p-name">${escapeHtml(project.name)}</span>`;
+  if (chats.length) main.setAttribute('aria-expanded', String(open));
   const count = el('span', 'p-count', project.chats?.length ? String(project.chats.length) : '');
-  row.appendChild(count);
+  main.appendChild(count);
+  row.appendChild(main);
 
   const plus = el('button', 'row-plus');
   plus.type = 'button';
@@ -838,6 +917,7 @@ function projectNode(project) {
   const menuBtn = el('button', 'row-menu');
   menuBtn.type = 'button';
   menuBtn.title = 'Действия с проектом';
+  menuBtn.setAttribute('aria-label', 'Действия с проектом');
   menuBtn.innerHTML = ICONS.dots;
   menuBtn.addEventListener('click', (event) => {
     event.stopPropagation();
@@ -877,13 +957,12 @@ function projectNode(project) {
     }
     if (!wasActive && !chats.length) closeSidebar();
   };
-  row.addEventListener('click', activate);
-  row.addEventListener('keydown', (event) => {
-    if (event.target !== row) return;
-    if (event.key !== 'Enter' && event.key !== ' ') return;
-    event.preventDefault();
-    activate();
+  row.addEventListener('click', (event) => {
+    /* Клик по пустому месту строки — то же, что по названию. Клики по кнопкам
+       сюда не доходят: у них свой обработчик и stopPropagation. */
+    if (event.target === row) activate();
   });
+  main.addEventListener('click', activate);
   wrap.appendChild(row);
 
   if (open && chats.length) {
@@ -893,33 +972,33 @@ function projectNode(project) {
          переключения проекта подсветка остаётся в чужом списке. */
       const chatActive = chat.id === state.activeChatId && project.id === state.activeProjectId;
       const chatRow = el('div', `chat-row${chatActive ? ' active' : ''}`);
+      const chatMain = el('button', 'row-main');
+      chatMain.type = 'button';
       const title = el('span', 'c-title', chat.title || 'Новый диалог');
       title.title = chat.title || '';
-      chatRow.appendChild(title);
+      chatMain.appendChild(title);
       if (liveRunFor(chat.id)) {
         const live = el('span', 'c-live');
         live.title = 'В диалоге идёт задача';
         live.setAttribute('aria-label', 'Идёт задача');
-        chatRow.appendChild(live);
+        chatMain.appendChild(live);
       }
+      chatMain.addEventListener('click', () => openChat(chat.id));
+      chatRow.appendChild(chatMain);
       const chatMenu = el('button', 'row-menu');
       chatMenu.type = 'button';
       chatMenu.title = 'Действия с диалогом';
+      chatMenu.setAttribute('aria-label', 'Действия с диалогом');
       chatMenu.innerHTML = ICONS.dots;
       chatMenu.addEventListener('click', (event) => {
         event.stopPropagation();
         openChatMenu(event, chat);
       });
       chatRow.appendChild(chatMenu);
-      chatRow.addEventListener('click', () => openChat(chat.id));
-      /* Диалог — тоже кнопка: с клавиатуры он открывается Enter и пробелом. */
-      chatRow.setAttribute('role', 'button');
-      chatRow.tabIndex = 0;
-      chatRow.addEventListener('keydown', (event) => {
-        if (event.target !== chatRow) return;
-        if (event.key !== 'Enter' && event.key !== ' ') return;
-        event.preventDefault();
-        openChat(chat.id);
+      /* Клик мимо кнопок — открыть диалог: сама строка остаётся обычным
+         контейнером, чтобы кнопка меню внутри неё была валидной. */
+      chatRow.addEventListener('click', (event) => {
+        if (event.target === chatRow) openChat(chat.id);
       });
       list.appendChild(chatRow);
     }
@@ -933,13 +1012,17 @@ function workflowNode(workflow) {
   const node = el('div', `workflow${collapsed ? ' collapsed' : ''}`);
   const projects = state.projects.filter((project) => project.workflowId === workflow.id);
   const row = el('div', 'workflow-row');
-  row.setAttribute('role', 'button');
   row.title = collapsed ? 'Развернуть папку' : 'Свернуть папку';
-  row.innerHTML = `<span class="workflow-caret"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M6 8l4 4 4-4"/></svg></span><span class="w-icon">${ICONS.folder}</span><span class="w-name">${escapeHtml(workflow.name)}</span>`;
-  row.appendChild(el('span', 'w-count', String(projects.length)));
+  const main = el('button', 'row-main');
+  main.type = 'button';
+  main.setAttribute('aria-expanded', String(!collapsed));
+  main.innerHTML = `<span class="workflow-caret"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M6 8l4 4 4-4"/></svg></span><span class="w-icon">${ICONS.folder}</span><span class="w-name">${escapeHtml(workflow.name)}</span>`;
+  main.appendChild(el('span', 'w-count', String(projects.length)));
+  row.appendChild(main);
   const menuBtn = el('button', 'row-menu');
   menuBtn.type = 'button';
   menuBtn.title = 'Действия с папкой';
+  menuBtn.setAttribute('aria-label', 'Действия с папкой');
   menuBtn.innerHTML = ICONS.dots;
   menuBtn.addEventListener('click', (event) => {
     event.stopPropagation();
@@ -951,14 +1034,9 @@ function workflowNode(workflow) {
     else state.collapsedWorkflows.add(workflow.id);
     renderSidebar();
   };
-  row.addEventListener('click', toggleFolder);
-  /* Папка раскрывается и с клавиатуры — как строка проекта. */
-  row.tabIndex = 0;
-  row.addEventListener('keydown', (event) => {
-    if (event.target !== row) return;
-    if (event.key !== 'Enter' && event.key !== ' ') return;
-    event.preventDefault();
-    toggleFolder();
+  main.addEventListener('click', toggleFolder);
+  row.addEventListener('click', (event) => {
+    if (event.target === row) toggleFolder();
   });
   node.appendChild(row);
 
@@ -982,6 +1060,10 @@ function syncSidebarToggle() {
 
 function renderSidebar() {
   const root = $('#projectList');
+  /* Полная перерисовка (её вызывает почти каждое действие) сбрасывала
+     прокрутку списка наверх — в длинном списке человек терял место, где
+     работал. Возвращаем позицию после отрисовки. */
+  const scrollTop = root.scrollTop;
   root.innerHTML = '';
   if (!state.projects.length && !state.workflows.length) {
     root.appendChild(el('div', 'files-empty', 'Пока нет проектов'));
@@ -996,6 +1078,7 @@ function renderSidebar() {
      и не трогает панель без изменений. */
   sidebarSignature = sidebarKey(state.projects, state.workflows);
   syncSidebarToggle();
+  root.scrollTop = scrollTop;
 }
 
 function updateCrumbs() {
@@ -1344,11 +1427,44 @@ function renderMessage(message) {
   }
 
   const head = el('div', 'msg-head');
-  head.innerHTML = '<span class="dot"></span><span>AI-ассистент</span><span class="work-label">работаю…</span>';
+  head.innerHTML = '<span class="dot"></span><span>AI-ассистент</span><span class="work-label"></span>';
+  /* Пока ответ идёт, вместо глухого «работаю…» стоит подпись текущего шага —
+     текст из события инструмента, поэтому только textContent. */
+  head.querySelector('.work-label').textContent = message.streaming && message.workNote ? message.workNote : 'работаю…';
   wrap.appendChild(head);
 
   if (message.streaming) wrap.classList.add('streaming');
   else wrap.classList.remove('streaming');
+
+  /* Пометки режимов остаются в ответе: через день видно, почему ассистент
+     искал в интернете или думал дольше обычного. */
+  if (message.modes?.thinking || message.modes?.search) {
+    const badges = el('div', 'msg-modes');
+    if (message.modes.thinking) {
+      const badge = el('span', 'msg-mode');
+      badge.innerHTML = '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 2.4l1.5 4.1 4.1 1.5-4.1 1.5L10 13.6 8.5 9.5 4.4 8l4.1-1.5L10 2.4z" /></svg>';
+      badge.appendChild(el('span', '', 'Рассуждения'));
+      badges.appendChild(badge);
+    }
+    if (message.modes.search) {
+      const badge = el('span', 'msg-mode');
+      badge.innerHTML = '<svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.8" cy="8.8" r="5.5" /><path d="M12.9 12.9l4.1 4.1" /></svg>';
+      badge.appendChild(el('span', '', 'Поиск'));
+      badges.appendChild(badge);
+    }
+    wrap.appendChild(badges);
+  }
+
+  /* Ход рассуждений — отдельным свёрнутым блоком, как «Думал…» в приложении.
+     В обычный markdown он не попадает: это черновик модели, а не ответ. */
+  if (message.reasoning) {
+    const details = el('details', 'msg-reasoning');
+    details.appendChild(el('summary', '', 'Размышления'));
+    const body = el('div', 'msg-reasoning-text');
+    body.textContent = message.reasoning;
+    details.appendChild(body);
+    wrap.appendChild(details);
+  }
 
   if (message.error) {
     const error = el('div', 'msg-error');
@@ -1458,8 +1574,10 @@ function trackRun(runId, chatId) {
       chatId: chatId || state.chat?.id,
       projectId: state.chat?.projectId,
       content: '',
+      reasoning: '',
       budget: null,
       error: '',
+      note: '',
       status: 'running',
     };
     state.liveRuns.set(runId, run);
@@ -1485,13 +1603,27 @@ function paintRun(run) {
   const message = streamingMessageOf(run);
   if (message) {
     message.content = run.content;
+    message.reasoning = run.reasoning || '';
+    message.workNote = run.note || '';
     if (run.budget) message.budget = run.budget;
     if (run.error && !run.content) message.error = run.error;
     else if (run.content) delete message.error;
     message.streaming = run.status === 'running' && !run.error;
     scheduleStreamRender();
   }
+  paintWorkNote(run);
   setStreaming(Boolean(currentLiveRun()));
+}
+
+/* Живой статус ответа. Подпись инструмента («проверяю страницу в живом
+   браузере: снимков 3») говорит, что делается прямо сейчас, и заодно выдаёт,
+   не подменили ли браузер разбором по коду. */
+function paintWorkNote(run) {
+  if (!run || !state.chat || state.chat.id !== run.chatId) return;
+  const nodes = document.querySelectorAll('#thread .msg-assistant.streaming .work-label');
+  const label = nodes[nodes.length - 1];
+  if (!label) return;
+  label.textContent = run.note || 'работаю…';
 }
 
 function closeRunView(run, status) {
@@ -1509,6 +1641,7 @@ function closeRunView(run, status) {
   const message = viewing ? state.chat.messages.find((item) => item.runId === run.id) : null;
   if (message) {
     message.streaming = false;
+    message.workNote = '';
     if (run.content) message.content = run.content;
     if (run.error && !run.content) message.error = run.error;
   }
@@ -1549,12 +1682,20 @@ async function reloadChatInPlace(chatId) {
 function applyRunEvent(run, event) {
   if (event.type === 'snapshot' && event.run) {
     run.content = event.run.text || '';
+    run.reasoning = event.run.reasoning || '';
     if (event.run.status) run.status = event.run.status;
     if (event.run.title) applyRunTitle(run, event.run.title);
   } else if (event.type === 'delta') {
     run.content += event.text || '';
+  } else if (event.type === 'reasoning') {
+    run.reasoning = (run.reasoning || '') + (event.text || '');
   } else if (event.type === 'tool' || event.type === 'progress') {
-    /* Действия ассистента в ленту не попадают: человек видит только «работаю…». */
+    /* Действия ассистента в ленту не попадают: человек видит только «работаю…».
+       Но если у шага есть короткая подпись (например, чем именно проверяли
+       страницу), она встаёт в живой статус — по ней видно, работал браузер
+       или разбор по коду. */
+    run.note = event.note ? String(event.note) : '';
+    paintWorkNote(run);
   } else if (event.type === 'title') {
     applyRunTitle(run, event.title);
   } else if (event.type === 'budget') {
@@ -1587,7 +1728,26 @@ async function readRunStream(response, streamState) {
   let buffer = '';
   let ended = false;
   while (true) {
-    const chunk = await reader.read();
+    /* Мёртвое соединение (провайдер пропал, прокси держит сокет) иначе висело
+       бы вечно: «Стоп» и «идёт» оставались на экране, хотя задачу уже никто не
+       обслуживает. Молчание дольше RUN_IDLE_MS закрывает этот поток — вызывающий
+       код переподключится и получит свежий снимок. */
+    let idleTimer = 0;
+    const chunk = await Promise.race([
+      reader.read(),
+      new Promise((resolve) => {
+        idleTimer = setTimeout(() => resolve({ idle: true }), RUN_IDLE_MS);
+      }),
+    ]);
+    clearTimeout(idleTimer);
+    if (chunk.idle) {
+      try {
+        await reader.cancel();
+      } catch {
+        /* поток уже закрыт */
+      }
+      break;
+    }
     if (chunk.done) break;
     /* Любой байт из потока — признак живой связи: сервис присылает и пустые
        комментарии, пока задача думает. */
@@ -1896,36 +2056,72 @@ function getStreamingMessage() {
 }
 
 let renderQueued = false;
+let renderTimer = 0;
+let lastStreamPaint = 0;
+/* Пока идёт ответ, поток отдаёт токены десятками в секунду, и каждый вызов
+   перерисовывал весь markdown в кадре — на длинном ответе это заметная работа
+   на каждое слово. Рисуем не чаще 12 раз в секунду: текст всё равно меняется
+   плавно, а браузер перестаёт разбирать разметку по 60 раз в секунду. */
+const STREAM_PAINT_MS = 80;
+
+function paintStreamingMessage() {
+  const message = getStreamingMessage();
+  const thread = $('#thread');
+  const nodes = thread.querySelectorAll('.msg-assistant');
+  const target = message && nodes[nodes.length - 1];
+  if (!message || !target) {
+    renderThread();
+    return;
+  }
+  target.classList.toggle('streaming', Boolean(message.streaming));
+  const md = target.querySelector('.md');
+  const html = renderMarkdown(message.content || '') + '<span class="cursor"></span>';
+  if (md) md.innerHTML = html;
+  else {
+    const block = el('div', 'md');
+    block.innerHTML = html;
+    target.appendChild(block);
+  }
+  /* Пока модель думает, ход рассуждений виден сразу — раскрытым. После
+     завершения он свернётся при окончательной перерисовке ответа. */
+  if (message.reasoning) {
+    let reasoning = target.querySelector('.msg-reasoning');
+    if (!reasoning) {
+      reasoning = el('details', 'msg-reasoning');
+      reasoning.open = true;
+      reasoning.appendChild(el('summary', '', 'Размышления'));
+      reasoning.appendChild(el('div', 'msg-reasoning-text'));
+      const mdBlock = target.querySelector('.md');
+      if (mdBlock) target.insertBefore(reasoning, mdBlock);
+      else target.appendChild(reasoning);
+    }
+    reasoning.querySelector('.msg-reasoning-text').textContent = message.reasoning;
+  }
+  if (message.tools?.length) {
+    const existing = target.querySelector('.tools');
+    if (existing) existing.remove();
+  }
+  scrollToBottom();
+}
+
 function scheduleStreamRender() {
   if (renderQueued) return;
   renderQueued = true;
-  const message = getStreamingMessage();
-  requestAnimationFrame(() => {
+  const wait = Math.max(0, STREAM_PAINT_MS - (Date.now() - lastStreamPaint));
+  const run = () => {
     renderQueued = false;
-    const thread = $('#thread');
-    const nodes = thread.querySelectorAll('.msg-assistant');
-    const target = message && nodes[nodes.length - 1];
-    if (!message || !target) {
-      renderThread();
-      return;
-    }
-    target.classList.toggle('streaming', Boolean(message.streaming));
-    const md = target.querySelector('.md');
-    if (md) md.innerHTML = renderMarkdown(message.content || '') + '<span class="cursor"></span>';
-    else {
-      const block = el('div', 'md');
-      block.innerHTML = renderMarkdown(message.content || '') + '<span class="cursor"></span>';
-      target.appendChild(block);
-    }
-    if (message.tools?.length) {
-      const existing = target.querySelector('.tools');
-      if (existing) existing.remove();
-    }
-    scrollToBottom();
-  });
+    lastStreamPaint = Date.now();
+    paintStreamingMessage();
+  };
+  if (wait > 0) {
+    clearTimeout(renderTimer);
+    renderTimer = setTimeout(run, wait);
+    return;
+  }
+  requestAnimationFrame(run);
 }
 
-async function streamMessage(text, attachmentIds) {
+async function streamMessage(text, attachmentIds, modes) {
   const chatId = state.chat.id;
   const response = await fetch(`/api/chats/${chatId}/messages`, {
     method: 'POST',
@@ -1934,7 +2130,11 @@ async function streamMessage(text, attachmentIds) {
       'Content-Type': 'application/json',
       ...(openedAsApp() ? { 'X-Dshow-Display': 'standalone' } : {}),
     },
-    body: JSON.stringify({ text, attachmentIds }),
+    body: JSON.stringify({
+      text,
+      attachmentIds,
+      ...(modes.thinking || modes.search ? { modes } : {}),
+    }),
   });
   if (response.status === 429) {
     let data = {};
@@ -1974,9 +2174,14 @@ async function streamMessage(text, attachmentIds) {
 
 async function sendMessage(event) {
   if (event) event.preventDefault();
-  /* Занят именно этот диалог: в другом проекте задача может идти спокойно. */
-  if (currentLiveRun()) return;
   const input = $('#input');
+  /* Занят именно этот диалог: в другом проекте задача может идти спокойно.
+     Раньше Enter просто ничего не делал — человек решал, что приложение
+     зависло. Теперь объясняем, почему сообщение не ушло. */
+  if (currentLiveRun()) {
+    if (input.value.trim()) toast('Идёт ответ. Дождитесь его или нажмите «Стоп».', 'warn');
+    return;
+  }
   const text = input.value.trim();
   const ready = state.attachments.filter((att) => att.id && att.status !== 'error');
   const uploading = state.attachments.filter((att) => att.status === 'uploading' || att.status === 'processing');
@@ -2017,14 +2222,22 @@ async function sendMessage(event) {
 
   const userMessage = { role: 'user', content: text, attachments: attachedMeta, at: new Date().toISOString() };
   state.chat.messages.push(userMessage);
-  const assistant = { role: 'assistant', content: '', tools: [], streaming: true, at: new Date().toISOString() };
+  const modes = activeAnswerModes();
+  const assistant = {
+    role: 'assistant',
+    content: '',
+    tools: [],
+    streaming: true,
+    at: new Date().toISOString(),
+    ...(modes.thinking || modes.search ? { modes } : {}),
+  };
   state.chat.messages.push(assistant);
   renderThread();
   setStreaming(true);
   scrollToBottom(true);
 
   try {
-    await streamMessage(text, ids);
+    await streamMessage(text, ids, modes);
   } catch (error) {
     if (error.name !== 'AbortError' && !error.unauthorized) toast(error.message || 'Ошибка отправки');
     const message = getStreamingMessage();
@@ -2351,7 +2564,11 @@ function renderFiles() {
     if (state.filesPath !== '.' && !item.path.startsWith(state.filesPath.replace(/\/?$/, '/'))) continue;
     const row = el('div', 'file-row');
     const isImage = /\.(png|jpe?g|webp|gif|bmp)$/i.test(item.name);
-    row.innerHTML = `<span class="f-icon">${item.dir ? ICONS.folder : isImage ? ICONS.image : ICONS.file}</span>`;
+    /* Открытие файла — отдельная кнопка: справа от неё лежат кнопки «Скачать»
+       и «Удалить», и роль кнопки на всей строке делала их вложенными. */
+    const fileMain = el('button', 'row-main');
+    fileMain.type = 'button';
+    fileMain.innerHTML = `<span class="f-icon">${item.dir ? ICONS.folder : isImage ? ICONS.image : ICONS.file}</span>`;
     const name = fileNameEl(item.name, 'f-name');
     /* Подсказка про управление: на телефоне — тап, на компьютере — двойной щелчок.
        В обоих случаях файл открывается в окне просмотра приложения. */
@@ -2361,8 +2578,9 @@ function renderFiles() {
       : touch
         ? `${item.path} — нажмите, чтобы открыть в приложении; кнопка «Скачать» — сохранить файл`
         : `${item.path} — двойной щелчок: открыть в приложении; кнопка «Скачать» — сохранить файл`;
-    row.appendChild(name);
-    if (!item.dir) row.appendChild(el('span', 'f-size', fmtSize(item.size)));
+    fileMain.appendChild(name);
+    if (!item.dir) fileMain.appendChild(el('span', 'f-size', fmtSize(item.size)));
+    row.appendChild(fileMain);
     const actions = el('div', 'f-actions');
     if (!item.dir) {
       /* Файл можно утащить мышью из панели на рабочий стол (или в любую папку):
@@ -2419,11 +2637,7 @@ function renderFiles() {
     });
     actions.appendChild(del);
     row.appendChild(actions);
-    const activate = () => {
-      if (item.dir) loadFiles(item.path);
-      else openFilePreview(item);
-    };
-    row.addEventListener('click', () => {
+    fileMain.addEventListener('click', () => {
       if (item.dir) {
         loadFiles(item.path);
         return;
@@ -2434,21 +2648,21 @@ function renderFiles() {
          показывали системное окно «Microsoft Office» с вопросом про безопасность. */
       if (isTouchUi()) openFilePreview(item);
     });
-    row.addEventListener('dblclick', (event) => {
+    row.addEventListener('click', (event) => {
+      /* Клик мимо кнопок — то же, что по названию файла. */
+      if (event.target === row) fileMain.click();
+    });
+    fileMain.addEventListener('dblclick', (event) => {
       if (item.dir || isTouchUi()) return;
-      /* Двойной щелчок по кнопке «Скачать» — это два скачивания, а не открытие. */
-      if (event.target.closest('.f-actions')) return;
       event.preventDefault();
       openFilePreview(item);
     });
-    /* Строка — это кнопка: с клавиатуры она тоже открывает папку или файл. */
-    row.setAttribute('role', 'button');
-    row.tabIndex = 0;
-    row.addEventListener('keydown', (event) => {
-      if (event.key === 'Enter' || event.key === ' ') {
-        event.preventDefault();
-        activate();
-      }
+    row.addEventListener('dblclick', (event) => {
+      if (item.dir || isTouchUi()) return;
+      /* Двойной щелчок по кнопкам справа — это два нажатия, а не открытие. */
+      if (event.target.closest('.f-actions')) return;
+      event.preventDefault();
+      openFilePreview(item);
     });
     list.appendChild(row);
   }
@@ -3412,6 +3626,13 @@ function openModal({ title, subtitle, headLead, body, actions = [], wide = false
   root.innerHTML = '';
   root.className = `modal-root${rootClass ? ` ${rootClass}` : ''}`;
   const modal = el('div', `modal${wide ? ' wide' : ''}${className ? ` ${className}` : ''}`);
+  /* Окно — настоящий диалог: роль, модальность и имя для озвучки. Раньше это
+     была просто «коробка», и скринридер читал её как часть страницы. */
+  modal.setAttribute('role', 'dialog');
+  modal.setAttribute('aria-modal', 'true');
+  modal.setAttribute('aria-label', title);
+  modal.tabIndex = -1;
+  modalPreviousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   const head = el('div', 'modal-head');
   if (headLead) head.appendChild(headLead);
   const headText = el('div', 'modal-head-text');
@@ -3463,16 +3684,48 @@ function openModal({ title, subtitle, headLead, body, actions = [], wide = false
   root.onmousedown = (event) => {
     if (event.target === root) closeModal();
   };
+  /* Esc закрывает, Tab не уходит из окна на страницу за ним. Одна и та же
+     функция и для клавиатуры, и для чтения с экрана: фокус держится внутри
+     диалога, а после закрытия возвращается на кнопку, которая его открыла. */
+  const focusables = () =>
+    [...modal.querySelectorAll('button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])')].filter(
+      (node) => node.offsetWidth || node.offsetHeight || node.getClientRects().length,
+    );
   document.onkeydown = (event) => {
     if (event.key === 'Escape') {
       closeModal();
+      return;
+    }
+    if (event.key !== 'Tab') return;
+    const items = focusables();
+    if (!items.length) return;
+    const first = items[0];
+    const last = items[items.length - 1];
+    if (event.shiftKey && (document.activeElement === first || document.activeElement === modal)) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
     }
   };
   if (onMount) onMount(bodyNode, modal, apiActions);
+  /* Начальный фокус: поле ввода, если оно есть, иначе первая кнопка окна. */
+  const initial = inputFocusTarget(modal) || focusables()[0] || modal;
+  initial.focus();
   return modal;
 }
 
 let modalCloseHook = null;
+let modalPreviousFocus = null;
+
+/* Первое поле ввода в окне — то, куда человек собирается печатать. */
+function inputFocusTarget(modal) {
+  const fields = [...modal.querySelectorAll('input:not([disabled]):not([type="hidden"]), textarea:not([disabled])')].filter(
+    (node) => node.offsetWidth || node.offsetHeight || node.getClientRects().length,
+  );
+  return fields[0] || null;
+}
 
 function closeModal() {
   const root = $('#modalRoot');
@@ -3490,6 +3743,15 @@ function closeModal() {
   const hook = modalCloseHook;
   modalCloseHook = null;
   if (hook) hook();
+  const previous = modalPreviousFocus;
+  modalPreviousFocus = null;
+  if (previous && previous.isConnected) {
+    try {
+      previous.focus();
+    } catch {
+      /* узел мог исчезнуть между проверкой и вызовом */
+    }
+  }
 }
 
 /* ------------------------------ popover ------------------------------ */
@@ -3648,6 +3910,10 @@ function promptDialog({ title, label, value = '', placeholder = '', confirm = '�
     openModal({
       title,
       body: form,
+      /* Закрытие любым путём (Esc, крестик, клик по фону) обязано завершить
+         ожидание промиса: раньше Esc закрывал окно, а код, ждавший ответ,
+         оставался висеть навсегда. */
+      onClose: () => finish(null),
       actions: [
         { label: 'Отмена', kind: 'quiet', onClick: () => finish(null) },
         {
@@ -3674,33 +3940,21 @@ function promptDialog({ title, label, value = '', placeholder = '', confirm = '�
 function confirmDialog(title, text, confirmLabel = 'Подтвердить', danger = false) {
   return new Promise((resolve) => {
     let settled = false;
-    const root = $('#modalRoot');
-    const cleanup = () => {
-      root.removeEventListener('mousedown', onBackdrop);
-      document.removeEventListener('keydown', onKey);
-    };
     const finish = (value) => {
       if (settled) return;
       settled = true;
-      cleanup();
       resolve(value);
-    };
-    const onBackdrop = (event) => {
-      if (event.target === root) finish(false);
-    };
-    const onKey = (event) => {
-      if (event.key === 'Escape') finish(false);
     };
     openModal({
       title,
       body: `<p>${escapeHtml(text)}</p>`,
+      /* Любой способ закрыть окно (Esc, фон, крестик) — это отказ. */
+      onClose: () => finish(false),
       actions: [
         { label: 'Отмена', kind: 'quiet', onClick: () => finish(false) },
         { label: confirmLabel, kind: danger ? 'danger' : 'primary', onClick: () => finish(true) },
       ],
     });
-    root.addEventListener('mousedown', onBackdrop);
-    document.addEventListener('keydown', onKey);
   });
 }
 
@@ -4942,7 +5196,12 @@ function renderAdmin(body, users, overview, approvals = [], refresh = null) {
           label: `Сумма в долларах для «${user.username}» (минус — списать)`,
           confirm: 'Начислить',
         });
-        if (!raw) return;
+        if (!raw) {
+          /* Отмена закрыла окно «Пользователи» (диалог занял его место) —
+             возвращаем список, иначе экран остаётся пустым. */
+          adminModal();
+          return;
+        }
         const usd = Number(String(raw).replace(',', '.').replace(/[^\d.-]/g, ''));
         if (!Number.isFinite(usd) || !usd) {
           toast('Укажите сумму в долларах, например 10');
@@ -4969,7 +5228,10 @@ function renderAdmin(body, users, overview, approvals = [], refresh = null) {
         label: `Пароль для «${user.username}»`,
         confirm: 'Сбросить',
       });
-      if (!password) return;
+      if (!password) {
+        adminModal();
+        return;
+      }
       try {
         await api(`/api/admin/users/${user.id}`, { method: 'PATCH', body: { password } });
         toast('Пароль изменён', 'ok');
@@ -4995,7 +5257,10 @@ function renderAdmin(body, users, overview, approvals = [], refresh = null) {
       del.type = 'button';
       del.addEventListener('click', async () => {
         const ok = await confirmDialog('Удалить пользователя?', `Учётная запись «${user.username}» и все её проекты будут удалены.`, 'Удалить', true);
-        if (!ok) return;
+        if (!ok) {
+          adminModal();
+          return;
+        }
         try {
           await api(`/api/admin/users/${user.id}`, { method: 'DELETE' });
           const idx = users.findIndex((item) => item.id === user.id);
@@ -5034,17 +5299,26 @@ function autoResize(force = false) {
   /* Если лента была у последнего сообщения, после роста поля оставляем её там:
      иначе при сжатии ленты scrollTop обрезался и сообщения «прыгали» вниз. */
   const stick = nearBottom();
-  // Пустое поле — всегда одна строка: иначе подсказка в тесной строке ввода
-  // переносится и раздувает её до двух-трёх строк ещё до начала набора.
-  if (!input.value.trim()) {
+  // Пустое поле держим на двух строках (высота задана в CSS). Проверяем именно
+  // пустую строку, а не trim(): черновик из одних переводов строки — это уже
+  // несколько строк, и прятать их за overflow нельзя.
+  if (!input.value) {
     input.style.height = '';
     input.style.overflowY = 'hidden';
+    input.scrollTop = 0;
     lastComposerLength = 0;
     if (stick) scrollToBottom(true);
     return;
   }
   const max = composerMaxHeight();
-  const current = parseFloat(input.style.height) || 0;
+  const current = input.clientHeight || parseFloat(input.style.height) || 0;
+  const caret = input.selectionStart ?? input.value.length;
+  const atEnd = caret >= input.value.length;
+  /* Положение прокрутки внутри поля: после схлопывания высоты браузер может
+     вернуть его к первой строке, и правка в середине длинного текста теряется
+     из виду. Запоминаем и возвращаем — но только когда текст всё ещё не
+     помещается в предел. */
+  const keepScroll = input.scrollTop;
   /* Высоту схлопываем только когда текст стал короче (или по просьбе).
      На каждый символ это вызывало пересчёт всей ленты и дёргало экран. */
   const shrink = force || !current || input.value.length < lastComposerLength || current > max + 1;
@@ -5060,14 +5334,18 @@ function autoResize(force = false) {
   const needed = input.scrollHeight;
   const fits = !shrink && needed <= input.clientHeight + 1;
   const next = fits ? current : Math.min(needed, max);
-  if (Math.abs(next - current) > 0.5) {
+  if (Math.abs(next - current) > 0.5 || shrink) {
     input.style.height = `${next}px`;
   }
   input.style.overflowY = needed > max ? 'auto' : 'hidden';
-  /* Курсор в конце длинного текста: после смены высоты браузер иногда
-     оставляет поле прокрученным вверх, и последняя строка не видна. */
-  const caret = input.selectionStart ?? input.value.length;
-  if (needed > max && caret >= input.value.length) input.scrollTop = input.scrollHeight;
+  if (needed > max) {
+    /* Курсор в конце длинного текста: после смены высоты браузер иногда
+       оставляет поле прокрученным вверх, и последняя строка не видна. */
+    if (atEnd) input.scrollTop = input.scrollHeight;
+    else if (keepScroll > 0) input.scrollTop = Math.min(keepScroll, input.scrollHeight - input.clientHeight);
+  } else {
+    input.scrollTop = 0;
+  }
   if (stick) scrollToBottom(true);
 }
 
@@ -5602,7 +5880,7 @@ function renderDashboard() {
     text = 'На балансе нет средств: по расписанию задания не запустятся. Пополните баланс — или запускайте отчёты вручную, сразу после пополнения.';
     kind = 'warn';
   } else if (!enabled.length) {
-    text = 'Все задания выключены. Включите нужные переключателем или нажмите «Включить всё» — дальше отчёты будут появляться сами.';
+    text = 'Все задания выключены. Включите нужные переключателями или нажмите «Включить всё» — дальше отчёты будут появляться сами.';
   }
   notice.className = `dash-notice${text ? ` ${kind}` : ' hidden'}`;
   notice.textContent = text;
@@ -6046,6 +6324,14 @@ $('#authSwitchToLogin').addEventListener('click', () => switchAuthForm('login'))
 $('#userChip').addEventListener('click', openUserMenu);
 $('#newProjectBtn').addEventListener('click', (event) => createProjectModal({ anchor: event.currentTarget }));
 $('#composer').addEventListener('submit', sendMessage);
+/* Две отдельные кнопки режима — не меню и не раскрывающийся список:
+   нажатие сразу включает или выключает режим для следующих сообщений. */
+$('#thinkToggle')?.addEventListener('click', () => toggleAnswerMode('thinking'));
+$('#searchToggle')?.addEventListener('click', () => toggleAnswerMode('search'));
+/* На старых iOS CSS-медиазапрос display-mode может не сработать, хотя ярлык
+   уже открыт как приложение. Дублируем состояние классом на <html>. */
+document.documentElement.classList.toggle('app-mode', openedAsApp());
+loadAnswerModes();
 $('#stopBtn').addEventListener('click', stopGeneration);
 $('#attachBtn').addEventListener('click', () => $('#fileInput').click());
 $('#fileInput').addEventListener('change', (event) => {
@@ -6620,7 +6906,7 @@ document.addEventListener('click', (event) => {
 $('#thread').addEventListener('click', async (event) => {
   const button = event.target.closest('[data-copy-code]');
   if (button) {
-    const text = copyStore.get(button.dataset.copyCode) || '';
+    const text = copyStore.get(button.dataset.copyCode) ?? button.closest('pre')?.querySelector('code')?.textContent ?? '';
     try {
       await navigator.clipboard.writeText(text);
       button.textContent = 'Скопировано';

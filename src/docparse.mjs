@@ -202,6 +202,9 @@ function pptxText(buf) {
 const PDF_MAX_STREAMS = 400;
 const PDF_MAX_CONTENT = 4 * 1024 * 1024;
 const PDF_MAX_PIECES = 120000;
+/* Распакованный поток ограничиваем отдельно: маленький PDF может развернуться
+   в гигабайты, а распаковка синхронная и держит весь сервис. */
+const PDF_MAX_STREAM = 32 * 1024 * 1024;
 
 function pdfStreamTexts(buf) {
   const raw = buf.toString('latin1');
@@ -219,10 +222,10 @@ function pdfStreamTexts(buf) {
     const body = buf.subarray(bodyStart, tail);
     let text = '';
     try {
-      text = zlib.inflateSync(body).toString('latin1');
+      text = zlib.inflateSync(body, { maxOutputLength: PDF_MAX_STREAM }).toString('latin1');
     } catch {
       try {
-        text = zlib.inflateRawSync(body).toString('latin1');
+        text = zlib.inflateRawSync(body, { maxOutputLength: PDF_MAX_STREAM }).toString('latin1');
       } catch {
         text = body.toString('latin1');
       }

@@ -1,4 +1,7 @@
+import dns from 'node:dns/promises';
+import net from 'node:net';
 import { extractDocumentText } from './docparse.mjs';
+import { extractReadable, extractFields } from './extract.mjs';
 import { truncate } from './util.mjs';
 
 const UA =
@@ -9,20 +12,86 @@ const FETCH_TIMEOUT_MS = 30000;
 const SEARCH_TIMEOUT_MS = 20000;
 /* Локальные и служебные адреса из облака недоступны: сервис работает на общем
    хосте, и запрос к 127.0.0.1 или к метаданным хостинга — это попытка пройти
-   внутрь инфраструктуры. Страницы пользователя ходят только по публичным IP. */
-const PRIVATE_NET =
-  /^(localhost|.+\.localhost|0\.0\.0\.0|127\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|\[?::1\]?$)/i;
+   внутрь инфраструктуры. Страницы пользователя ходят только по публичным IP.
+
+   Раньше проверялось только написание хоста: `2130706433`, `0x7f.0.0.1`,
+   `[::ffff:127.0.0.1]` и домены вроде `127.0.0.1.nip.io` проходили её насквозь,
+   а перенаправление с публичного сайта на localhost проверялось уже после
+   запроса. Теперь адрес разбирается как IP, а имена разрешаются через DNS. */
 const SKIP_EXT = /\.(png|jpe?g|gif|svg|webp|ico|bmp|zip|rar|7z|gz|mp4|mp3|avi|mov|woff2?|ttf|eot|exe|dmg|apk)(\?|#|$)/i;
 
-function decodeEntities(text) {
-  return String(text)
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#x([0-9a-fA-F]+);/g, (_, h) => String.fromCodePoint(parseInt(h, 16)))
-    .replace(/&#(\d+);/g, (_, d) => String.fromCodePoint(Number(d)))
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&amp;/g, '&');
+const LOCAL_NAMES = /(^|\.)(localhost|local|internal|intranet|home\.arpa|lan|localdomain)$/i;
+
+function isPrivateAddress(value) {
+  const ip = String(value || '')
+    .replace(/^\[|\]$/g, '')
+    .toLowerCase();
+  if (!ip) return true;
+  if (net.isIPv4(ip)) {
+    const [a, b] = ip.split('.').map(Number);
+    if (a === 0 || a === 10 || a === 127) return true;
+    if (a === 169 && b === 254) return true;
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    if (a === 192 && b === 168) return true;
+    if (a === 100 && b >= 64 && b <= 127) return true;
+    if (a === 198 && (b === 18 || b === 19)) return true;
+    return a >= 224;
+  }
+  if (net.isIPv6(ip)) {
+    if (ip === '::' || ip === '::1') return true;
+    if (ip.startsWith('::ffff:')) {
+      /* URL-парсер переписывает IPv4-хвост в hex: [::ffff:127.0.0.1] приходит
+         как ::ffff:7f00:1. Разбираем оба написания. */
+      const tail = ip.slice(7);
+      if (net.isIPv4(tail)) return isPrivateAddress(tail);
+      const hex = /^([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(tail);
+      if (hex) {
+        const high = parseInt(hex[1], 16);
+        const low = parseInt(hex[2], 16);
+        return isPrivateAddress(`${high >> 8}.${high & 255}.${low >> 8}.${low & 255}`);
+      }
+      return true;
+    }
+    if (ip.startsWith('fe8') || ip.startsWith('fe9') || ip.startsWith('fea') || ip.startsWith('feb')) return true;
+    if (ip.startsWith('fc') || ip.startsWith('fd')) return true;
+    if (ip.startsWith('ff')) return true;
+    return false;
+  }
+  return true;
+}
+
+function allowPrivate() {
+  return process.env.DSHOW_ALLOW_PRIVATE_FETCH === '1';
+}
+
+function assertPublicHostname(hostname) {
+  const raw = String(hostname || '')
+    .toLowerCase()
+    .replace(/\.$/, '');
+  /* URL отдаёт адрес IPv6 в скобках: [::1]. net.isIP скобок не понимает. */
+  const host = raw.replace(/^\[|\]$/g, '');
+  if (!host) throw new Error('Локальные и служебные адреса недоступны из облака');
+  if (net.isIP(host)) {
+    if (isPrivateAddress(host)) throw new Error('Локальные и служебные адреса недоступны из облака');
+    return;
+  }
+  if (LOCAL_NAMES.test(host)) throw new Error('Локальные и служебные адреса недоступны из облака');
+}
+
+/* Имя может указывать на внутренний адрес (nip.io, свой DNS): разрешаем его
+   заранее и проверяем каждый полученный IP. */
+async function assertResolvesPublic(hostname) {
+  if (allowPrivate() || net.isIP(String(hostname || '').replace(/^\[|\]$/g, ''))) return;
+  let addresses = [];
+  try {
+    addresses = await dns.lookup(hostname, { all: true, verbatim: true });
+  } catch {
+    throw new Error(`Не удалось найти сайт ${hostname}`);
+  }
+  if (!addresses.length) throw new Error(`Не удалось найти сайт ${hostname}`);
+  for (const entry of addresses) {
+    if (isPrivateAddress(entry.address)) throw new Error('Локальные и служебные адреса недоступны из облака');
+  }
 }
 
 /** Проверяет ссылку и возвращает её объект; локальные адреса запрещены. */
@@ -34,12 +103,21 @@ export function assertPublicUrl(raw) {
     throw new Error('Некорректная ссылка: нужен полный адрес вида https://…');
   }
   if (!/^https?:$/.test(url.protocol)) throw new Error('Разрешены только ссылки http:// и https://');
-  const host = url.hostname.toLowerCase();
   /* Для локальной установки, где сервис сам ходит в свои микросервисы, запрет
      снимается явным флагом окружения. В облаке флаг не выставляется. */
-  const allowPrivate = process.env.DSHOW_ALLOW_PRIVATE_FETCH === '1';
-  if (!allowPrivate && PRIVATE_NET.test(host)) throw new Error('Локальные и служебные адреса недоступны из облака');
+  if (!allowPrivate()) assertPublicHostname(url.hostname);
   return url;
+}
+
+function decodeEntities(text) {
+  return String(text)
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#x([0-9a-fA-F]+);/g, (_, h) => String.fromCodePoint(parseInt(h, 16)))
+    .replace(/&#(\d+);/g, (_, d) => String.fromCodePoint(Number(d)))
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&');
 }
 
 /** Текст ответа с учётом кодировки из заголовка или <meta charset>. */
@@ -181,14 +259,46 @@ function extractLinks(html, baseUrl, origin) {
 
 /**
  * Загружает страницу в читаемом виде: заголовок, описание, структура, таблицы,
- * ссылки и очищенный текст. Работает без браузера — разбирает HTML регулярками
- * и выкидывает навигацию, скрипты и подвалы.
+ * ссылки и очищенный текст. Основной разбор — Readability (как «Режим чтения»):
+ * он выкидывает меню, рекламу и подвал, а таблицы и списки сохраняет.
+ * Если Readability не справился, работает прежний разбор регулярками.
  */
 export async function readPage(rawUrl, { maxChars = 32000 } = {}) {
   const url = assertPublicUrl(rawUrl);
   const page = await requestPage(url.href, { accept: 'text/html,application/xhtml+xml,*/*;q=0.5' });
   if (page.kind !== 'html') {
     return { url: page.url, kind: page.kind, title: '', text: truncate(page.text, maxChars), tables: [], links: [], headings: [] };
+  }
+  try {
+    const extracted = extractReadable(page.text, page.url);
+    if (extracted.text) {
+      /* Сравниваем с итоговым адресом после редиректов, иначе http→https
+         или переезд на другой домен ломает обход: все ссылки «чужие». */
+      const pageOrigin = new URL(page.url).origin;
+      const links = extracted.links.map((link) => {
+        try {
+          return { ...link, sameOrigin: new URL(link.href).origin === pageOrigin };
+        } catch {
+          return { ...link, sameOrigin: false };
+        }
+      });
+      return {
+        url: page.url,
+        kind: 'html',
+        title: extracted.title || extractTitle(page.text),
+        description: extracted.description || extractMeta(page.text, 'description') || extractMeta(page.text, 'og:description'),
+        lang: extracted.lang || /<html[^>]+lang=["']([\w-]+)["']/i.exec(page.text)?.[1] || '',
+        headings: extracted.headings,
+        tables: extracted.tables,
+        links,
+        text: truncate(extracted.text, maxChars),
+        markdown: truncate(extracted.markdown, maxChars),
+        chars: extracted.chars,
+        engine: extracted.engine,
+      };
+    }
+  } catch {
+    /* ниже — старый разбор: он хуже, но не оставляет пользователя без текста */
   }
   const html = stripBoilerplate(page.text);
   const main = pickMain(html);
@@ -201,15 +311,49 @@ export async function readPage(rawUrl, { maxChars = 32000 } = {}) {
     lang: /<html[^>]+lang=["']([\w-]+)["']/i.exec(page.text)?.[1] || '',
     headings: extractHeadings(main),
     tables: extractTables(main),
-    links: extractLinks(html, page.url, url.origin),
+    links: extractLinks(html, page.url, new URL(page.url).origin),
     text: truncate(text, maxChars),
     chars: text.length,
+    engine: 'regex',
   };
+}
+
+/* Запрос с ручным разбором перенаправлений: каждый следующий адрес проходит ту
+   же проверку, что и первый. Автоматический `redirect: 'follow'` этого не даёт —
+   публичный сайт мог перенаправить сервис на 127.0.0.1 или в метаданные. */
+const REDIRECT_STATUS = new Set([301, 302, 303, 307, 308]);
+const MAX_REDIRECTS = 5;
+
+async function fetchGuarded(startUrl, { method, headers, body, signal }) {
+  let target = startUrl;
+  let currentMethod = method;
+  let currentBody = body;
+  for (let hop = 0; hop <= MAX_REDIRECTS; hop += 1) {
+    const url = assertPublicUrl(target);
+    await assertResolvesPublic(url.hostname);
+    const response = await fetch(url, {
+      method: currentMethod,
+      headers,
+      body: currentMethod === 'GET' || currentMethod === 'HEAD' ? undefined : currentBody ?? undefined,
+      redirect: 'manual',
+      signal,
+    });
+    if (!REDIRECT_STATUS.has(response.status)) return { response, url };
+    const location = response.headers.get('location');
+    if (!location) return { response, url };
+    if (hop === MAX_REDIRECTS) throw new Error('Слишком много перенаправлений');
+    const next = new URL(location, url);
+    if (response.status === 303 || ((response.status === 301 || response.status === 302) && currentMethod !== 'GET' && currentMethod !== 'HEAD')) {
+      currentMethod = 'GET';
+      currentBody = null;
+    }
+    target = next.href;
+  }
+  throw new Error('Слишком много перенаправлений');
 }
 
 /** Один HTTP-запрос с разбором кодировки и типа содержимого. */
 async function requestPage(rawUrl, { method = 'GET', headers = {}, body = null, timeoutMs = FETCH_TIMEOUT_MS, accept } = {}) {
-  const url = assertPublicUrl(rawUrl);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -220,11 +364,10 @@ async function requestPage(rawUrl, { method = 'GET', headers = {}, body = null, 
       ...headers,
     };
     const upper = String(method || 'GET').toUpperCase();
-    const response = await fetch(url, {
+    const { response, url } = await fetchGuarded(assertPublicUrl(rawUrl), {
       method: upper,
       headers: requestHeaders,
-      body: upper === 'GET' || upper === 'HEAD' ? undefined : body ?? undefined,
-      redirect: 'follow',
+      body,
       signal: controller.signal,
     });
     if (!response.ok && response.status >= 500) throw new Error(`Сайт ответил ${response.status}`);
@@ -259,18 +402,147 @@ async function requestPage(rawUrl, { method = 'GET', headers = {}, body = null, 
   }
 }
 
-/** Загружает страницу и приводит её к тексту. */
-export async function fetchUrl(url, { maxChars = 24000, method = 'GET', headers = {}, body = null } = {}) {
+/** Загружает страницу и приводит её к тексту. `markdown: true` — с разметкой. */
+export async function fetchUrl(url, { maxChars = 24000, method = 'GET', headers = {}, body = null, markdown = false } = {}) {
   const page = await requestPage(url, { method, headers, body });
-  const text = page.kind === 'html' ? htmlToText(page.text) : page.text;
+  let text = page.text;
+  let title = (text.match(/^.{0,120}/) || [''])[0].trim();
+  let extracted = null;
+  if (page.kind === 'html') {
+    try {
+      extracted = extractReadable(page.text, page.url);
+      text = (markdown ? extracted.markdown : extracted.text) || htmlToText(page.text);
+      title = extracted.title || extractTitle(page.text);
+    } catch {
+      text = htmlToText(page.text);
+      title = extractTitle(page.text);
+    }
+  }
   return {
     url: page.url,
     kind: page.kind,
     status: page.status,
     contentType: page.contentType,
-    title: page.kind === 'html' ? extractTitle(page.text) : (text.match(/^.{0,120}/) || [''])[0].trim(),
+    title,
     text: truncate(text, maxChars),
+    markdown: extracted && page.kind === 'html' ? truncate(extracted.markdown, maxChars) : undefined,
     bytes: page.bytes,
+  };
+}
+
+/**
+ * Отрисовывает страницу настоящим браузером. Нужно для SPA и сайтов, которые
+ * отдают контент только после JS. В облаке без Chromium честно говорит, что
+ * браузера нет, — вместо пустого текста.
+ */
+async function renderHtml(rawUrl, { timeoutMs = 45000, waitMs = 0, waitSelector = '' } = {}) {
+  const url = assertPublicUrl(rawUrl);
+  await assertResolvesPublic(url.hostname);
+  let playwright;
+  try {
+    playwright = await import('playwright');
+  } catch {
+    throw new Error('Браузер недоступен в этом окружении: используйте render:false');
+  }
+  let browser;
+  try {
+    browser = await playwright.chromium.launch({ args: ['--no-sandbox', '--disable-dev-shm-usage'] });
+  } catch (error) {
+    throw new Error(`Браузер не запускается: ${String(error?.message || error).split('\n')[0]}`);
+  }
+  try {
+    const context = await browser.newContext({ locale: 'ru-RU', userAgent: UA, serviceWorkers: 'block' });
+    /* Браузер грузит не только главный адрес: картинки, шрифты и XHR могут
+       смотреть на localhost. Проверяем каждый запрос, иначе публичная страница
+       превращается в SSRF-прокси к внутренней сети. */
+    const hostChecks = new Map();
+    await context.route('**/*', async (route) => {
+      const target = route.request().url();
+      if (/^(data|blob):/i.test(target)) return route.continue();
+      try {
+        const parsed = assertPublicUrl(target);
+        const host = parsed.hostname;
+        if (!hostChecks.has(host)) {
+          hostChecks.set(host, assertResolvesPublic(host).then(() => true).catch(() => false));
+        }
+        if (!(await hostChecks.get(host))) return route.abort();
+        return route.continue();
+      } catch {
+        return route.abort();
+      }
+    });
+    const page = await context.newPage();
+    const response = await page.goto(url.href, { waitUntil: 'domcontentloaded', timeout: timeoutMs });
+    /* После редиректа адрес мог стать внутренним — проверяем ещё раз. */
+    const finalUrl = assertPublicUrl(page.url());
+    await assertResolvesPublic(finalUrl.hostname);
+    await page.waitForLoadState('networkidle', { timeout: Math.min(12000, timeoutMs) }).catch(() => {});
+    if (waitSelector) {
+      await page.waitForSelector(String(waitSelector), { timeout: Math.min(20000, timeoutMs) }).catch(() => {});
+    }
+    if (waitMs) await page.waitForTimeout(Math.min(20000, Math.max(0, waitMs)));
+    const html = await page.content();
+    if (html.length > 12_000_000) throw new Error('Страница слишком большая для разбора (больше 12 МБ HTML)');
+    return { html, url: page.url(), status: response?.status() || 200, kind: 'html' };
+  } finally {
+    await browser.close().catch(() => {});
+  }
+}
+
+/**
+ * Профессиональный разбор одной страницы: Markdown, чистый текст или поля по
+ * CSS-селекторам. Всё локально и бесплатно, без внешних API и ключей.
+ */
+export async function scrapePage(
+  rawUrl,
+  {
+    format = 'markdown',
+    maxChars = 30000,
+    selectors = null,
+    render = false,
+    timeoutMs = 45000,
+    waitMs = 0,
+    waitSelector = '',
+  } = {},
+) {
+  const url = assertPublicUrl(rawUrl);
+  const page = render
+    ? await renderHtml(url.href, { timeoutMs, waitMs, waitSelector })
+    : await requestPage(url.href, { accept: 'text/html,application/xhtml+xml,*/*;q=0.5' });
+  if (page.kind && page.kind !== 'html') {
+    return {
+      url: page.url,
+      kind: page.kind,
+      status: page.status,
+      title: '',
+      text: truncate(page.text, maxChars),
+      fields: null,
+    };
+  }
+  const html = page.text || page.html || '';
+  const extracted = extractReadable(html, page.url);
+  let fields = null;
+  if (selectors && typeof selectors === 'object' && Object.keys(selectors).length) {
+    fields = extractFields(html, page.url, selectors);
+  }
+  const body = format === 'markdown' ? extracted.markdown || extracted.text : extracted.text;
+  return {
+    url: page.url,
+    kind: 'html',
+    status: page.status,
+    title: extracted.title,
+    description: extracted.description,
+    byline: extracted.byline,
+    publishedTime: extracted.publishedTime,
+    lang: extracted.lang,
+    engine: extracted.engine,
+    chars: extracted.chars,
+    markdownChars: extracted.markdownChars,
+    text: truncate(body, maxChars),
+    fields,
+    headings: extracted.headings.slice(0, 30),
+    tables: extracted.tables,
+    links: extracted.links.slice(0, 30),
   };
 }
 
@@ -302,7 +574,7 @@ export async function fetchMany(urls, { maxChars = 8000, concurrency = 3 } = {})
  */
 export async function crawlSite(rawUrl, { maxPages = 8, maxDepth = 1, maxChars = 4000, concurrency = 3 } = {}) {
   const start = assertPublicUrl(rawUrl);
-  const origin = start.origin;
+  start.hash = '';
   const seen = new Set([start.href]);
   const queue = [{ url: start.href, depth: 0 }];
   const pages = [];
@@ -333,11 +605,20 @@ export async function crawlSite(rawUrl, { maxPages = 8, maxDepth = 1, maxChars =
       if (item.depth >= depthLimit) continue;
       for (const link of page.links) {
         if (!link.sameOrigin) continue;
-        if (SKIP_EXT.test(link.href)) continue;
-        if (seen.has(link.href)) continue;
+        let href;
+        try {
+          const next = new URL(link.href);
+          if (!/^https?:$/.test(next.protocol)) continue;
+          next.hash = '';
+          href = next.href;
+        } catch {
+          continue;
+        }
+        if (SKIP_EXT.test(href)) continue;
+        if (seen.has(href)) continue;
         if (pages.length + queue.length >= pagesLimit * 3) break;
-        seen.add(link.href);
-        queue.push({ url: link.href, depth: item.depth + 1 });
+        seen.add(href);
+        queue.push({ url: href, depth: item.depth + 1 });
       }
     }
   }
@@ -345,10 +626,146 @@ export async function crawlSite(rawUrl, { maxPages = 8, maxDepth = 1, maxChars =
 }
 
 /** Поиск в интернете без ключей. Возвращает [{ title, url, snippet }]. */
+/* Простое совпадение по началу слова: «доллара» должно находить «доллар»,
+   а «курсы» — «курс». Служебные слова не считаем, иначе любой посторонний
+   результат с «сегодня» проходил бы проверку. */
+const SEARCH_STOP = new Set([
+  'это', 'как', 'что', 'где', 'когда', 'зачем', 'почему', 'какой', 'какая', 'какие',
+  'сегодня', 'сейчас', 'новый', 'новая', 'новые', 'последние', 'самые', 'лучше',
+  'нужно', 'можно', 'стоит', 'через', 'после', 'перед', 'между', 'также', 'очень',
+]);
+
+function queryTokens(query) {
+  return [...new Set(
+    String(query)
+      .toLowerCase()
+      .replace(/ё/g, 'е')
+      .split(/[^\p{L}\p{N}]+/u)
+      .filter((word) => word.length >= 3 && !/^\d+$/.test(word) && !SEARCH_STOP.has(word)),
+  )].slice(0, 8);
+}
+
+function looksRelevant(result, tokens) {
+  if (!tokens.length) return true;
+  const haystack = `${result.title || ''} ${result.snippet || ''} ${result.url || ''}`
+    .toLowerCase()
+    .replace(/ё/g, 'е');
+  const hits = tokens.filter((token) => haystack.includes(token.slice(0, Math.min(5, token.length))));
+  const need = Math.min(2, tokens.length);
+  return hits.length >= need;
+}
+
+/* Bing отдаёт ссылки через свой редирект ck/a с адресом в base64url-поле u.
+   Разворачиваем его, иначе модель получает ссылку на bing.com и не может
+   открыть источник. */
+function bingLink(raw) {
+  let link = decodeEntities(raw);
+  try {
+    const url = new URL(link, 'https://www.bing.com');
+    const encoded = url.searchParams.get('u');
+    if (encoded && encoded.startsWith('a1')) {
+      const base64 = encoded.slice(2).replace(/-/g, '+').replace(/_/g, '/');
+      const decoded = Buffer.from(base64, 'base64').toString('utf8');
+      if (/^https?:\/\//i.test(decoded)) link = decoded;
+    }
+  } catch {
+    /* оставляем исходную ссылку */
+  }
+  return link;
+}
+
+/* Резервная выдача, когда DuckDuckGo отвечает проверкой на робота (202).
+   Bing отдаёт обычный HTML без ключа; разбираем только органические блоки
+   b_algo. При смене вёрстки функция вернёт пустой список, и вызывающий код
+   покажет честную ошибку вместо выдуманных источников. */
+async function bingSearch(query, limit = 6) {
+  const url = `https://www.bing.com/search?q=${encodeURIComponent(query)}&setlang=ru`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), SEARCH_TIMEOUT_MS);
+  try {
+    const response = await fetch(url, {
+      headers: {
+        'User-Agent': UA,
+        'Accept-Language': 'ru-RU,ru;q=0.9,en;q=0.8',
+        Accept: 'text/html,application/xhtml+xml',
+      },
+      signal: controller.signal,
+    });
+    if (!response.ok) throw new Error(`Поиск недоступен (${response.status})`);
+    const html = await response.text();
+    const results = [];
+    const tokens = queryTokens(query);
+    const blockRe = /<li class="b_algo"[\s\S]*?<\/li>/g;
+    let match;
+    while ((match = blockRe.exec(html)) && results.length < limit) {
+      const block = match[0];
+      const titleMatch = block.match(/<h2[^>]*>\s*<a[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/);
+      if (!titleMatch) continue;
+      const link = bingLink(titleMatch[1]);
+      if (!/^https?:/i.test(link)) continue;
+      const title = htmlToText(titleMatch[2]).slice(0, 200);
+      const snippetMatch = block.match(/<p[^>]*>([\s\S]*?)<\/p>/);
+      const snippet = snippetMatch ? htmlToText(snippetMatch[1]).slice(0, 400) : '';
+      const candidate = { title, url: link, snippet };
+      /* Bing иногда отдаёт вместо выдачи случайные блоки. Не показываем их
+         модели как источники: лучше честная ошибка, чем чужие ссылки. */
+      if (!looksRelevant(candidate, tokens)) continue;
+      results.push(candidate);
+    }
+    return results;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/* Лента Google Новостей отдаётся обычным RSS без ключа и без проверки на
+   робота. Это не замена общему поиску, но для новостей, курсов, цен и
+   законов она даёт свежие материалы с датой и издателем. */
+async function newsSearch(query, limit = 6) {
+  const url = `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=ru&gl=RU&ceid=RU:ru`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), SEARCH_TIMEOUT_MS);
+  try {
+    const response = await fetch(url, {
+      headers: { 'User-Agent': UA, 'Accept-Language': 'ru-RU,ru;q=0.9,en;q=0.8' },
+      signal: controller.signal,
+    });
+    if (!response.ok) throw new Error(`Лента новостей недоступна (${response.status})`);
+    const xml = await response.text();
+    const results = [];
+    const tokens = queryTokens(query);
+    const itemRe = /<item>([\s\S]*?)<\/item>/g;
+    let match;
+    while ((match = itemRe.exec(xml)) && results.length < limit) {
+      const item = match[1];
+      const titleRaw = item.match(/<title>([\s\S]*?)<\/title>/)?.[1] || '';
+      const linkRaw = item.match(/<link>([\s\S]*?)<\/link>/)?.[1] || '';
+      const dateRaw = item.match(/<pubDate>([\s\S]*?)<\/pubDate>/)?.[1] || '';
+      const sourceName = item.match(/<source[^>]*>([\s\S]*?)<\/source>/)?.[1] || '';
+      const title = htmlToText(decodeEntities(titleRaw)).slice(0, 200);
+      const link = decodeEntities(linkRaw).trim();
+      if (!title || !/^https?:/i.test(link)) continue;
+      const source = htmlToText(decodeEntities(sourceName)).trim();
+      const date = dateRaw ? new Date(dateRaw) : null;
+      const when = date && !Number.isNaN(date.getTime())
+        ? date.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' })
+        : '';
+      const snippet = [source, when].filter(Boolean).join(' · ').slice(0, 400);
+      const candidate = { title, url: link, snippet };
+      if (!looksRelevant(candidate, tokens)) continue;
+      results.push(candidate);
+    }
+    return results;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export async function webSearch(query, limit = 6) {
   const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}&kl=ru-ru`;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), SEARCH_TIMEOUT_MS);
+  let ddgError = null;
   try {
     const response = await fetch(url, {
       headers: { 'User-Agent': UA, 'Accept-Language': 'ru-RU,ru;q=0.9,en;q=0.8' },
@@ -370,10 +787,32 @@ export async function webSearch(query, limit = 6) {
       const snippet = snippetMatch ? htmlToText(snippetMatch[1]).slice(0, 400) : '';
       results.push({ title, url: link, snippet });
     }
-    return results;
+    if (results.length) return results;
+    ddgError = new Error('DuckDuckGo вернул пустую выдачу');
+  } catch (error) {
+    ddgError = error;
   } finally {
     clearTimeout(timer);
   }
+
+  const errors = [ddgError?.message].filter(Boolean);
+  try {
+    const results = await bingSearch(query, limit);
+    if (results.length) return results;
+    errors.push('Bing вернул пустую или нерелевантную выдачу');
+  } catch (error) {
+    errors.push(error.message);
+  }
+
+  try {
+    const results = await newsSearch(query, limit);
+    if (results.length) return results;
+    errors.push('Лента новостей вернула пустую выдачу');
+  } catch (error) {
+    errors.push(error.message);
+  }
+
+  throw new Error(`Поиск недоступен: ${errors.join('; ')}`);
 }
 
 /** Несколько поисковых запросов подряд с объединением и дедупликацией выдачи. */

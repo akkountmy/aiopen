@@ -260,6 +260,19 @@ export function staticPageChecks(html, options = {}) {
   };
 }
 
+/**
+ * Короткая строка «чем именно проверяли» — она попадает в событие инструмента
+ * и в живой статус ответа. Человек должен видеть с первого взгляда, пришло ли
+ * доказательство (снимки живого браузера) или суррогат «по коду», который
+ * прокрутку и консоль не увидит.
+ */
+export function pageCheckNote(result) {
+  const shots = (result?.variants || []).filter((variant) => variant?.screenshot).length;
+  if (result?.mode !== 'browser') return 'проверяю страницу по коду: браузера в окружении нет';
+  if (!shots) return 'проверяю страницу в живом браузере';
+  return `проверяю страницу в живом браузере: снимков ${shots}`;
+}
+
 /** Готовый каркас страницы: hero, числа, карточки, таблица, адаптив, плашка ошибок. */
 export function pageTemplate() {
   const file = path.join(SERVICE_ROOT, 'templates', 'page.html');

@@ -34,6 +34,10 @@ const ARTICLE = `<!doctype html><html lang="ru"><head>
 </body></html>`;
 
 const server = http.createServer((req, res) => {
+  if (req.url === '/redirect') {
+    res.writeHead(302, { Location: '/article' }).end();
+    return;
+  }
   if (req.url === '/article') {
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }).end(ARTICLE);
     return;
@@ -76,7 +80,8 @@ const server = http.createServer((req, res) => {
 await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
 const base = `http://127.0.0.1:${server.address().port}`;
 
-const { readPage, fetchUrl, fetchMany, crawlSite, searchMany, assertPublicUrl, decodeBody } = await import('../src/search.mjs');
+const { readPage, fetchUrl, fetchMany, crawlSite, searchMany, assertPublicUrl, decodeBody, scrapePage } = await import('../src/search.mjs');
+const { extractReadable } = await import('../src/extract.mjs');
 const { executeTool, TOOL_DEFS, availableToolDefs } = await import('../src/tools.mjs');
 
 const tests = [];
@@ -84,11 +89,12 @@ const test = (name, fn) => tests.push({ name, fn });
 
 test('новые веб-инструменты объявлены для модели', async () => {
   const names = new Set(TOOL_DEFS.map((tool) => tool.function.name));
-  for (const name of ['read_page', 'fetch_many', 'crawl']) {
+  for (const name of ['read_page', 'scrape_page', 'fetch_many', 'crawl']) {
     assert.ok(names.has(name), `нет инструмента ${name}`);
   }
   const available = await availableToolDefs();
   assert.ok(available.some((tool) => tool.function.name === 'read_page'));
+  assert.ok(available.some((tool) => tool.function.name === 'scrape_page'));
 });
 
 test('read_page отдаёт структуру статьи без меню и подвала', async () => {
@@ -106,11 +112,81 @@ test('read_page отдаёт структуру статьи без меню и 
   assert.ok(!/window\.track/.test(page.text), 'скрипт попал в текст');
 });
 
+test('read_page после редиректа считает ссылки своего сайта', async () => {
+  const page = await readPage(`${base}/redirect`);
+  assert.equal(new URL(page.url).pathname, '/article');
+  const report = page.links.find((link) => link.href.endsWith('/report-2026'));
+  assert.ok(report);
+  assert.equal(report.sameOrigin, true, 'после редиректа внутренняя ссылка стала чужой');
+  const crawl = await crawlSite(`${base}/redirect`, { maxPages: 2, maxDepth: 1 });
+  assert.ok(crawl.pages.some((item) => item.url.endsWith('/report-2026')));
+});
+
 test('read_page работает через инструмент', async () => {
   const result = await executeTool('read_page', { url: `${base}/article` }, { workspace: tmpRoot });
   assert.match(result.text, /Заголовок: Рынок лизинга 2026/);
   assert.match(result.text, /Транспорт \| 54%/);
   assert.match(result.text, /вырос на 18%/);
+});
+
+test('scrape_page: Markdown, таблицы и поля по селекторам', async () => {
+  const page = await scrapePage(`${base}/article`, { format: 'markdown' });
+  assert.ok(['readability', 'dom'].includes(page.engine));
+  assert.match(page.text, /^## Объём рынка/m);
+  assert.match(page.text, /\| Транспорт \| 54% \|/);
+  assert.match(page.text, /\[полном отчёте\]\(http:\/\/127\.0\.0\.1:\d+\/report-2026\)/);
+  assert.ok(!/Меню/.test(page.text), 'меню попало в Markdown');
+  assert.ok(!/Подвал/.test(page.text), 'подвал попал в Markdown');
+
+  const fields = await scrapePage(`${base}/article`, {
+    format: 'json',
+    selectors: {
+      heading: 'h2',
+      report: "a[href$='/report-2026']@href",
+      segment: 'table tr:nth-child(2) td:first-child',
+    },
+  });
+  assert.equal(fields.fields.heading, 'Объём рынка');
+  assert.ok(fields.fields.report.startsWith(base), 'ссылка в поле должна быть абсолютной');
+  assert.equal(fields.fields.segment, 'Транспорт');
+});
+
+test('scrape_page работает через инструмент', async () => {
+  const markdown = await executeTool('scrape_page', { url: `${base}/article` }, { workspace: tmpRoot });
+  assert.match(markdown.text, /## Объём рынка/);
+  assert.match(markdown.text, /Транспорт/);
+
+  const json = await executeTool(
+    'scrape_page',
+    { url: `${base}/article`, format: 'json', selectors: { price: 'h2' } },
+    { workspace: tmpRoot },
+  );
+  assert.equal(JSON.parse(json.text.slice(json.text.indexOf('{'))).price, 'Объём рынка');
+});
+
+test('extractReadable: вложенные списки, mailto и абсолютные картинки', () => {
+  const html = `<!doctype html><html lang="ru"><head><title>Контакты</title></head><body><main><article>
+    <h1>Контакты</h1><p>${'Текст статьи. '.repeat(40)}</p>
+    <ul><li>Отдел продаж<ul><li>Москва</li><li>Казань</li></ul></li></ul>
+    <p>Почта: <a href="mailto:sales@example.com">sales@example.com</a></p>
+    <img src="/logo.png" alt="Логотип">
+  </article></main></body></html>`;
+  const out = extractReadable(html, 'https://example.com/contacts');
+  assert.match(out.markdown, /\n\s+- +Москва/);
+  assert.match(out.markdown, /mailto:sales@example\.com/);
+  assert.match(out.markdown, /!\[Логотип\]\(https:\/\/example\.com\/logo\.png\)/);
+  assert.ok(out.links.some((link) => link.href === 'mailto:sales@example.com'));
+});
+
+test('extractReadable: <base href> и ленивые картинки', () => {
+  const html = `<!doctype html><html><head><base href="https://cdn.example/assets/"><title>База</title></head>
+    <body><main><article><h1>База</h1><p>${'Текст статьи. '.repeat(40)}</p>
+    <a href="page.html">Страница</a>
+    <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==" data-src="lazy.jpg" alt="Ленивая">
+    </article></main></body></html>`;
+  const out = extractReadable(html, 'https://site.example/news/1');
+  assert.ok(out.links.some((link) => link.href === 'https://cdn.example/assets/page.html'));
+  assert.match(out.markdown, /!\[Ленивая\]\(https:\/\/cdn\.example\/assets\/lazy\.jpg\)/);
 });
 
 test('POST с телом и своими заголовками работает', async () => {

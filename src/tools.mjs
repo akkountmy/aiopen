@@ -11,10 +11,10 @@ import { createDocumentPdf, createPresentationPdf } from './pdf.mjs';
 import { docEngines, docIssues, makePdf, makePresentation, makeWord, makeWorkbook } from './doc/index.mjs';
 import { imageInfo } from './doc/image-info.mjs';
 import { describeImage } from './vision.mjs';
-import { fetchUrl, webSearch, readPage, fetchMany, crawlSite, searchMany } from './search.mjs';
+import { fetchUrl, webSearch, readPage, fetchMany, crawlSite, searchMany, scrapePage } from './search.mjs';
 import { runJavascript } from './jsruntime.mjs';
 import { checkPage, describePage } from './browser.mjs';
-import { pageTemplate, staticPageChecks, staticIssueCount } from './pagecheck.mjs';
+import { pageCheckNote, pageTemplate, staticPageChecks, staticIssueCount } from './pagecheck.mjs';
 import { escapeHtml, formatBytes, safeName, truncate } from './util.mjs';
 import { writeZip } from './zip.mjs';
 
@@ -245,6 +245,45 @@ export function buildDocx({ title, paragraphs = [], bullets = [], table = null }
 
 /* ------------------------------ Python ------------------------------ */
 
+/* Песочница для run_python. Код из чата — это недоверенный ввод: он приходит
+   от модели, которую можно уговорить прочитать /data/index.json (пароли других
+   людей, переписки) или отправить что-нибудь наружу. Аудит-хук Python ставится
+   до кода пользователя и запрещает читать служебные папки сервиса, писать вне
+   папки проекта, открывать сокеты и запускать другие программы. Это не замена
+   контейнеру, но убирает самые дешёвые пути утечки. */
+const PYTHON_GUARD = `import os as _os, sys as _sys
+_ROOT = _os.path.realpath(_os.getcwd())
+_TMP = _os.path.realpath(_os.environ.get('TMPDIR') or _os.environ.get('TEMP') or '/tmp')
+_DENY = tuple(_os.path.realpath(part) for part in ('/data', '/app', '/etc', '/root', '/home', '/proc'))
+def _allowed(path, write):
+    try:
+        real = _os.path.realpath(path)
+    except Exception:
+        return True
+    if real == _ROOT or real.startswith(_ROOT + _os.sep):
+        return True
+    if real == _TMP or real.startswith(_TMP + _os.sep):
+        return not write
+    for deny in _DENY:
+        if real == deny or real.startswith(deny + _os.sep):
+            return False
+    return not write
+def _hook(event, args):
+    if event == 'open':
+        target, mode, flags = args[0], args[1], args[2]
+        if isinstance(target, int):
+            return
+        write = bool(isinstance(mode, str) and any(ch in mode for ch in 'wax+'))
+        write = write or bool(isinstance(flags, int) and flags & (_os.O_WRONLY | _os.O_RDWR | _os.O_CREAT | _os.O_APPEND))
+        if not _allowed(_os.fspath(target), write):
+            raise PermissionError('run_python: доступ к этому пути закрыт, работай в папке проекта')
+    elif event in ('socket.connect', 'socket.getaddrinfo', 'socket.bind', 'socket.sendto',
+                   'subprocess.Popen', 'os.system', 'os.exec', 'os.spawn', 'os.posix_spawn',
+                   'ctypes.dlopen', 'ctypes.dlsym'):
+        raise PermissionError('run_python: сеть и запуск других программ здесь запрещены')
+_sys.addaudithook(_hook)
+`;
+
 let pythonBin = null;
 
 async function findPython() {
@@ -263,9 +302,31 @@ async function findPython() {
   throw new Error('Python не найден на этом компьютере');
 }
 
+/* Окружение для Python. Раньше дочернему процессу отдавался весь `process.env`,
+   то есть вместе с ключом модели и прочими секретами сервиса: любой код,
+   попавший в run_python (в контейнере он есть), мог их прочитать и отправить
+   наружу. Теперь передаём только то, что нужно интерпретатору. */
+function pythonEnv(cwd) {
+  const base = process.env;
+  const env = {
+    PATH: base.PATH || base.Path || '',
+    HOME: cwd,
+    TMPDIR: base.TMPDIR || '/tmp',
+    LANG: base.LANG || 'C.UTF-8',
+    LC_ALL: base.LC_ALL || '',
+    PYTHONIOENCODING: 'utf-8',
+    PYTHONDONTWRITEBYTECODE: '1',
+  };
+  /* Windows без этих переменных не запускает процесс и не находит системные DLL. */
+  for (const key of ['SYSTEMROOT', 'SystemRoot', 'COMSPEC', 'ComSpec', 'PATHEXT', 'WINDIR', 'TEMP', 'TMP', 'USERPROFILE']) {
+    if (base[key]) env[key] = base[key];
+  }
+  return env;
+}
+
 function runProcess(command, args, { cwd, timeoutMs, input }) {
   return new Promise((resolve) => {
-    const child = spawn(command, args, { cwd, windowsHide: true, env: { ...process.env, PYTHONIOENCODING: 'utf-8' } });
+    const child = spawn(command, args, { cwd, windowsHide: true, env: pythonEnv(cwd) });
     let stdout = '';
     let stderr = '';
     let killed = false;
@@ -873,6 +934,36 @@ export const TOOL_DEFS = [
   {
     type: 'function',
     function: {
+      name: 'scrape_page',
+      description:
+        'Разобрать страницу профессионально: чистый Markdown с заголовками, списками и таблицами, либо текст, либо поля по CSS-селекторам (цена, название, ссылка, дата). Понимает selector@attr. Для сайтов на JavaScript включите render — страница отрисуется браузером. Бесплатно, без внешних API и ключей.',
+      parameters: {
+        type: 'object',
+        properties: {
+          url: { type: 'string', description: 'Полный адрес http(s)://…' },
+          format: {
+            type: 'string',
+            enum: ['markdown', 'text', 'json'],
+            description: 'markdown (по умолчанию), text или json для полей по селекторам.',
+          },
+          selectors: {
+            type: 'object',
+            description:
+              'Поля для сбора, например {"title":"h1","price":".price","link":"a.buy@href","date":"time@datetime"}. Без него возвращается статья.',
+          },
+          render: { type: 'boolean', description: 'Отрисовать JavaScript в браузере (медленнее; в облаке может быть недоступно).' },
+          wait_ms: { type: 'integer', description: 'Подождать после загрузки при render, мс, до 20000.' },
+          wait_selector: { type: 'string', description: 'Дождаться элемента при render, например ".price".' },
+          max_chars: { type: 'integer', description: 'Максимум символов результата, по умолчанию 30000.' },
+          timeout_ms: { type: 'integer', description: 'Предел загрузки при render, мс, до 90000.' },
+        },
+        required: ['url'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'fetch_many',
       description:
         'Загрузить до 6 ссылок параллельно и получить текст каждой. Быстрее, чем вызывать fetch_url по одной, и не срывается, если часть ссылок недоступна.',
@@ -1323,7 +1414,7 @@ export const TOOL_DEFS = [
     function: {
       name: 'use_skill',
       description:
-        'Открыть полную инструкцию навыка по его id. Список навыков с описаниями есть в системном сообщении. Вызывай до начала работы над документом, таблицей, презентацией, PDF или сайтом.',
+        'Открыть полную инструкцию навыка по его id. Список навыков с описаниями есть в системном сообщении. Вызывай до начала работы над документом, таблицей, презентацией, PDF, сайтом или сбором данных со страниц.',
       parameters: {
         type: 'object',
         properties: {
@@ -1800,6 +1891,44 @@ export async function executeTool(name, args, ctx) {
       parts.push(`Текст:\n${page.text}`);
       return { text: parts.join('\n\n'), meta: { url: page.url, chars: page.chars } };
     }
+    case 'scrape_page': {
+      const format = ['markdown', 'text', 'json'].includes(args.format) ? args.format : 'markdown';
+      const page = await scrapePage(args.url, {
+        format,
+        maxChars: Math.min(80000, Math.max(1000, Number(args.max_chars) || 30000)),
+        selectors: args.selectors && typeof args.selectors === 'object' && !Array.isArray(args.selectors) ? args.selectors : null,
+        render: Boolean(args.render),
+        waitMs: Math.min(20000, Math.max(0, Number(args.wait_ms) || 0)),
+        waitSelector: typeof args.wait_selector === 'string' ? args.wait_selector : '',
+        timeoutMs: Math.min(90000, Math.max(5000, Number(args.timeout_ms) || 45000)),
+      });
+      const head = `URL: ${page.url}${page.title ? `\nЗаголовок: ${page.title}` : ''}`;
+      if (page.fields) {
+        return {
+          text: `${head}\n\n${JSON.stringify(page.fields, null, 2)}`,
+          meta: { url: page.url, fields: Object.keys(page.fields).length, engine: page.engine, chars: page.chars },
+        };
+      }
+      if (format === 'json') {
+        const data = {
+          url: page.url,
+          title: page.title,
+          description: page.description,
+          byline: page.byline,
+          publishedTime: page.publishedTime,
+          lang: page.lang,
+          headings: page.headings,
+          tables: page.tables,
+          links: page.links,
+          text: page.text,
+        };
+        return { text: JSON.stringify(data, null, 2), meta: { url: page.url, engine: page.engine, chars: page.chars } };
+      }
+      return {
+        text: `${head}${page.description ? `\nОписание: ${page.description}` : ''}\n\n${page.text}`,
+        meta: { url: page.url, engine: page.engine, chars: page.chars, markdown: format === 'markdown' },
+      };
+    }
     case 'fetch_many': {
       const pages = await fetchMany(args.urls, { maxChars: Math.min(20000, Number(args.max_chars) || 8000) });
       const ok = pages.filter((page) => !page.error).length;
@@ -1815,7 +1944,7 @@ export async function executeTool(name, args, ctx) {
     case 'crawl': {
       const result = await crawlSite(args.url, {
         maxPages: Number(args.max_pages) || 8,
-        maxDepth: Number(args.max_depth) || 0,
+        maxDepth: Number.isFinite(Number(args.max_depth)) ? Number(args.max_depth) : 1,
         maxChars: Math.min(12000, Number(args.max_chars) || 4000),
       });
       const body = result.pages
@@ -1850,6 +1979,7 @@ export async function executeTool(name, args, ctx) {
           screenshots: variants.map((variant) => variant.screenshot),
           failedWidths: failed,
           staticIssues: staticIssueCount(result.static || {}),
+          note: pageCheckNote(result),
         },
       };
     }
@@ -1873,8 +2003,11 @@ export async function executeTool(name, args, ctx) {
       const tmpDir = path.join(root, '.dshow');
       fs.mkdirSync(tmpDir, { recursive: true });
       const scriptPath = path.join(tmpDir, `run_${Date.now()}.py`);
-      fs.writeFileSync(scriptPath, code, 'utf8');
-      const result = await runProcess(bin, [scriptPath], {
+      fs.writeFileSync(scriptPath, `${PYTHON_GUARD}\n${code}`, 'utf8');
+      /* -B: не писать __pycache__ в папку проекта. Окружение уже отфильтровано,
+         поэтому -E/-I не нужны, а -I вдобавок запрещал бы импорт своих модулей
+         из папки проекта. */
+      const result = await runProcess(bin, ['-B', scriptPath], {
         cwd: root,
         timeoutMs: LIMITS.pythonTimeoutMs,
       });

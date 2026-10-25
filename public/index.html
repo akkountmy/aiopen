@@ -105,7 +105,7 @@
             <!-- Иконка — та же, что у кнопки «добавить рабочую область» в
                  Harness: контур папки, а в правом верхнем углу знак «+».
                  Старая папка с крупным плюсом внутри убрана. -->
-            <button id="newProjectBtn" class="btn btn-ghost btn-new" type="button" title="Новый проект">
+            <button id="newProjectBtn" class="btn btn-ghost btn-new" type="button" title="Новый проект" aria-label="Новый проект">
               <svg class="ico-solid" viewBox="0 0 16 16" aria-hidden="true"><path transform="translate(9.52 2.52)" d="M3.55246 0L3.55246 2.44252L6 2.44252L6 3.55748L3.55246 3.55748L3.55246 6L2.43834 6L2.43834 3.55748L0 3.55748L0 2.44252L2.43834 2.44252L2.43834 0L3.55246 0Z" /><path transform="translate(0.3496 2.35)" d="M4.76367 0C5.36861 1.80598e-05 5.93113 0.310294 6.25488 0.821289L6.78027 1.64941C6.79685 1.67558 6.81791 1.69775 6.83887 1.71973C6.72186 2.15521 6.65702 2.61192 6.65137 3.08301C6.25601 2.96045 5.90909 2.70478 5.68164 2.3457L5.15723 1.5166C5.07183 1.38189 4.92318 1.3008 4.76367 1.30078L2.32422 1.30078C1.7589 1.30078 1.30078 1.7589 1.30078 2.32422L1.30078 10.1338C1.30078 10.6991 1.7589 11.1572 2.32422 11.1572L11.9766 11.1572C12.5419 11.1572 13 10.6991 13 10.1338L13 8.58398C13.4545 8.5135 13.8903 8.38748 14.3008 8.21289L14.3008 10.1338C14.3008 11.4171 13.2598 12.458 11.9766 12.458L2.32422 12.458C1.04093 12.458 0 11.4171 0 10.1338L0 2.32422C0 1.04093 1.04093 0 2.32422 0L4.76367 0Z" /></svg>
               <span>Новый проект</span>
             </button>
@@ -213,6 +213,20 @@
         <div class="composer-wrap">
           <form id="composer" class="composer" autocomplete="off">
             <div id="attachStrip" class="attach-strip hidden"></div>
+            <!-- Режимы ответа — как в мобильном приложении DeepSeek: две
+                 отдельные кнопки-переключателя, а не один «плюс» с
+                 раскрывающимся списком. На компьютере скрыты, показываются
+                 на телефоне и в ярлыке-приложении (см. styles.css). -->
+            <div id="composerModes" class="composer-modes" role="group" aria-label="Режимы ответа">
+              <button id="thinkToggle" class="mode-chip" type="button" aria-pressed="false" title="Рассуждения: сильная модель и глубокий разбор задачи">
+                <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 2.4l1.5 4.1 4.1 1.5-4.1 1.5L10 13.6 8.5 9.5 4.4 8l4.1-1.5L10 2.4z" /><path d="M15.4 12.8l.7 1.9 1.9.7-1.9.7-.7 1.9-.7-1.9-1.9-.7 1.9-.7.7-1.9z" /></svg>
+                <span>Рассуждения</span>
+              </button>
+              <button id="searchToggle" class="mode-chip" type="button" aria-pressed="false" title="Поиск в интернете: свежие данные и ссылки на источники">
+                <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.8" cy="8.8" r="5.5" /><path d="M12.9 12.9l4.1 4.1" /></svg>
+                <span>Поиск</span>
+              </button>
+            </div>
             <div class="composer-row">
               <button id="attachBtn" class="btn btn-ghost attach-btn" type="button" title="Прикрепить файлы (фото, документы, таблицы)" aria-label="Прикрепить файлы">
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21.4 11l-9.2 9.2a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 1 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5" /></svg>

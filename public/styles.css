@@ -14,10 +14,16 @@
   --text: #f9fafb;
   --text-2: #adb2b8;
   --text-3: #81858c;
-  --text-4: #61666b;
+  --text-4: #8b9096;
   --accent: #5686fe;
   --accent-soft: rgba(86, 134, 254, 0.14);
   --accent-strong: #679efe;
+  /* Заливка кнопок с белым текстом. Акцент #5686fe на белом даёт 3.37:1 —
+     ниже порога читаемости, а на наведении было 2.66:1. Для заливки берём
+     более тёмный тон (5.63:1, на наведении 4.69:1); сам --accent остаётся
+     цветом ссылок и значков, где он на тёмном фоне читается нормально. */
+  --accent-fill: #3f63bd;
+  --accent-fill-hover: #4a70cc;
   --success: #4ed17e;
   --danger: #f25a5a;
   --danger-ink: #f3b4b4;
@@ -97,10 +103,13 @@
   --text: #111827;
   --text-2: #4b5563;
   --text-3: #6b7280;
-  --text-4: #9aa1ab;
+  --text-4: #5f6673;
   --accent: #3569e8;
   --accent-soft: rgba(53, 105, 232, 0.1);
   --accent-strong: #2a58c9;
+  /* В светлой теме акцент и так тёмный: 4.84:1 с белым текстом. */
+  --accent-fill: var(--accent);
+  --accent-fill-hover: var(--accent-strong);
   --success: #16803c;
   --danger: #d92d20;
   --danger-ink: #b42318;
@@ -533,7 +542,7 @@ svg {
 
 .btn-primary {
   height: 40px;
-  background: var(--accent);
+  background: var(--accent-fill);
   color: #fff;
   font-weight: 500;
   font-size: var(--fs-14);
@@ -541,7 +550,7 @@ svg {
 }
 
 .btn-primary:hover:not(:disabled) {
-  background: var(--accent-strong);
+  background: var(--accent-fill-hover);
 }
 
 .btn-block {
@@ -626,14 +635,14 @@ svg {
   width: 34px;
   height: 34px;
   border-radius: var(--radius-sm);
-  background: var(--accent);
+  background: var(--accent-fill);
   color: #fff;
   padding: 0;
   flex: none;
 }
 
 .btn-send:hover:not(:disabled) {
-  background: var(--accent-strong);
+  background: var(--accent-fill-hover);
 }
 
 .btn-send svg {
@@ -774,6 +783,41 @@ body.resizing {
 
 /* Строка проекта: выше, с крупными деталями и тем же скруглением, что у
    кнопок, — имя, счётчик диалогов, плюс и «три точки» читаются без прицела. */
+/* Основное действие строки — отдельная кнопка, а не роль на всей строке:
+   внутри строки уже есть кнопки «плюс» и меню, а вложение интерактивных
+   элементов друг в друга ломает и озвучку, и клавиатуру. Строка остаётся
+   контейнером, кнопка занимает её основную часть и всю высоту. */
+.row-main {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  line-height: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.row-main:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  border-radius: var(--radius-xs);
+}
+
+.chat-row .row-main {
+  gap: 8px;
+}
+
+.file-row .row-main {
+  gap: 8px;
+}
+
 .project-row {
   display: flex;
   align-items: center;
@@ -1515,6 +1559,10 @@ body.resizing {
   pointer-events: auto;
 }
 
+[data-theme="light"] .scroll-jump.on {
+  opacity: 0.66;
+}
+
 .scroll-jump:hover,
 .scroll-jump:focus-within {
   opacity: 1;
@@ -1571,8 +1619,11 @@ body.resizing {
   color: var(--text);
 }
 
+/* Неактивная стрелка раньше была 0.3 от и без того полупрозрачной панели —
+   на светлом фоне её просто не видно. Держим её контрастным серым. */
 .scroll-jump button.is-off {
-  opacity: 0.3;
+  color: var(--text-3);
+  opacity: 0.55;
   cursor: default;
 }
 
@@ -1768,6 +1819,70 @@ html.kb-open .scroll-jump {
   border: 2px solid rgba(86, 134, 254, 0.28);
   border-top-color: var(--accent);
   animation: spin 0.85s linear infinite;
+}
+
+/* Пометки режимов под именем ассистента: компактно, тем же кеглем, что и
+   подпись «AI-ассистент», чтобы не отвлекать от ответа. */
+.msg-modes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin: 4px 0 1px;
+}
+
+.msg-mode {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 7px;
+  border: 1px solid rgba(86, 134, 254, 0.28);
+  border-radius: 999px;
+  color: var(--accent);
+  background: rgba(86, 134, 254, 0.08);
+  font-size: var(--fs-11);
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.msg-mode svg {
+  width: 11px;
+  height: 11px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* Свёрнутый ход рассуждений. В приложении он тоже спрятан под заголовком:
+   человеку нужен ответ, а не черновик модели. */
+.msg-reasoning {
+  margin: 6px 0 2px;
+  border-left: 2px solid var(--line-strong);
+  padding-left: 10px;
+  color: var(--text-3);
+  font-size: var(--fs-13);
+  line-height: var(--lh-20);
+}
+
+.msg-reasoning summary {
+  cursor: pointer;
+  color: var(--text-4);
+  font-size: var(--fs-12);
+  user-select: none;
+}
+
+.msg-reasoning[open] summary {
+  margin-bottom: 6px;
+}
+
+.msg-reasoning-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 320px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .md {
@@ -2156,6 +2271,90 @@ html.kb-open .scroll-jump {
   gap: 4px;
 }
 
+/* Режимы ответа. Задуманы как в мобильном DeepSeek: две подписи-таблетки
+   над полем ввода, каждая включается отдельно и подсвечивается. На широком
+   экране не показываем — там композер остаётся прежним; на телефоне и в
+   ярлыке-приложении строка раскрывается (см. медиазапросы ниже). */
+.composer-modes {
+  display: none;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 2px 4px 5px;
+}
+
+.mode-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 11px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-3);
+  font: inherit;
+  font-size: var(--fs-13);
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.mode-chip svg {
+  width: 15px;
+  height: 15px;
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+@media (hover: hover) {
+  .mode-chip:hover:not(:disabled) {
+    color: var(--text);
+    background: var(--layer-hover);
+  }
+}
+
+.mode-chip[aria-pressed="true"] {
+  color: var(--accent);
+  border-color: rgba(86, 134, 254, 0.5);
+  background: var(--accent-soft);
+}
+
+.mode-chip[aria-pressed="true"] svg {
+  stroke-width: 1.9;
+}
+
+.mode-chip:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+@media (max-width: 860px) {
+  .composer-modes {
+    display: flex;
+  }
+}
+
+/* Ярлык-приложение на планшете может быть шире телефона: режимы всё равно
+   остаются доступными, потому что это отдельный установленный клиент. */
+@media (display-mode: standalone) {
+  .composer-modes {
+    display: flex;
+  }
+}
+
+/* Старые iOS не всегда отдают display-mode в CSS, хотя navigator.standalone
+   уже true. Класс ставит app.js по тому же признаку. */
+html.app-mode .composer-modes {
+  display: flex;
+}
+
 .attach-btn {
   width: 34px;
   height: 34px;
@@ -2187,6 +2386,9 @@ html.kb-open .scroll-jump {
   font-size: var(--fs-14);
   line-height: var(--lh-24);
   overflow-y: hidden;
+  /* Дойдя до нижнего края, прокрутка поля не тянет за собой ленту диалога:
+     длинный черновик листается внутри поля, а не двигает переписку. */
+  overscroll-behavior: contain;
 }
 
 #input::placeholder {
@@ -3804,6 +4006,21 @@ html.kb-open .scroll-jump {
     padding: 6px 6px 6px 2px;
     border-radius: var(--radius-lg);
   }
+  /* На телефоне пальцем удобнее попасть в кнопку 34 px: ряд режимов стоит
+     над полем и не отнимает ширину у скрепки и отправки. */
+  .composer-modes {
+    gap: 7px;
+    padding: 3px 6px 7px;
+  }
+  .mode-chip {
+    height: 34px;
+    padding: 0 12px;
+    font-size: var(--fs-13);
+  }
+  .mode-chip svg {
+    width: 16px;
+    height: 16px;
+  }
   .composer-hint {
     display: none;
   }
@@ -3824,8 +4041,11 @@ html.kb-open .scroll-jump {
   }
   /* 16 px — иначе iOS сам увеличивает страницу при фокусе, и края уезжают:
      сообщения обрезаны справа, кнопка отправки оказывается за экраном. */
+  /* Две строки видны сразу, ещё до первого символа: на телефоне и в ярлыке
+     поле не «подрастает» на второй строке и не двигает ленту. Высота ровно
+     две строки плюс отступы сверху и снизу (24 × 2 + 8 × 2 = 64 px). */
   #input {
-    min-height: 38px;
+    min-height: calc(var(--lh-24) * 2 + 16px);
     padding: 8px 4px;
     font-size: 16px;
     max-width: 100%;
@@ -4113,6 +4333,7 @@ html.kb-open .scroll-jump {
 /* Клавиатурный фокус: кольцо в цвет акцента вместо системной рамки. Только
    :focus-visible — после мыши и тапа ничего не «залипает» на кнопке. */
 .btn:focus-visible,
+.mode-chip:focus-visible,
 .row-menu:focus-visible,
 .row-plus:focus-visible,
 .project-row:focus-visible,
@@ -6286,5 +6507,48 @@ html.kb-open .scroll-jump {
 @media (max-width: 420px) {
   .topbar .topbar-right .user-chip-top {
     width: 38px;
+  }
+}
+
+/* --------------------------------- касания --------------------------------
+   На сенсорном экране палец крупнее курсора: у мелких кнопок строк (меню
+   диалога/проекта, «плюс») увеличиваем зону нажатия не меняя вёрстку —
+   невидимая накладка вокруг значка. Сама плашка подсветки остаётся прежней. */
+@media (hover: none) {
+  .row-menu::before {
+    content: '';
+    position: absolute;
+    inset: -7px;
+  }
+
+  .row-plus::before {
+    content: '';
+    position: absolute;
+    inset: -7px;
+  }
+
+  .row-menu,
+  .row-plus {
+    position: relative;
+  }
+
+  /* Строки списков на телефоне выше: 36/32/30 px — меньше комфортного
+     минимума для пальца. */
+  .project-row {
+    height: 42px;
+  }
+
+  .chat-row {
+    height: 40px;
+  }
+
+  .file-row {
+    height: 38px;
+  }
+
+  .file-row .f-actions .btn-icon,
+  .file-row .f-actions .row-menu {
+    width: 34px;
+    height: 34px;
   }
 }

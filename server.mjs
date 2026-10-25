@@ -131,6 +131,7 @@ function runSnapshot(run) {
   return {
     ...publicRun(run),
     text: run.text,
+    reasoning: run.reasoning,
     tools: run.tools,
     title: run.title,
     budget: run.budget,
@@ -157,6 +158,7 @@ function createRun({ user, project, chat }) {
     startedMs: Date.now(),
     seq: 0,
     text: '',
+    reasoning: '',
     tools: [],
     title: '',
     budget: null,
@@ -181,6 +183,7 @@ function publishRun(run, data) {
   run.seq += 1;
   const event = { ...data, runId: run.id };
   if (data.type === 'delta') run.text += data.text || '';
+  else if (data.type === 'reasoning') run.reasoning = (run.reasoning + (data.text || '')).slice(-24000);
   else if (data.type === 'tool') {
     const known = run.tools.find((tool) => tool.id === data.id);
     if (known) Object.assign(known, data);
@@ -603,16 +606,32 @@ function sessionsReport() {
   };
 }
 
+/* Адрес клиента за прокси. Берём последний хоп X-Forwarded-For — его дописывает
+   наш прокси, а всё, что левее, приходит от клиента и подделывается тривиально:
+   с первым хопом лимит входов на адрес обходился одним заголовком. */
 function clientIp(req) {
   if (TRUST_PROXY) {
-    const forwarded = String(req.headers['x-forwarded-for'] || '')
-      .split(',')[0]
-      .trim();
-    if (forwarded) return forwarded;
+    const chain = String(req.headers['x-forwarded-for'] || '')
+      .split(',')
+      .map((part) => part.trim())
+      .filter(Boolean);
+    if (chain.length) return chain[chain.length - 1];
     const real = String(req.headers['x-real-ip'] || '').trim();
     if (real) return real;
   }
   return req.socket.remoteAddress || '';
+}
+
+/* Декодирование того, что пришло от клиента. `decodeURIComponent('%')` бросает
+   исключение, и раньше такой заголовок или путь давал 500 вместо понятного
+   ответа; битую строку возвращаем как есть — её отбракует проверка имени. */
+function tryDecode(value) {
+  const text = String(value ?? '');
+  try {
+    return decodeURIComponent(text);
+  } catch {
+    return text;
+  }
 }
 
 /* Скользящий срок жизни входа. Продлевать мало на сервере: у cookie в браузере
@@ -719,13 +738,25 @@ function chatMeta(chat) {
 
 /* Внешний адрес сервиса. Нужен для ссылки, которую открывает Word/Excel:
    приложение качает файл само, поэтому адрес должен быть публичным. */
+const DEFAULT_PUBLIC_ORIGIN = 'https://dshopen-vladimir00177.msk1.amvera.tech';
+const PUBLIC_HOST_RE = /^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?(?::\d{1,5})?$/i;
+
+/* Адрес сервиса для ссылок, которые уходят наружу (Telegram, Word/Excel).
+   За прокси хост приходит заголовком, и подставить туда чужой домен может любой
+   клиент — тогда короткая ссылка на файл проекта уводила бы в чужой домен.
+   Поэтому при работе за прокси берём только явно настроенный адрес. */
 function publicOrigin(req) {
   const configured = String(process.env.DSHOW_PUBLIC_URL || '').trim();
   if (configured) return configured.replace(/\/+$/, '');
-  const rawProto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim();
-  const rawHost = String(req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0].trim();
-  const proto = rawProto || (req.socket?.encrypted ? 'https' : 'http');
-  return rawHost ? `${proto}://${rawHost}` : 'https://dshopen-vladimir00177.msk1.amvera.tech';
+  if (!TRUST_PROXY) {
+    const rawHost = String(req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0].trim();
+    if (PUBLIC_HOST_RE.test(rawHost)) {
+      const rawProto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim();
+      const proto = rawProto === 'https' ? 'https' : rawProto === 'http' ? 'http' : req.socket?.encrypted ? 'https' : 'http';
+      return `${proto}://${rawHost}`;
+    }
+  }
+  return DEFAULT_PUBLIC_ORIGIN;
 }
 
 function projectLimit(project) {
@@ -1009,11 +1040,17 @@ async function handleSignup(req, res) {
 }
 
 async function handleUpload(req, res, user) {
-  const rawName = decodeURIComponent(String(req.headers['x-filename'] || 'file'));
+  const rawName = tryDecode(String(req.headers['x-filename'] || 'file'));
   const projectId = String(req.headers['x-project-id'] || '');
-  const chatId = String(req.headers['x-chat-id'] || '') || null;
   const project = store.getProject(projectId, user.id);
   if (!project) return sendError(res, 404, 'Проект не найден');
+  /* Диалог приходит заголовком: без проверки в чужую переписку можно было
+     подложить свой файл (и он появился бы у другого человека в ленте). */
+  let chatId = String(req.headers['x-chat-id'] || '') || null;
+  if (chatId) {
+    const chat = store.getChat(chatId, user.id);
+    if (!chat || chat.projectId !== project.id) chatId = null;
+  }
   const mime = String(req.headers['content-type'] || 'application/octet-stream');
   const id = uid('a_');
   const cleanName = safeName(rawName).slice(0, 120) || 'file';
@@ -1059,7 +1096,7 @@ async function handleDashboardFileUpload(req, res, user, task) {
   if (current.length >= DASHBOARD_LIMITS.maxFiles) {
     return sendError(res, 400, `К одному заданию можно приложить не больше ${DASHBOARD_LIMITS.maxFiles} документов`);
   }
-  const rawName = decodeURIComponent(String(req.headers['x-filename'] || 'документ'));
+  const rawName = tryDecode(String(req.headers['x-filename'] || 'документ'));
   const name = safeName(rawName).slice(0, 160) || 'документ';
   const mime = String(req.headers['content-type'] || 'application/octet-stream');
   const id = uid('df_');
@@ -1315,6 +1352,14 @@ async function handleMessageStream(req, res, user, chatId) {
   const body = await readJsonBody(req, LIMITS.jsonBody);
   const text = String(body.text || '').trim();
   const attachmentIds = Array.isArray(body.attachmentIds) ? body.attachmentIds.slice(0, LIMITS.maxAttachmentsPerMessage) : [];
+  /* Режимы ответа приходят с мобильного композера двумя независимыми
+     флажками. Читаем и вложенный modes, и плоские поля — старый клиент,
+     который про них не знает, просто не пришлёт ничего. */
+  const modeSource = body.modes && typeof body.modes === 'object' ? body.modes : body;
+  const modes = {
+    thinking: modeSource.thinking === true,
+    search: modeSource.search === true,
+  };
   if (!text && !attachmentIds.length) return sendError(res, 400, 'Пустое сообщение');
 
   /* Занятость проверяем после чтения тела: иначе две одновременные отправки
@@ -1351,6 +1396,7 @@ async function handleMessageStream(req, res, user, chatId) {
   void executeRun(run, {
     text,
     attachmentIds,
+    modes,
     isFirstMessage: chat.messages.length === 0,
   });
 }
@@ -1359,7 +1405,7 @@ async function handleMessageStream(req, res, user, chatId) {
    события складываются в запуск — подключиться и догнать можно в любой момент. */
 async function executeRun(run, job) {
   const { user, project, chat } = run;
-  const { text, attachmentIds, isFirstMessage } = job;
+  const { text, attachmentIds, isFirstMessage, modes = { thinking: false, search: false } } = job;
   const controller = run.controller;
   const stream = { emit: (data) => publishRun(run, data) };
 
@@ -1433,6 +1479,11 @@ async function executeRun(run, job) {
          сообщение, remember пишет новые прямо в index.json. */
       facts: store.memoryFacts(user.id),
       remember: (fact) => store.addMemoryFact(user.id, fact),
+      /* Кнопки «Рассуждения» и «Поиск» действуют на этот ход: первая сразу
+         поднимает профиль модели, вторая добавляет в системную подсказку
+         требование искать источники. */
+      thinking: modes.thinking === true,
+      search: modes.search === true,
     });
 
     assistantText = outcome.text || '';
@@ -1499,6 +1550,8 @@ async function executeRun(run, job) {
       tools: outcome.tools.map((tool) => ({ id: tool.id, label: tool.label, summary: tool.summary, status: tool.status })),
       at: nowIso(),
       ...(budgetInfo ? { budget: budgetInfo } : {}),
+      ...(modes.thinking || modes.search ? { modes: { thinking: modes.thinking === true, search: modes.search === true } } : {}),
+      ...(outcome.reasoning ? { reasoning: outcome.reasoning } : {}),
     });
     store.saveChat(chat.id, { messages: chat.messages, history: chat.history, memory: chat.memory, task: chat.task || null });
 
@@ -1903,21 +1956,31 @@ function serveStatic(req, res, urlPath, versioned = false) {
   fs.createReadStream(full).pipe(res);
 }
 
+/* Что нельзя отдавать «как страницу» в origin приложения: HTML/SVG/XML умеют
+   исполнять скрипты, а сессия живёт на том же домене. Такие файлы скачиваются,
+   а если их всё-таки показывают внутри (страница проекта), ответ получает
+   песочницу CSP — как в sendSharedFile. */
+const ACTIVE_PAGE_EXT = new Set(['.html', '.htm', '.xhtml', '.svg', '.xml']);
+
 function sendFile(res, full, { download = false, name, head = false } = {}) {
   const stat = fs.statSync(full);
   if (!stat.isFile()) return sendError(res, 404, 'Не найдено');
   const ext = path.extname(full).toLowerCase();
   const fileName = name || path.basename(full);
-  const disposition = download
+  const active = ACTIVE_PAGE_EXT.has(ext);
+  const asDownload = download || active;
+  const disposition = asDownload
     ? `attachment; filename*=UTF-8''${encodeURIComponent(fileName)}`
     : `inline; filename*=UTF-8''${encodeURIComponent(fileName)}`;
-  res.writeHead(200, {
+  const headers = {
     'Content-Type': MIME[ext] || 'application/octet-stream',
     'Content-Length': stat.size,
     'Content-Disposition': disposition,
     'Cache-Control': 'no-store',
     ...SECURITY_HEADERS,
-  });
+  };
+  if (active) headers['Content-Security-Policy'] = PAGE_SANDBOX_CSP;
+  res.writeHead(200, headers);
   if (head) return res.end();
   fs.createReadStream(full).pipe(res);
 }
@@ -1947,7 +2010,7 @@ function sendSharedFile(res, full, { name, head = false } = {}) {
 
 async function route(req, res) {
   const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
-  const pathname = decodeURIComponent(url.pathname);
+  const pathname = tryDecode(url.pathname);
   const method = req.method || 'GET';
 
   /* Ссылка для внешних приложений (Word, Excel, PowerPoint): у них нет cookie
@@ -2336,7 +2399,7 @@ async function route(req, res) {
         }
       }
       if (parts[3] === 'upload' && method === 'POST') {
-        const rawName = decodeURIComponent(String(req.headers['x-filename'] || 'file'));
+        const rawName = tryDecode(String(req.headers['x-filename'] || 'file'));
         /* Без явного пути файл ложится в общую папку проекта. */
         const target = url.searchParams.get('path') || uniqueFileName(workspace, rawName);
         const full = resolveSafe(workspace, target);
@@ -2376,7 +2439,7 @@ async function route(req, res) {
       if (!chat) return;
       if (parts.length === 3 && method === 'GET') {
         const attachments = Object.values(store.state.attachments)
-          .filter((att) => att.chatId === chat.id)
+          .filter((att) => att.chatId === chat.id && (!att.ownerId || att.ownerId === chat.ownerId))
           .map(serializeAttachment);
         return sendJson(res, 200, {
           chat: {
@@ -2474,8 +2537,15 @@ async function route(req, res) {
           if (!file) return sendError(res, 404, 'Документ не найден');
           if (parts.length === 6 && method === 'DELETE') return handleDashboardFileDelete(res, user, task, file.id);
           if (parts.length === 6 && method === 'GET') {
-            const full = path.join(store.dashboardFilesDir(task.id), file.relPath);
-            if (!fs.existsSync(full)) return sendError(res, 404, 'Файл не найден');
+            /* relPath хранится в состоянии, но проверяем его как пользовательский
+               путь: ошибка в данных не должна выпускать чтение за папку задания. */
+            let full;
+            try {
+              full = resolveSafe(store.dashboardFilesDir(task.id), file.relPath);
+            } catch {
+              return sendError(res, 404, 'Файл не найден');
+            }
+            if (!fs.existsSync(full) || !fs.statSync(full).isFile()) return sendError(res, 404, 'Файл не найден');
             return sendFile(res, full, { download: true, name: file.name });
           }
           return sendError(res, 404, 'Не найдено');
@@ -2566,7 +2636,14 @@ async function route(req, res) {
         }
         if (body.displayName !== undefined) patch.displayName = String(body.displayName).slice(0, 80);
         if (body.disabled !== undefined) patch.disabled = Boolean(body.disabled);
-        if (body.role && target.id !== admin.id) patch.role = body.role;
+        /* Роль только из двух известных значений: иначе опечатка («Admin», «root»)
+           молча понижала человека и отключала ему админские ручки. */
+        if (body.role && target.id !== admin.id) {
+          if (body.role !== 'admin' && body.role !== 'user') {
+            return sendError(res, 400, 'Роль может быть только admin или user');
+          }
+          patch.role = body.role;
+        }
         const updated = store.updateUser(target.id, patch);
         return sendJson(res, 200, { user: updated });
       }

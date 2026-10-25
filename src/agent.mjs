@@ -276,6 +276,7 @@ const SUBAGENT_TOOLS = [
   'fetch_many',
   'crawl',
   'read_page',
+  'scrape_page',
   'use_skill',
   'check_document',
 ];
@@ -365,6 +366,10 @@ export async function runTurn({
   maxSteps = null,
   /* Папка, за пределы которой субагенту писать нельзя (у основной задачи пусто). */
   writeRoot = '',
+  /* Режимы, выбранные человеком в композере: «Рассуждения» и «Поиск».
+     Это не глобальная настройка сервиса, а решение для текущего хода. */
+  thinking = false,
+  search = false,
 }) {
   const usage = { tokensIn: 0, tokensOut: 0 };
   const toolsUsed = [];
@@ -420,6 +425,9 @@ export async function runTurn({
     tools: toolDefs.map((def) => def.function.name),
     images: images.length,
     config: ESCALATION,
+    /* «Рассуждения» — явный выбор человека: не полагаемся на эвристику
+       сложности и сразу берём сильную модель с максимальным усилием. */
+    force: thinking ? 'pro' : null,
   });
   /* Файл чата — единственный канал, переживающий ход: карточку задачи держим
      в нём, чтобы «продолжай» и следующий ход начинались с неё. */
@@ -430,6 +438,9 @@ export async function runTurn({
   const stepCeiling = segmentSize * Math.max(1, Number(CONTEXT.maxSegments) || 1);
   const stepLimit = Number(maxSteps) > 0 ? Math.min(stepCeiling, Number(maxSteps)) : stepCeiling;
   let finalText = '';
+  /* Ход рассуждений копится отдельно от ответа: он уходит в интерфейс
+     свёрнутым блоком и не подмешивается в markdown. */
+  let reasoningText = '';
   let steps = 0;
   let finished = false;
 
@@ -517,7 +528,7 @@ export async function runTurn({
         if (signal.aborted) throw Object.assign(new Error('aborted'), { name: 'AbortError' });
       }
     }
-    const system = systemPrompt({ projectName, projectContext, memory: chat.memory, userName, question: userText, facts, skillsText, filesBrief, task: chat.task });
+    const system = systemPrompt({ projectName, projectContext, memory: chat.memory, userName, question: userText, facts, skillsText, filesBrief, task: chat.task, modes: { thinking, search: search && steps === 1 } });
     const messages = [{ role: 'system', content: system }, ...chat.history];
 
     const result = await callModel(
@@ -532,10 +543,14 @@ export async function runTurn({
       {
         signal,
         onDelta: (text) => emit({ type: 'delta', text }),
-        onReasoning: () => emit({ type: 'reasoning' }),
+        onReasoning: (text) => {
+          if (thinking) emit({ type: 'reasoning', text });
+        },
       },
       { fallbackModel: ESCALATION.flashModel },
     );
+
+    if (thinking && result.reasoning) reasoningText = (reasoningText + result.reasoning).slice(-24000);
 
     if (result.usage) {
       usage.tokensIn += result.usage.prompt_tokens || 0;
@@ -555,7 +570,7 @@ export async function runTurn({
           limitUsd: Math.round(Number(budget.limitUsd) * 100) / 100,
         };
         emit({ type: 'budget', ...budgetHit });
-        return { text: finalText, usage, tools: toolsUsed, steps, memory: chat.memory, budgetHit, trim: trimStats };
+        return { text: finalText, usage, tools: toolsUsed, steps, memory: chat.memory, budgetHit, trim: trimStats, route, reasoning: reasoningText };
       }
     }
 
@@ -645,6 +660,10 @@ export async function runTurn({
 
           const pathDetail = executed.meta?.path ? String(executed.meta.path) : '';
           toolPath = pathDetail;
+          /* Короткая приписка инструмента («проверяю страницу в живом браузере:
+             снимков 3»): её показывает живой статус ответа, чтобы человек видел,
+             чем именно проверяли и не подменили ли браузер разбором по коду. */
+          const noteDetail = executed.meta?.note ? String(executed.meta.note) : '';
           const trimDetail =
             trimmed.applied === 'none'
               ? ''
@@ -659,6 +678,7 @@ export async function runTurn({
             summary,
             status: 'ok',
             detail: [pathDetail, trimDetail].filter(Boolean).join(' · '),
+            ...(noteDetail ? { note: noteDetail } : {}),
             ms: Date.now() - started,
           });
         } catch (error) {
@@ -708,7 +728,7 @@ export async function runTurn({
   if (!finished) {
     chat.task = updateTaskState(chat.task, { userText, tools: toolsUsed, steps });
     try {
-      const system = systemPrompt({ projectName, projectContext, memory: chat.memory, userName, question: userText, facts, skillsText, filesBrief, task: chat.task });
+      const system = systemPrompt({ projectName, projectContext, memory: chat.memory, userName, question: userText, facts, skillsText, filesBrief, task: chat.task, modes: { thinking, search: search && steps === 1 } });
       /* Карточка задачи в финальном сообщении помогает итогу быть по делу:
          модель называет готовые файлы, а не пересказывает процесс. */
       const card = taskSummaryLine(chat.task);
@@ -726,7 +746,9 @@ export async function runTurn({
         {
           signal,
           onDelta: (text) => emit({ type: 'delta', text }),
-          onReasoning: () => emit({ type: 'reasoning' }),
+          onReasoning: (text) => {
+            if (thinking) emit({ type: 'reasoning', text });
+          },
         },
         { fallbackModel: ESCALATION.flashModel },
       );
@@ -734,6 +756,7 @@ export async function runTurn({
         usage.tokensIn += result.usage.prompt_tokens || 0;
         usage.tokensOut += result.usage.completion_tokens || 0;
       }
+      if (thinking && result.reasoning) reasoningText = (reasoningText + result.reasoning).slice(-24000);
       finalText += result.text || '';
       chat.history.push({ role: 'assistant', content: result.text || '' });
       finished = true;
@@ -789,7 +812,7 @@ export async function runTurn({
     }
   }
 
-  return { text: finalText, usage, tools: toolsUsed, steps, memory: chat.memory, trim: trimStats, route, review };
+  return { text: finalText, usage, tools: toolsUsed, steps, memory: chat.memory, trim: trimStats, route, review, reasoning: reasoningText };
 }
 
 export async function generateTitle(text, { signal } = {}) {

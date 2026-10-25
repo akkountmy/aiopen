@@ -94,6 +94,19 @@ test('без браузера файл проверяется по коду, а 
   assert.match(text, /нужен браузер/);
 });
 
+test('у шага check_page есть короткая подпись режима — она видна в живом статусе', async () => {
+  fs.writeFileSync(path.join(ctx.workspace, 'Заметка.html'), page, 'utf8');
+  const result = await executeTool('check_page', { url: 'Заметка.html', widths: '390' }, ctx);
+  assert.ok(result.meta?.note, 'подпись режима должна попадать в метаданные инструмента');
+  if (hasBrowser) {
+    assert.match(result.meta.note, /живом браузере/);
+    assert.match(result.meta.note, /снимков \d+/);
+  } else {
+    assert.match(result.meta.note, /по коду/);
+  }
+  assert.ok(!/^\s|\s$/.test(result.meta.note), 'подпись не должна липнуть пробелами');
+});
+
 test('адрес в интернете без браузера объясняет причину', async () => {
   if (hasBrowser) return;
   await assert.rejects(() => checkPage('https://example.com', { root: ctx.workspace }), /Без браузера/);

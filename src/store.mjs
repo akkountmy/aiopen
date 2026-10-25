@@ -1,5 +1,7 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { backupsDir } from './backup.mjs';
 import {
   BILLING,
   CHATS_DIR,
@@ -58,6 +60,81 @@ function overlap(a, b) {
 }
 
 const SEED_FILE = path.join(DATA_DIR, 'admin-seed.json');
+
+/* Чтение индекса с защитой от затирания. Раньше повреждённый или недописанный
+   `index.json` (обрыв питания, остановка контейнера ровно во время записи) молча
+   превращался в пустое состояние: сервис заводил нового администратора и первым
+   же сохранением стирал пользователей, проекты и переписки. Теперь испорченный
+   файл откладывается рядом, состояние поднимается из последней суточной копии,
+   а если копии нет — сервис останавливается, не трогая данные. */
+function newestBackupIndex() {
+  let names = [];
+  try {
+    names = fs
+      .readdirSync(backupsDir(), { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
+      .map((entry) => entry.name)
+      .sort()
+      .reverse();
+  } catch {
+    return null;
+  }
+  for (const name of names) {
+    const file = path.join(backupsDir(), name, 'index.json');
+    const parsed = readJson(file, null);
+    if (parsed && Array.isArray(parsed.users) && parsed.users.length) {
+      return { name, file, parsed };
+    }
+  }
+  return null;
+}
+
+function loadIndexOrRecover() {
+  let raw;
+  try {
+    raw = fs.readFileSync(INDEX_FILE, 'utf8');
+  } catch (error) {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  }
+  const finish = (state) => state;
+  let problem = '';
+  if (!raw.trim()) {
+    problem = 'файл пустой';
+  } else {
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed && Array.isArray(parsed.users)) return finish(parsed);
+      problem = 'в файле нет списка пользователей';
+    } catch (error) {
+      problem = error.message;
+    }
+  }
+  const stamp = nowIso().replace(/[:.]/g, '-');
+  const aside = `${INDEX_FILE}.corrupt-${stamp}`;
+  try {
+    fs.writeFileSync(aside, raw, 'utf8');
+  } catch {
+    /* даже если копию не удалось отложить, ниже решаем, что делать */
+  }
+  const backup = newestBackupIndex();
+  if (backup) {
+    fs.copyFileSync(backup.file, INDEX_FILE);
+    console.error(
+      `[store] index.json повреждён (${problem}). Файл сохранён как ${path.basename(aside)}, ` +
+        `состояние восстановлено из резервной копии ${backup.name}.`,
+    );
+    return finish(backup.parsed);
+  }
+  console.error(
+    `[store] index.json повреждён (${problem}), резервных копий с пользователями нет. ` +
+      `Сервис не запускается, чтобы не затереть данные. Исправьте файл вручную; ` +
+      `исходное содержимое лежит в ${aside}.`,
+  );
+  throw Object.assign(new Error('index.json повреждён: нужен ручной разбор'), {
+    code: 'EINDEXCORRUPT',
+  });
+}
 
 /* Заводские ники администратора прошлых версий. Совсем короткий ник (DSH)
    занял место длинного, и учётные записи, созданные раньше, надо перенести,
@@ -132,7 +209,7 @@ class Store {
   init({ adminUsername, adminPassword }) {
     fs.mkdirSync(WORKSPACES_DIR, { recursive: true });
     fs.mkdirSync(CHATS_DIR, { recursive: true });
-    const existing = readJson(INDEX_FILE, null);
+    const existing = loadIndexOrRecover();
     if (existing && Array.isArray(existing.users)) {
       this.state = { ...emptyState(), ...existing };
     }
@@ -156,8 +233,9 @@ class Store {
         }
       }
       if (!record) {
-        // Никакого пароля по умолчанию: генерируем случайный и печатаем один раз.
-        const generated = `dshow-${Math.random().toString(36).slice(2, 10)}`;
+        /* Никакого пароля по умолчанию: генерируем случайный и печатаем один раз.
+           Генератор криптостойкий — этот пароль виден в журнале контейнера. */
+        const generated = `dshow-${crypto.randomBytes(12).toString('base64url')}`;
         record = hashPassword(generated);
         console.log(`[admin] Создан администратор. Логин: ${adminUsername} Пароль: ${generated}`);
         console.log('[admin] Смените пароль в панели администратора.');

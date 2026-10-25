@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-const { staticPageChecks, describeStatic, pageTemplate } = await import('../src/pagecheck.mjs');
+const { staticPageChecks, describeStatic, pageTemplate, pageCheckNote } = await import('../src/pagecheck.mjs');
 
 const tests = [];
 const test = (name, fn) => tests.push({ name, fn });
@@ -105,6 +105,23 @@ test('отчёт по коду перечисляет замечания чел�
   assert.match(text, /внешние запросы/);
   assert.match(text, /фиксированная ширина/);
   assert.match(text, /нет <!doctype html>|теги|кавычки/);
+});
+
+test('подпись шага говорит, чем проверяли: браузером или по коду', () => {
+  const browser = pageCheckNote({
+    mode: 'browser',
+    variants: [
+      { screenshot: 'screens/page-390.png' },
+      { screenshot: 'screens/page-768.png' },
+      { screenshot: 'screens/page-1440.png' },
+    ],
+  });
+  assert.match(browser, /живом браузере/);
+  assert.match(browser, /снимков 3/);
+
+  const staticNote = pageCheckNote({ mode: 'static', variants: [] });
+  assert.match(staticNote, /по коду/);
+  assert.match(staticNote, /браузера в окружении нет/);
 });
 
 test('ссылка за пределы проекта не проверяется как файл проекта', () => {

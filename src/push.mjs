@@ -71,6 +71,33 @@ function saveDevices(list) {
   writeJson(DEVICES_FILE, list);
 }
 
+/* Куда вообще может уходить push-запрос: только известные службы доставки.
+   Подписку присылает браузер, но повторить её может любой клиент, а сервер
+   потом сам делает на этот адрес POST — без списка доменов это готовый канал
+   в локальную сеть и в служебные адреса. */
+const PUSH_HOSTS = [
+  'fcm.googleapis.com',
+  'android.googleapis.com',
+  'updates.push.services.mozilla.com',
+  'push.services.mozilla.com',
+  'notify.windows.com',
+  'wns.windows.com',
+  'push.apple.com',
+  'web.push.apple.com',
+];
+
+function allowedPushEndpoint(endpoint) {
+  let url;
+  try {
+    url = new URL(endpoint);
+  } catch {
+    return false;
+  }
+  if (url.protocol !== 'https:') return false;
+  const host = url.hostname.toLowerCase();
+  return PUSH_HOSTS.some((allowed) => host === allowed || host.endsWith(`.${allowed}`));
+}
+
 /* Подписка приходит из браузера: endpoint, p256dh и auth. Проверяем всё, что
    попадёт в файл, потому что дальше эти поля уходят в push-службу. */
 function normalize(input) {
@@ -78,6 +105,7 @@ function normalize(input) {
   const p256dh = String(input?.keys?.p256dh || '').trim();
   const auth = String(input?.keys?.auth || '').trim();
   if (!/^https:\/\/[^\s]+$/i.test(endpoint)) return null;
+  if (!allowedPushEndpoint(endpoint)) return null;
   if (!/^[A-Za-z0-9_-]{16,}$/.test(p256dh) || !/^[A-Za-z0-9_-]{8,}$/.test(auth)) return null;
   return {
     endpoint,

@@ -157,6 +157,10 @@ const MEASURE = `(() => {
     compBottom: Math.round(cb.bottom),
     compH: Math.round(cb.height),
     inputH: Math.round(input.getBoundingClientRect().height),
+    inputLh: parseFloat(getComputedStyle(input).lineHeight) || 0,
+    inputPad:
+      (parseFloat(getComputedStyle(input).paddingTop) || 0) +
+      (parseFloat(getComputedStyle(input).paddingBottom) || 0),
     inputScrollTop: input.scrollTop,
     inputScrollH: input.scrollHeight,
     inputClientH: input.clientHeight,
@@ -291,6 +295,13 @@ try {
   // Посимвольный набор: поле не должно «ползти» вверх на несколько пикселей
   // за каждую букву, пока текст ещё помещается в одну строку.
   const typingBase = await evaluate(MEASURE);
+  const twoLineHeight = Math.round(typingBase.inputLh * 2 + typingBase.inputPad);
+  typingBase.valueLength === 0 && typingBase.inputH >= twoLineHeight - 1
+    ? ok('пустое поле вмещает две строки', `${typingBase.inputH}px при строке ${typingBase.inputLh}px`)
+    : fail(
+        'высота пустого поля',
+        JSON.stringify({ h: typingBase.inputH, need: twoLineHeight, lh: typingBase.inputLh, pad: typingBase.inputPad }),
+      );
   const typedHeights = [];
   for (const char of 'Проверка') {
     await cdp.send('Input.insertText', { text: char });
@@ -339,6 +350,62 @@ try {
   scrollDropped === 0
     ? ok('лента не прыгает вниз при росте поля')
     : fail('прокрутка ленты при наборе', `${scrollDropped} скачков`);
+
+  // Длинный черновик листается внутри поля, а правка в середине не отбрасывает
+  // прокрутку к первой строке.
+  const middlePos = await evaluate(
+    `(() => { const i = document.querySelector('#input'); const p = Math.floor(i.value.length * 0.6); i.setSelectionRange(p, p); i.scrollTop = 0; return p; })()`,
+  );
+  await cdp.send('Input.insertText', { text: 'X' });
+  await sleep(180);
+  const afterMiddleInsert = await evaluate(MEASURE);
+  const caretFound =
+    afterMiddleInsert.selection >= middlePos &&
+    afterMiddleInsert.selection <= middlePos + 4 &&
+    afterMiddleInsert.inputScrollTop > 0;
+  caretFound
+    ? ok('правка в середине длинного текста показывает курсор', `прокрутка ${Math.round(afterMiddleInsert.inputScrollTop)}px`)
+    : fail(
+        'правка в середине',
+        JSON.stringify({
+          pos: middlePos,
+          sel: afterMiddleInsert.selection,
+          scroll: afterMiddleInsert.inputScrollTop,
+        }),
+      );
+
+  await evaluate(
+    `(() => { const i = document.querySelector('#input'); const p = Math.floor(i.value.length * 0.6); i.setSelectionRange(p, p); i.scrollTop = i.scrollHeight; return p; })()`,
+  );
+  await sleep(120);
+  const beforeMiddleDelete = await evaluate(MEASURE);
+  await cdp.send('Input.dispatchKeyEvent', {
+    type: 'keyDown',
+    windowsVirtualKeyCode: 8,
+    nativeVirtualKeyCode: 8,
+    key: 'Backspace',
+    code: 'Backspace',
+  });
+  await cdp.send('Input.dispatchKeyEvent', {
+    type: 'keyUp',
+    windowsVirtualKeyCode: 8,
+    nativeVirtualKeyCode: 8,
+    key: 'Backspace',
+    code: 'Backspace',
+  });
+  await sleep(180);
+  const afterMiddleDelete = await evaluate(MEASURE);
+  afterMiddleDelete.inputScrollTop > 0 && afterMiddleDelete.inputScrollH > afterMiddleDelete.inputClientH
+    ? ok('удаление в середине не сбрасывает прокрутку поля')
+    : fail(
+        'прокрутка после удаления',
+        JSON.stringify({
+          before: beforeMiddleDelete.inputScrollTop,
+          after: afterMiddleDelete.inputScrollTop,
+          sh: afterMiddleDelete.inputScrollH,
+          ch: afterMiddleDelete.inputClientH,
+        }),
+      );
 
   // Панель предсказаний меняет высоту клавиатуры на 44 px — подвал следует.
   for (const h of [480, 524, 480, 524]) {
