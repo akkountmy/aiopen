@@ -17,6 +17,9 @@ import { checkPage, describePage } from './browser.mjs';
 import { pageCheckNote, pageTemplate, staticPageChecks, staticIssueCount } from './pagecheck.mjs';
 import { escapeHtml, formatBytes, safeName, truncate } from './util.mjs';
 import { writeZip } from './zip.mjs';
+import { archiveKind, extractArchiveTo, formatExtraction, gunzipTo } from './archive.mjs';
+import { checkLinks, formatLinks, linksFromText } from './linkcheck.mjs';
+import { compareDocuments, formatCompare } from './comparedocs.mjs';
 
 /** Не даём инструментам заполнить диск до отказа: сервис должен оставаться рабочим. */
 function ensureFreeSpace(extraBytes = 0) {
@@ -1439,6 +1442,59 @@ export const TOOL_DEFS = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'extract_archive',
+      description:
+        'Распаковать архив .zip (или одиночный .gz) из проекта в папку проекта. Возвращает список файлов и пропущенных записей. Используй, когда приложили архив с документами, выгрузкой или проектом: распакуй, затем читай файлы read_document/analyze_data. .rar, .7z и .tar не поддерживаются — скажи об этом прямо.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Путь к архиву внутри проекта, например «Материалы.zip».' },
+          to: { type: 'string', description: 'Папка, куда распаковать. По умолчанию — папка с именем архива без расширения.' },
+          overwrite: { type: 'boolean', description: 'Перезаписывать существующие файлы. По умолчанию нет.' },
+        },
+        required: ['path'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'check_links',
+      description:
+        'Проверить, живые ли ссылки: код ответа, редирект на другой сайт, закрытый или удалённый адрес. Ничего не скачивает и не читает тело страницы. Проверяй ссылки перед тем, как поставить их в отчёт, договор или ответ со источниками; мёртвую ссылку убери или замени.',
+      parameters: {
+        type: 'object',
+        properties: {
+          urls: {
+            type: 'array',
+            description: 'Адреса для проверки, до 12 штук.',
+            items: { type: 'string' },
+          },
+          path: { type: 'string', description: 'Либо путь к файлу или документу, из которого взять все ссылки.' },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'compare_documents',
+      description:
+        'Сравнить две версии документа построчно и показать отличия: что удалено, что добавлено. Понимает .docx/.xlsx/.pptx/.pdf/.txt/.md/.html/.csv. Используй для «сравни версии договора/сметы/отчёта», «что изменилось после правок», а не читай оба файла целиком вручную.',
+      parameters: {
+        type: 'object',
+        properties: {
+          left: { type: 'string', description: 'Путь к первой (старой) версии.' },
+          right: { type: 'string', description: 'Путь ко второй (новой) версии.' },
+        },
+        required: ['left', 'right'],
+      },
+    },
+  },
 ];
 
 export const TOOL_LABELS = {
@@ -1470,6 +1526,9 @@ export const TOOL_LABELS = {
   remember: 'Память',
   use_skill: 'Навык',
   check_document: 'Проверка файла',
+  extract_archive: 'Распаковка архива',
+  check_links: 'Проверка ссылок',
+  compare_documents: 'Сравнение документов',
 };
 
 /** Русское склонение по числу: 1 ссылка, 2 ссылки, 5 ссылок. */
@@ -1514,6 +1573,15 @@ export function toolSummary(name, args) {
       return `${args.url || ''}${args.widths ? ` · ${args.widths}` : args.width ? ` · ${args.width} px` : ' · 390/768/1440 px'}`;
     case 'analyze_data':
       return `${args.path || ''}${args.mode ? ` · ${args.mode}` : ''}`;
+    case 'extract_archive':
+      return `${args.path || ''}${args.to ? ` → ${args.to}` : ''}`;
+    case 'check_links': {
+      const count = Array.isArray(args.urls) ? args.urls.length : 0;
+      if (count) return `${count} ${plural(count, 'ссылка', 'ссылки', 'ссылок')}`;
+      return args.path ? `ссылки из ${args.path}` : '';
+    }
+    case 'compare_documents':
+      return `${args.left || ''} ↔ ${args.right || ''}`;
     case 'find_in_files':
       return args.query || '';
     case 'run_python':
@@ -1560,6 +1628,7 @@ const WRITE_TARGETS = {
   create_pptx: ['path'],
   create_pdf: ['path'],
   check_page: ['screenshot'],
+  extract_archive: ['path', 'to'],
 };
 
 /**
@@ -2165,6 +2234,65 @@ export async function executeTool(name, args, ctx) {
       return {
         text: `${rel}:\n${formatCheckReport(check)}`,
         meta: { path: rel, ok: check.ok, errors: check.errors, warnings: check.warnings },
+      };
+    }
+    case 'extract_archive': {
+      const rel = String(args.path || '');
+      if (!rel) throw new Error('Нужен путь к архиву');
+      const full = assertInside(root, resolveSafe(root, rel));
+      if (!fs.existsSync(full)) throw new Error(`Архива ${rel} нет в проекте`);
+      const kind = archiveKind(rel);
+      if (kind === 'unsupported') {
+        throw new Error('Поддерживается только .zip (и одиночный .gz). Для .rar, .7z и .tar попроси пользователя пересобрать архив в zip.');
+      }
+      const buf = fs.readFileSync(full);
+      const folder = String(args.to || '').trim() || path.basename(rel).replace(/\.(zip|gz)$/i, '') || 'архив';
+      const target = assertInside(root, resolveSafe(root, folder));
+      ensureFreeSpace(Math.min(buf.length * 2, LIMITS.minFreeBytes));
+      const result = kind === 'gz'
+        ? gunzipTo(buf, target, path.basename(rel), { overwrite: Boolean(args.overwrite) })
+        : await extractArchiveTo(buf, target, { overwrite: Boolean(args.overwrite) });
+      const listed = result.files.slice(0, 10).map((file) => file.path);
+      return {
+        text: `${formatExtraction(result, { folder })}${listed.length ? `\nДальше читай так: ${listed.map((p) => `read_document «${p}»`).join(', ')}` : ''}`,
+        meta: { path: rel, folder, files: result.files.length, skipped: result.skipped.length, bytes: result.totalBytes },
+      };
+    }
+    case 'check_links': {
+      let urls = Array.isArray(args.urls) ? args.urls.map((item) => String(item || '')).filter(Boolean) : [];
+      if (!urls.length && args.path) {
+        const full = assertInside(root, resolveSafe(root, String(args.path)));
+        if (!fs.existsSync(full)) throw new Error(`Файла ${args.path} нет в проекте`);
+        const ext = path.extname(full).toLowerCase();
+        const text = ['.txt', '.md', '.html', '.htm', '.csv', '.json'].includes(ext)
+          ? fs.readFileSync(full, 'utf8')
+          : extractDocumentText(fs.readFileSync(full), String(args.path), '', { maxChars: 200000 }).text || '';
+        urls = linksFromText(text);
+      }
+      if (!urls.length) throw new Error('Не нашёл ссылок: передай urls или укажи файл со ссылками');
+      const results = await checkLinks(urls);
+      const alive = results.filter((item) => item.state === 'alive').length;
+      const dead = results.filter((item) => item.state === 'dead').length;
+      return {
+        text: formatLinks(results),
+        meta: { total: results.length, alive, dead, unknown: results.length - alive - dead },
+      };
+    }
+    case 'compare_documents': {
+      const leftRel = String(args.left || '');
+      const rightRel = String(args.right || '');
+      if (!leftRel || !rightRel) throw new Error('Нужны оба файла: left и right');
+      const leftFull = assertInside(root, resolveSafe(root, leftRel));
+      const rightFull = assertInside(root, resolveSafe(root, rightRel));
+      if (!fs.existsSync(leftFull)) throw new Error(`Файла ${leftRel} нет в проекте`);
+      if (!fs.existsSync(rightFull)) throw new Error(`Файла ${rightRel} нет в проекте`);
+      const result = compareDocuments(fs.readFileSync(leftFull), fs.readFileSync(rightFull), {
+        nameLeft: leftRel,
+        nameRight: rightRel,
+      });
+      return {
+        text: formatCompare(result),
+        meta: { left: leftRel, right: rightRel, changed: result.changed, added: result.added, removed: result.removed, exact: result.exact },
       };
     }
     default:
