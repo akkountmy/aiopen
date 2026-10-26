@@ -663,9 +663,11 @@ svg {
 }
 
 .btn-stop span {
-  width: 10px;
-  height: 10px;
-  border-radius: 2px;
+  /* Квадрат «Стоп» — того же веса, что значки ряда: при 19 px у соседей
+     квадрат в 10 px читался точкой, а не кнопкой остановки. */
+  width: 11px;
+  height: 11px;
+  border-radius: 3px;
   background: var(--text);
   display: block;
   margin: 0 auto;
