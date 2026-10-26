@@ -21,10 +21,13 @@ const ICONS = {
   folderOpen:
     '<svg viewBox="0 0 24 24" aria-hidden="true" style="stroke-width:1.9"><path d="m6 14 1.45-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.55 6a2 2 0 0 1-1.94 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.93a2 2 0 0 1 1.66.9l.82 1.2a2 2 0 0 0 1.66.9H18a2 2 0 0 1 2 2v2"/></svg>',
   file: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 3.5A1.5 1.5 0 016.5 2h4L15 6.5v10A1.5 1.5 0 0113.5 18h-7A1.5 1.5 0 015 16.5v-13z"/><path d="M10.5 2v4.5H15"/></svg>',
+  /* Камера и картинка нарисованы во всю сетку 20×20, как скрепка и микрофон:
+     прежние силуэты 14,8×12,4 и 14×12 при 19 px выглядели меньше соседей в
+     ряду вложений. Штрих остался общим — 1,6. */
   image:
-    '<svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="4" width="14" height="12" rx="1.6"/><circle cx="7.4" cy="8.2" r="1.1"/><path d="M3.5 14l4-4 3 3 2.4-2.4 3.6 3.6"/></svg>',
+    '<svg viewBox="0 0 20 20" aria-hidden="true"><rect x="1.7" y="2.9" width="16.5" height="14.2" rx="2.6"/><circle cx="6.9" cy="7.9" r="1.3"/><path d="M2.3 14.7l4.8-4.8 3.5 3.5 2.8-2.8 4.3 4.3"/></svg>',
   camera:
-    '<svg viewBox="0 0 20 20" aria-hidden="true"><rect x="2.6" y="6.2" width="14.8" height="10.2" rx="2.2"/><path d="M7.4 6.2l1-2.2h3.2l1 2.2"/><circle cx="10" cy="11.3" r="2.7"/></svg>',
+    '<svg viewBox="0 0 20 20" aria-hidden="true"><rect x="1.3" y="5.5" width="17.4" height="12" rx="2.6"/><path d="M6.9 5.5l1.2-2.6h3.8l1.2 2.6"/><circle cx="10" cy="11.5" r="3.2"/></svg>',
   dots: '<svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="4.5" cy="10" r="1.4"/><circle cx="10" cy="10" r="1.4"/><circle cx="15.5" cy="10" r="1.4"/></svg>',
   download:
     '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4v9M6.2 9.5L10 13.3l3.8-3.8M4 16h12"/></svg>',
