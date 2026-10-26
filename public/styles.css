@@ -2695,20 +2695,36 @@ html.app-mode .composer-modes {
    выезжающем ящике панель закрывают затемнением, кнопкой-папкой в шапке и
    Escape. */
 
-.files-crumb {
-  padding: 8px 16px 4px;
+/* Название открытой папки. Строки с путём «/ compare» над кнопкой «Загрузить
+   файлы» больше нет: путь виден здесь, а возврат в корень — строкой «Наверх». */
+.files-loc {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px 2px;
   font-size: var(--fs-12);
-  color: var(--text-4);
-  font-family: var(--mono);
+  font-weight: 500;
+  color: var(--text-2);
   overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
   line-height: var(--lh-16);
 }
 
-/* В корне проекта путь не показываем: пустая строка не должна занимать место. */
-.files-crumb:empty {
-  display: none;
+.files-loc .loc-icon {
+  display: inline-flex;
+  flex: none;
+  color: var(--text-4);
+}
+
+.files-loc .loc-icon svg {
+  width: 14px;
+  height: 14px;
+  display: block;
+}
+
+.files-loc .loc-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* Строка состояния панели файлов. Заменила всплывающие подсказки внизу экрана:
@@ -4246,8 +4262,8 @@ html.app-mode .composer-modes {
   .files-title {
     height: 40px;
   }
-  .files-crumb {
-    padding: 10px 14px 4px;
+  .files-loc {
+    padding: 8px 8px 2px;
   }
   .files-upload {
     height: 40px;

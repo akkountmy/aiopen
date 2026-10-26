@@ -243,14 +243,21 @@ try {
     ? ok('в шапке название диалога')
     : fail('название в шапке', JSON.stringify(crumbs));
 
-  // 5. в корне проекта нет строки «/ проект»
-  const filesCrumb = await evaluate(`(() => {
-    const node = document.getElementById('filesCrumb');
-    return { text: (node.textContent || '').trim(), hidden: node.classList.contains('hidden') || !node.offsetHeight };
+  // 5. над кнопкой загрузки нет строки пути «/ проект»
+  const filesPath = await evaluate(`(() => {
+    const head = document.querySelector('.files-head');
+    const actions = document.querySelector('.files-actions');
+    const between = [];
+    let node = head ? head.nextElementSibling : null;
+    while (node && node !== actions) {
+      between.push((node.textContent || '').trim());
+      node = node.nextElementSibling;
+    }
+    return { crumb: !!document.getElementById('filesCrumb'), between, slash: between.some((t) => t.includes('/')) };
   })()`);
-  !filesCrumb.text || filesCrumb.hidden
-    ? ok('в панели файлов нет строки «проект»', JSON.stringify(filesCrumb.text))
-    : fail('строка пути в панели файлов', JSON.stringify(filesCrumb));
+  !filesPath.crumb && !filesPath.slash
+    ? ok('над кнопкой «Загрузить файлы» нет строки пути', JSON.stringify(filesPath.between))
+    : fail('строка пути в панели файлов', JSON.stringify(filesPath));
 
   // 6. карточка «Новый проект» — как подтверждение удаления
   await evaluate(`document.getElementById('newProjectBtn').click()`);

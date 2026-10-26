@@ -2581,13 +2581,30 @@ async function loadFiles(relPath) {
 
 function renderFiles() {
   const list = $('#filesList');
-  const crumb = $('#filesCrumb');
-  /* В корне проекта строка пути не нужна: заголовок панели уже говорит «Файлы
-     проекта», а слово «проект» вверху панели только повторяло шапку. */
+  /* Показываем только то, что лежит прямо в открытой папке. Сервер отдаёт
+     дерево вложенности одним списком, и без этой проверки файлы из подпапок
+     подмешивались в корень рядом с самими папками — вместо группировки
+     получалась плоская свалка. */
   const atRoot = state.filesPath === '.';
-  crumb.textContent = atRoot ? '' : `/ ${state.filesPath}`;
-  crumb.classList.toggle('hidden', atRoot);
+  const prefix = atRoot ? '' : `${state.filesPath.replace(/\/+$/, '')}/`;
+  const visible = [];
+  for (const item of state.files) {
+    if (prefix && !item.path.startsWith(prefix)) continue;
+    const rest = prefix ? item.path.slice(prefix.length) : item.path;
+    /* rest со слэшем — это уже содержимое вложенной папки, ему здесь не место. */
+    if (!rest || rest.includes('/')) continue;
+    visible.push(item);
+  }
   list.innerHTML = '';
+  if (!atRoot) {
+    /* Название открытой папки вместо прежней строки с путём «/ compare»,
+       которая висела над кнопкой «Загрузить файлы» и ничего не объясняла. */
+    const loc = el('div', 'files-loc');
+    loc.innerHTML = `<span class="loc-icon">${ICONS.folder}</span>`;
+    loc.appendChild(el('span', 'loc-name', state.filesPath.split('/').pop()));
+    loc.title = `Открыта папка «${state.filesPath}»`;
+    list.appendChild(loc);
+  }
   if (state.filesPath !== '.') {
     const up = el('div', 'file-row');
     up.innerHTML = `<span class="f-icon">${ICONS.folder}</span><span class="f-name">Наверх</span>`;
@@ -2608,12 +2625,11 @@ function renderFiles() {
     });
     list.appendChild(up);
   }
-  if (!state.files.length) {
+  if (!visible.length) {
     list.appendChild(el('div', 'files-empty', 'Пока пусто. Загрузите файл кнопкой выше.'));
     return;
   }
-  for (const item of state.files) {
-    if (state.filesPath !== '.' && !item.path.startsWith(state.filesPath.replace(/\/?$/, '/'))) continue;
+  for (const item of visible) {
     const row = el('div', 'file-row');
     const isImage = /\.(png|jpe?g|webp|gif|bmp)$/i.test(item.name);
     /* Открытие файла — отдельная кнопка: справа от неё лежат кнопки «Скачать»

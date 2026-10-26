@@ -580,16 +580,32 @@ try {
         ? ok('одиночный клик по строке файла не скачивает документ')
         : fail('одиночный клик по файлу', txtClick);
 
+      /* Папка в панели — отдельная строка, а её содержимое не подмешивается
+         в корень: сначала проверяем группировку, потом открываем папку. */
+      const insideInRoot = await evaluate(`[...document.querySelectorAll('.file-row .f-name')].some(n => n.textContent === 'inside.txt')`);
+      !insideInRoot
+        ? ok('файл из подпапки не подмешан в корень списка')
+        : fail('группировка файлов', 'inside.txt показан в корне вместо папки');
       const hasFolder = await evaluate(`[...document.querySelectorAll('.file-row')].some(r => r.querySelector('.f-name') && r.querySelector('.f-name').textContent === 'folder')`);
       if (hasFolder) {
         await evaluate(`[...document.querySelectorAll('.file-row')].find(r => r.querySelector('.f-name') && r.querySelector('.f-name').textContent === 'folder').click()`);
-        const inside = await waitFor(`!document.getElementById('filesCrumb').classList.contains('hidden')`);
-        inside ? ok('папка открывается, путь показан') : fail('открытие папки', await text('#filesCrumb'));
+        const inside = await waitFor(`!!document.querySelector('.files-loc')`, 8000);
+        inside ? ok('папка открывается, путь показан без слэша') : fail('открытие папки', await text('#filesList'));
+        const folderFiles = await evaluate(`[...document.querySelectorAll('.file-row .f-name')].map(n => n.textContent)`);
+        folderFiles.includes('inside.txt')
+          ? ok('в открытой папке видны её документы')
+          : fail('документы папки', JSON.stringify(folderFiles));
+        const loc = (await text('.files-loc')).trim();
+        loc === 'folder'
+          ? ok('подпись открытой папки без «/»')
+          : fail('подпись папки', JSON.stringify(loc));
         const upRow = await evaluate(`[...document.querySelectorAll('.file-row')].some(r => (r.querySelector('.f-name') || {}).textContent === 'Наверх')`);
         if (upRow) {
           await evaluate(`[...document.querySelectorAll('.file-row')].find(r => (r.querySelector('.f-name') || {}).textContent === 'Наверх').click()`);
-          const backToRoot = await waitFor(`document.getElementById('filesCrumb').classList.contains('hidden')`);
-          backToRoot ? ok('«Наверх» возвращает в корень') : fail('«Наверх»', await text('#filesCrumb'));
+          /* Ждём именно корневой список с папкой: пока идёт запрос, в панели
+             крутится заглушка и подпись папки пропадает раньше времени. */
+          const backToRoot = await waitFor(`!document.querySelector('.files-loc') && [...document.querySelectorAll('.file-row .f-name')].some(n => n.textContent === 'folder')`, 8000);
+          backToRoot ? ok('«Наверх» возвращает в корень') : fail('«Наверх»', await text('#filesList'));
         } else {
           fail('папка', 'нет строки «Наверх»');
         }
