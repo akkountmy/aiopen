@@ -87,7 +87,12 @@ const state = {
   liveStreams: new Map(),
   filesOpen: true,
   filesDrawerOpen: false,
-  filesPath: '.',
+  /* Раскрытые папки панели файлов — как state.expanded у проектов: список
+     ведёт себя деревом, а не переходами «внутрь папки» и «Наверх». */
+  filesExpanded: new Set(),
+  /* Папки, содержимое которых уже известно: корень приходит одним запросом,
+     более глубокие папки подгружаются при раскрытии. */
+  filesLoaded: new Set(),
   filesLoading: false,
   dragOut: false,
   expanded: new Set(),
@@ -940,10 +945,10 @@ function projectNode(project) {
       setStreaming(false);
       state.attachments = [];
       renderAttachStrip();
-      state.filesPath = '.';
+      resetFilesTree();
       /* Панель файлов возвращается к проекту, который открыли в диалоге. */
       followActiveProject();
-      if (state.filesOpen) loadFiles('.');
+      if (state.filesOpen) loadFiles();
     } else if (chats.length) {
       if (state.expanded.has(project.id)) state.expanded.delete(project.id);
       else state.expanded.add(project.id);
@@ -1188,12 +1193,12 @@ async function openChat(chatId) {
     renderAttachStrip();
     /* Диалог другого проекта — панель файлов переходит к его проекту. */
     followActiveProject();
-    state.filesPath = '.';
+    resetFilesTree();
     if (data.chat.run?.id) trackRun(data.chat.run.id, chatId);
     renderSidebar();
     renderThread();
     updateCrumbs();
-    if (state.filesOpen) loadFiles('.');
+    if (state.filesOpen) loadFiles();
     if (!restoreFilesUi()) closeSidebar();
     rememberChat(chatId);
     /* В этом диалоге идёт задача — подключаемся и показываем накопленное. */
@@ -1653,7 +1658,7 @@ function closeRunView(run, status) {
   } else if (status === 'done') {
     toast('Задача в другом диалоге завершена');
   }
-  if (state.filesOpen) loadFiles(state.filesPath);
+  if (state.filesOpen) loadFiles();
 }
 
 async function reloadChatInPlace(chatId) {
@@ -1914,11 +1919,11 @@ async function refreshFilesQuietly() {
   if (!projectId || !state.filesOpen) return;
   let data;
   try {
-    data = await api(`/api/projects/${projectId}/files?path=${encodeURIComponent(state.filesPath)}&depth=6`);
+    data = await api(`/api/projects/${projectId}/files?path=${encodeURIComponent('.')}&depth=6`);
   } catch {
     return; /* нет связи — остаётся то, что уже нарисовано */
   }
-  if (projectId !== filesProjectId() || state.filesPath !== (data.path || '.')) return;
+  if (projectId !== filesProjectId()) return;
   const items = data.items || [];
   if (filesSignature(items) === filesSignature(state.files)) return;
   state.files = items;
@@ -1960,7 +1965,7 @@ async function syncFromServer() {
       state.activeProjectId = first?.id || null;
       state.activeChatId = null;
       state.chat = null;
-      state.filesPath = '.';
+      resetFilesTree();
       state.files = [];
       syncFilesProjectLabel();
       if (first) state.expanded.add(first.id);
@@ -2321,11 +2326,9 @@ function renderAttachStrip() {
   }
 }
 
-/* «＋» на телефоне открывает то же меню, что в бесплатном приложении
-   DeepSeek: снять фото камерой, выбрать фото из галереи или файл. Действие
-   сразу открывает выбор файла — поэтому строка меню это <button>, а выбор
-   вызывается в том же обработчике: Safari открывает фото и файлы только из
-   живого нажатия, после таймера окно выбора не откроется. */
+/* Три отдельные кнопки прикрепления — камера, галерея, файл. Каждая сразу
+   открывает свой выбор файла: никакого промежуточного меню, поэтому и окно
+   выбора открывается в живом нажатии — Safari пускает фото и файлы только так. */
 function pickFiles({ accept = '', capture = '', multiple = true } = {}) {
   const input = $('#fileInput');
   if (!input) return;
@@ -2334,28 +2337,6 @@ function pickFiles({ accept = '', capture = '', multiple = true } = {}) {
   if (capture) input.setAttribute('capture', capture);
   else input.removeAttribute('capture');
   input.click();
-}
-
-function openAttachMenu() {
-  const body = el('div', 'attach-menu');
-  const item = (icon, label, hint, onClick) => {
-    const button = el('button', 'attach-menu-item');
-    button.type = 'button';
-    button.innerHTML = `${icon}<span class="attach-menu-text"><span class="attach-menu-label">${label}</span><span class="attach-menu-hint">${hint}</span></span>`;
-    button.addEventListener('click', () => {
-      /* Сначала выбор файла, потом закрытие листа: так нажатие остаётся
-         пользовательским жестом для системы. */
-      onClick();
-      closeModal();
-    });
-    return button;
-  };
-  body.append(
-    item(ICONS.camera, 'Сфотографировать', 'Камера телефона', () => pickFiles({ accept: 'image/*', capture: 'environment', multiple: false })),
-    item(ICONS.image, 'Фото из галереи', 'Снимки и скриншоты', () => pickFiles({ accept: 'image/*' })),
-    item(ICONS.file, 'Файл', 'Word, Excel, PDF, текст', () => pickFiles()),
-  );
-  openModal({ title: 'Прикрепить', body, className: 'attach-menu-modal' });
 }
 
 async function uploadFiles(fileList) {
@@ -2468,6 +2449,13 @@ const filesNarrow = () => window.matchMedia('(max-width: 1100px)').matches;
    памяти человек оказывался в чате вместо списка, из которого открывал файл. */
 const FILES_UI_KEY = 'dshow:files-ui';
 
+/* Смена проекта (и выход из аккаунта) начинают дерево файлов заново: чужие
+   раскрытые папки не должны «всплывать» в папке нового проекта. */
+function resetFilesTree() {
+  state.filesExpanded.clear();
+  state.filesLoaded.clear();
+}
+
 function saveFilesUi() {
   /* До входа в аккаунт запоминать нечего: разметка страницы строится раньше,
      чем приходит сессия, и такая «пустая» запись затирала открытую панель. */
@@ -2475,7 +2463,7 @@ function saveFilesUi() {
   try {
     sessionStorage.setItem(
       FILES_UI_KEY,
-      JSON.stringify({ projectId: filesProjectId(), drawer: Boolean(state.filesDrawerOpen), path: state.filesPath || '.' }),
+      JSON.stringify({ projectId: filesProjectId(), drawer: Boolean(state.filesDrawerOpen) }),
     );
   } catch {
     /* Приватный режим может запрещать хранилище — панель просто не запомнится. */
@@ -2499,9 +2487,8 @@ function restoreFilesUi(saved = readFilesUi()) {
   if (saved.projectId && saved.projectId !== filesProjectId()) return false;
   if (state.filesDrawerOpen) return false;
   state.filesDrawerOpen = true;
-  state.filesPath = saved.path && saved.path !== '.' ? saved.path : '.';
   syncFilesPanel();
-  loadFiles(state.filesPath);
+  loadFiles();
   return true;
 }
 
@@ -2521,8 +2508,7 @@ function syncFilesPanel({ reload = false } = {}) {
   applyLayout();
   syncFilesProjectLabel();
   if (open && reload && filesProjectId()) {
-    state.filesPath = '.';
-    loadFiles('.');
+    loadFiles();
   }
 }
 
@@ -2556,7 +2542,9 @@ function filesNote(text) {
   filesNote.timer = setTimeout(() => node.classList.add('hidden'), 9000);
 }
 
-async function loadFiles(relPath) {
+/* Корень проекта приходит одним запросом вместе со всем деревом: папки и их
+   документы уже в наборе, поэтому раскрытие папки ничего не ждёт. */
+async function loadFiles() {
   const projectId = filesProjectId();
   if (!projectId) return;
   /* Проект мог смениться, пока шёл запрос: ответ от прошлого проекта не должен
@@ -2565,10 +2553,11 @@ async function loadFiles(relPath) {
   list.innerHTML = '<div class="files-empty"><div class="spin-lg"></div></div>';
   state.filesLoading = true;
   try {
-    const data = await api(`/api/projects/${projectId}/files?path=${encodeURIComponent(relPath)}&depth=6`);
+    const data = await api(`/api/projects/${projectId}/files?path=${encodeURIComponent('.')}&depth=6`);
     if (projectId !== filesProjectId()) return;
-    state.filesPath = relPath;
     state.files = data.items || [];
+    state.filesLoaded = new Set(['.']);
+    pruneFilesExpanded();
     renderFiles();
   } catch (error) {
     if (projectId !== filesProjectId()) return;
@@ -2579,161 +2568,248 @@ async function loadFiles(relPath) {
   }
 }
 
+/* Родитель пути: у верхнего уровня его нет — это корень проекта. */
+function fileParentOf(path) {
+  const cut = String(path).lastIndexOf('/');
+  return cut === -1 ? '.' : String(path).slice(0, cut);
+}
+
+/* Прямые дети папки, папки первыми — тот же порядок, что в панели «Проекты»:
+   человек читает обе панели одинаково. */
+function filesChildren(parent) {
+  return state.files
+    .filter((item) => fileParentOf(item.path) === parent)
+    .sort((first, second) => (second.dir ? 1 : 0) - (first.dir ? 1 : 0) || first.name.localeCompare(second.name, 'ru'));
+}
+
+/* Раскрытые папки могли исчезнуть с другого устройства: лишние пути забываем,
+   чтобы дерево не считало их открытыми. */
+function pruneFilesExpanded() {
+  const dirs = new Set(state.files.filter((item) => item.dir).map((item) => item.path));
+  for (const path of [...state.filesExpanded]) if (!dirs.has(path)) state.filesExpanded.delete(path);
+  for (const path of [...state.filesLoaded]) if (path !== '.' && !dirs.has(path)) state.filesLoaded.delete(path);
+}
+
+/* Дерево панели: папка — такая же строка с треугольником, как проект в левой
+   панели, а её документы лежат вложенным списком с отступом. Никаких переходов
+   «внутрь папки» и «Наверх» здесь нет: раскрыл — увидел, свернул — спрятал. */
 function renderFiles() {
   const list = $('#filesList');
-  /* Показываем только то, что лежит прямо в открытой папке. Сервер отдаёт
-     дерево вложенности одним списком, и без этой проверки файлы из подпапок
-     подмешивались в корень рядом с самими папками — вместо группировки
-     получалась плоская свалка. */
-  const atRoot = state.filesPath === '.';
-  const prefix = atRoot ? '' : `${state.filesPath.replace(/\/+$/, '')}/`;
-  const visible = [];
-  for (const item of state.files) {
-    if (prefix && !item.path.startsWith(prefix)) continue;
-    const rest = prefix ? item.path.slice(prefix.length) : item.path;
-    /* rest со слэшем — это уже содержимое вложенной папки, ему здесь не место. */
-    if (!rest || rest.includes('/')) continue;
-    visible.push(item);
-  }
+  if (!list) return;
+  /* Прокрутку сохраняем: раскрытие папки не должно отбрасывать список в начало. */
+  const scrollTop = list.scrollTop;
   list.innerHTML = '';
-  if (!atRoot) {
-    /* Название открытой папки вместо прежней строки с путём «/ compare»,
-       которая висела над кнопкой «Загрузить файлы» и ничего не объясняла. */
-    const loc = el('div', 'files-loc');
-    loc.innerHTML = `<span class="loc-icon">${ICONS.folder}</span>`;
-    loc.appendChild(el('span', 'loc-name', state.filesPath.split('/').pop()));
-    loc.title = `Открыта папка «${state.filesPath}»`;
-    list.appendChild(loc);
-  }
-  if (state.filesPath !== '.') {
-    const up = el('div', 'file-row');
-    up.innerHTML = `<span class="f-icon">${ICONS.folder}</span><span class="f-name">Наверх</span>`;
-    const goUp = () => {
-      const parent = state.filesPath.split('/').slice(0, -1).join('/') || '.';
-      loadFiles(parent);
-    };
-    up.addEventListener('click', goUp);
-    /* Строка ведёт себя как кнопка и с клавиатуры — так же, как строки файлов. */
-    up.setAttribute('role', 'button');
-    up.tabIndex = 0;
-    up.setAttribute('aria-label', 'Наверх, в родительскую папку');
-    up.addEventListener('keydown', (event) => {
-      if (event.key === 'Enter' || event.key === ' ') {
-        event.preventDefault();
-        goUp();
-      }
-    });
-    list.appendChild(up);
-  }
-  if (!visible.length) {
+  if (!(state.files || []).length) {
     list.appendChild(el('div', 'files-empty', 'Пока пусто. Загрузите файл кнопкой выше.'));
     return;
   }
-  for (const item of visible) {
-    const row = el('div', 'file-row');
-    const isImage = /\.(png|jpe?g|webp|gif|bmp)$/i.test(item.name);
-    /* Открытие файла — отдельная кнопка: справа от неё лежат кнопки «Скачать»
-       и «Удалить», и роль кнопки на всей строке делала их вложенными. */
-    const fileMain = el('button', 'row-main');
-    fileMain.type = 'button';
-    fileMain.innerHTML = `<span class="f-icon">${item.dir ? ICONS.folder : isImage ? ICONS.image : ICONS.file}</span>`;
-    const name = fileNameEl(item.name, 'f-name');
-    /* Подсказка про управление: на телефоне — тап, на компьютере — двойной щелчок.
-       В обоих случаях файл открывается в окне просмотра приложения. */
-    const touch = isTouchUi();
-    name.title = item.dir
-      ? item.path
-      : touch
-        ? `${item.path} — нажмите, чтобы открыть в приложении; кнопка «Скачать» — сохранить файл`
-        : `${item.path} — двойной щелчок: открыть в приложении; кнопка «Скачать» — сохранить файл`;
-    fileMain.appendChild(name);
-    if (!item.dir) fileMain.appendChild(el('span', 'f-size', fmtSize(item.size)));
-    row.appendChild(fileMain);
-    const actions = el('div', 'f-actions');
-    if (!item.dir) {
-      /* Файл можно утащить мышью из панели на рабочий стол (или в любую папку):
-         Chrome скачивает по DownloadURL, остальные браузеры берут ссылку из uri-list. */
-      row.draggable = true;
-      row.addEventListener('dragstart', (event) => {
-        state.dragOut = true;
-        const url = new URL(fileUrl(item.path, true), location.origin).href;
-        const fileName = item.name.replace(/:/g, '_');
-        try {
-          event.dataTransfer.effectAllowed = 'copy';
-          event.dataTransfer.setData('DownloadURL', `${mimeOf(fileName)}:${fileName}:${url}`);
-          event.dataTransfer.setData('text/uri-list', url);
-          event.dataTransfer.setData('text/plain', fileName);
-        } catch {
-          /* старые браузеры без DataTransfer.setData */
-        }
-      });
-      row.addEventListener('dragend', () => {
-        state.dragOut = false;
-      });
-      const download = el('button', 'btn btn-ghost btn-icon');
-      download.type = 'button';
-      download.title = 'Скачать';
-      download.setAttribute('aria-label', `Скачать «${item.name}»`);
-      download.innerHTML = ICONS.download;
-      download.addEventListener('click', (event) => {
-        event.stopPropagation();
-        openFileViewer(item);
-      });
-      actions.appendChild(download);
-    }
-    const del = el('button', 'btn btn-ghost btn-icon');
-    del.type = 'button';
-    del.title = 'Удалить';
-    del.innerHTML = ICONS.trash;
-    del.addEventListener('click', async (event) => {
-      event.stopPropagation();
-      /* Подтверждение — та же карточка в панели файлов, что и удаление проекта
-         в панели проектов: один стиль у всех удалений. */
-      const ok = await confirmPopover({
-        anchor: del,
-        title: 'Удалить файл?',
-        text: `«${item.path}» будет удалён из проекта.`,
-        confirmLabel: 'Удалить',
-      });
-      if (!ok) return;
-      try {
-        await api(`/api/projects/${filesProjectId()}/file?path=${encodeURIComponent(item.path)}`, { method: 'DELETE' });
-        loadFiles(state.filesPath);
-      } catch (error) {
-        filesNote(error.message);
-      }
-    });
-    actions.appendChild(del);
-    row.appendChild(actions);
-    fileMain.addEventListener('click', () => {
-      if (item.dir) {
-        loadFiles(item.path);
-        return;
-      }
-      /* На тач-экране одиночный тап открывает файл в окне просмотра (скачивание —
-         только кнопкой «Скачать»). На компьютере открывает двойной щелчок — и тоже
-         в окне просмотра: внешние Word/Excel/PowerPoint больше не вызываются, они
-         показывали системное окно «Microsoft Office» с вопросом про безопасность. */
-      if (isTouchUi()) openFilePreview(item);
-    });
-    row.addEventListener('click', (event) => {
-      /* Клик мимо кнопок — то же, что по названию файла. */
-      if (event.target === row) fileMain.click();
-    });
-    fileMain.addEventListener('dblclick', (event) => {
-      if (item.dir || isTouchUi()) return;
-      event.preventDefault();
-      openFilePreview(item);
-    });
-    row.addEventListener('dblclick', (event) => {
-      if (item.dir || isTouchUi()) return;
-      /* Двойной щелчок по кнопкам справа — это два нажатия, а не открытие. */
-      if (event.target.closest('.f-actions')) return;
-      event.preventDefault();
-      openFilePreview(item);
-    });
-    list.appendChild(row);
+  for (const node of filesTreeNodes('.')) list.appendChild(node);
+  list.scrollTop = scrollTop;
+}
+
+function filesTreeNodes(parent) {
+  return filesChildren(parent).map((item) => (item.dir ? folderNode(item) : fileRow(item)));
+}
+
+function folderNode(item) {
+  const open = state.filesExpanded.has(item.path);
+  const children = filesChildren(item.path);
+  const node = el('div', `file-node${open ? '' : ' collapsed'}`);
+  const row = el('div', 'file-row');
+  /* Открытие папки — отдельная кнопка: справа лежит «Удалить», и роль кнопки
+     на всей строке делала бы её вложенной. */
+  const main = el('button', 'row-main');
+  main.type = 'button';
+  main.title = open ? `Свернуть папку «${item.name}»` : `Раскрыть папку «${item.name}»`;
+  main.setAttribute('aria-expanded', String(open));
+  /* Треугольник — та же деталь, что у проектов: у пустой папки место остаётся,
+     чтобы имена не прыгали влево. */
+  main.innerHTML = `<span class="p-caret${children.length ? '' : ' is-empty'}"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M6 8l4 4 4-4"/></svg></span><span class="f-icon">${open ? ICONS.folderOpen : ICONS.folder}</span>`;
+  main.appendChild(fileNameEl(item.name, 'f-name'));
+  main.appendChild(el('span', 'f-count', children.length ? String(children.length) : ''));
+  row.appendChild(main);
+  row.appendChild(fileActions(item));
+  const toggle = () => toggleFolder(item);
+  main.addEventListener('click', toggle);
+  row.addEventListener('click', (event) => {
+    if (event.target === row) toggle();
+  });
+  attachFolderDrop(row, item);
+  node.appendChild(row);
+  if (open && children.length) {
+    const group = el('div', 'files-group');
+    for (const child of filesTreeNodes(item.path)) group.appendChild(child);
+    node.appendChild(group);
   }
+  return node;
+}
+
+function toggleFolder(item) {
+  if (state.filesExpanded.has(item.path)) {
+    state.filesExpanded.delete(item.path);
+    renderFiles();
+    return;
+  }
+  state.filesExpanded.add(item.path);
+  renderFiles();
+  /* Содержимое корня уже известно; папку глубже шестого уровня подгружаем.
+     Пустая папка тоже спросит сервер один раз и запомнится как прочитанная. */
+  if (state.filesLoaded.has(item.path) || filesChildren(item.path).length) return;
+  loadFolderContents(item);
+}
+
+async function loadFolderContents(item) {
+  const projectId = filesProjectId();
+  if (!projectId) return;
+  try {
+    const data = await api(`/api/projects/${projectId}/files?path=${encodeURIComponent(item.path)}&depth=6`);
+    if (projectId !== filesProjectId()) return;
+    state.files = mergeFiles(state.files, data.items || []);
+    state.filesLoaded.add(item.path);
+    renderFiles();
+  } catch (error) {
+    filesNote(error.message);
+  }
+}
+
+function mergeFiles(items, extra) {
+  const byPath = new Map((items || []).map((entry) => [entry.path, entry]));
+  for (const entry of extra || []) byPath.set(entry.path, entry);
+  return [...byPath.values()];
+}
+
+function fileRow(item) {
+  const row = el('div', 'file-row');
+  const isImage = /\.(png|jpe?g|webp|gif|bmp)$/i.test(item.name);
+  /* Открытие файла — отдельная кнопка: справа от неё лежат кнопки «Скачать»
+     и «Удалить», и роль кнопки на всей строке делала их вложенными. */
+  const fileMain = el('button', 'row-main');
+  fileMain.type = 'button';
+  fileMain.innerHTML = `<span class="f-icon">${isImage ? ICONS.image : ICONS.file}</span>`;
+  const name = fileNameEl(item.name, 'f-name');
+  /* Подсказка про управление: на телефоне — тап, на компьютере — двойной щелчок.
+     В обоих случаях файл открывается в окне просмотра приложения. */
+  const touch = isTouchUi();
+  name.title = touch
+    ? `${item.path} — нажмите, чтобы открыть в приложении; кнопка «Скачать» — сохранить файл`
+    : `${item.path} — двойной щелчок: открыть в приложении; кнопка «Скачать» — сохранить файл`;
+  fileMain.appendChild(name);
+  fileMain.appendChild(el('span', 'f-size', fmtSize(item.size)));
+  row.appendChild(fileMain);
+  row.appendChild(fileActions(item));
+  /* Файл можно утащить мышью из панели на рабочий стол (или в любую папку):
+     Chrome скачивает по DownloadURL, остальные браузеры берут ссылку из uri-list. */
+  row.draggable = true;
+  row.addEventListener('dragstart', (event) => {
+    state.dragOut = true;
+    const url = new URL(fileUrl(item.path, true), location.origin).href;
+    const fileName = item.name.replace(/:/g, '_');
+    try {
+      event.dataTransfer.effectAllowed = 'copy';
+      event.dataTransfer.setData('DownloadURL', `${mimeOf(fileName)}:${fileName}:${url}`);
+      event.dataTransfer.setData('text/uri-list', url);
+      event.dataTransfer.setData('text/plain', fileName);
+    } catch {
+      /* старые браузеры без DataTransfer.setData */
+    }
+  });
+  row.addEventListener('dragend', () => {
+    state.dragOut = false;
+  });
+  fileMain.addEventListener('click', () => {
+    /* На тач-экране одиночный тап открывает файл в окне просмотра (скачивание —
+       только кнопкой «Скачать»). На компьютере открывает двойной щелчок — и тоже
+       в окне просмотра: внешние Word/Excel/PowerPoint больше не вызываются, они
+       показывали системное окно «Microsoft Office» с вопросом про безопасность. */
+    if (isTouchUi()) openFilePreview(item);
+  });
+  row.addEventListener('click', (event) => {
+    /* Клик мимо кнопок — то же, что по названию файла. */
+    if (event.target === row) fileMain.click();
+  });
+  fileMain.addEventListener('dblclick', (event) => {
+    if (isTouchUi()) return;
+    event.preventDefault();
+    openFilePreview(item);
+  });
+  row.addEventListener('dblclick', (event) => {
+    if (isTouchUi()) return;
+    /* Двойной щелчок по кнопкам справа — это два нажатия, а не открытие. */
+    if (event.target.closest('.f-actions')) return;
+    event.preventDefault();
+    openFilePreview(item);
+  });
+  return row;
+}
+
+/* Кнопки справа в строке: «Скачать» — только у файла, «Удалить» — у всех:
+   папка удаляется вместе со всем, что в ней лежит. */
+function fileActions(item) {
+  const actions = el('div', 'f-actions');
+  if (!item.dir) {
+    const download = el('button', 'btn btn-ghost btn-icon');
+    download.type = 'button';
+    download.title = 'Скачать';
+    download.setAttribute('aria-label', `Скачать «${item.name}»`);
+    download.innerHTML = ICONS.download;
+    download.addEventListener('click', (event) => {
+      event.stopPropagation();
+      openFileViewer(item);
+    });
+    actions.appendChild(download);
+  }
+  const del = el('button', 'btn btn-ghost btn-icon');
+  del.type = 'button';
+  del.title = 'Удалить';
+  del.innerHTML = ICONS.trash;
+  del.addEventListener('click', async (event) => {
+    event.stopPropagation();
+    /* Подтверждение — та же карточка в панели файлов, что и удаление проекта
+       в панели проектов: один стиль у всех удалений. */
+    const ok = await confirmPopover({
+      anchor: del,
+      title: item.dir ? 'Удалить папку?' : 'Удалить файл?',
+      text: item.dir
+        ? `«${item.path}» и всё, что в ней лежит, будет удалено из проекта.`
+        : `«${item.path}» будет удалён из проекта.`,
+      confirmLabel: 'Удалить',
+    });
+    if (!ok) return;
+    try {
+      await api(`/api/projects/${filesProjectId()}/file?path=${encodeURIComponent(item.path)}`, { method: 'DELETE' });
+      loadFiles();
+    } catch (error) {
+      filesNote(error.message);
+    }
+  });
+  actions.appendChild(del);
+  return actions;
+}
+
+/* Папку можно раскрыть не только нажатием: файлы с компьютера, брошенные прямо
+   на её строку, попадают внутрь — так документ кладут в нужную папку, не открывая
+   её отдельным переходом. */
+function attachFolderDrop(row, item) {
+  row.addEventListener('dragover', (event) => {
+    if (state.dragOut || !dragCarriesFiles(event)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.dataTransfer.dropEffect = 'copy';
+    row.classList.add('drop-target');
+  });
+  row.addEventListener('dragleave', (event) => {
+    if (row.contains(event.relatedTarget)) return;
+    row.classList.remove('drop-target');
+  });
+  row.addEventListener('drop', (event) => {
+    const files = event.dataTransfer?.files;
+    row.classList.remove('drop-target');
+    if (!files || !files.length) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (state.dragOut) return;
+    uploadToProject(files, item.path);
+  });
 }
 
 function fileUrl(relPath, download = false) {
@@ -3503,9 +3579,9 @@ function openFilePreview(item) {
 }
 
 
-/* Загрузка файлов в проект. dir — папка внутри проекта ('.' — корень):
-   файл попадает туда, где пользователь сейчас находится в «Файлах проекта». */
-async function uploadToProject(fileList, dir = state.filesPath) {
+/* Загрузка файлов в проект. dir — папка внутри проекта ('.' — корень): файл
+   попадает в корень проекта или в ту папку, на строку которой его бросили. */
+async function uploadToProject(fileList, dir = '.') {
   const files = Array.from(fileList || []);
   if (!files.length) return;
   const projectId = filesProjectId();
@@ -3545,8 +3621,10 @@ async function uploadToProject(fileList, dir = state.filesPath) {
   }
   if (added) {
     /* Успех виден по самому списку: файл уже в панели. Всплывающее окно здесь
-       только мешало — оно закрывало поле ввода снизу экрана. */
-    await loadFiles(state.filesPath);
+       только мешало — оно закрывало поле ввода снизу экрана. Папку, в которую
+       положили файл, раскрываем: иначе он спрятан внутри свёрнутой строки. */
+    if (folder) state.filesExpanded.add(folder);
+    await loadFiles();
   }
 }
 
@@ -4265,8 +4343,8 @@ async function deleteProject(project, anchor = null) {
         state.expanded.add(first.id);
         /* Удалили проект, чьи файлы показывала панель, — переходим к живому. */
         followActiveProject();
-        state.filesPath = '.';
-        if (state.filesOpen) loadFiles('.');
+        resetFilesTree();
+        if (state.filesOpen) loadFiles();
         if (first.chats?.[0]) await openChat(first.chats[0].id);
         else {
           renderThread();
@@ -4373,8 +4451,8 @@ function createProjectModal({ workflowId = '', anchor = null } = {}) {
       renderThread();
       updateCrumbs();
       followActiveProject();
-      state.filesPath = '.';
-      if (state.filesOpen) loadFiles('.');
+      resetFilesTree();
+      if (state.filesOpen) loadFiles();
       /* Телефон: проект создаётся из ящика «Проекты», и ящик закрывается сам —
          иначе новый диалог оставался под ним: поля ввода не видно, сообщение
          отправить некуда. На широком экране эта строка ничего не меняет. */
@@ -4694,7 +4772,7 @@ function resetClientState() {
   state.activeChatId = null;
   state.chat = null;
   state.attachments = [];
-  state.filesPath = '.';
+  resetFilesTree();
   state.filesDrawerOpen = false;
   state.filesLoading = false;
   /* Запомненное состояние панели принадлежит прошлому аккаунту — не переносим. */
@@ -6632,12 +6710,11 @@ window.addEventListener('resize', () => {
 });
 loadAnswerModes();
 $('#stopBtn').addEventListener('click', stopGeneration);
-/* На компьютере скрепка сразу открывает выбор файлов, на телефоне «＋»
-   сначала показывает меню: камера, галерея, файл. */
-$('#attachBtn').addEventListener('click', () => {
-  if (document.documentElement.classList.contains('compact-input')) openAttachMenu();
-  else pickFiles();
-});
+/* Прикрепление — три кнопки без меню: камера, галерея и файл стоят в одном
+   ряду с орфографией, микрофоном и отправкой, каждая срабатывает в один тап. */
+$('#photoBtn').addEventListener('click', () => pickFiles({ accept: 'image/*', capture: 'environment', multiple: false }));
+$('#galleryBtn').addEventListener('click', () => pickFiles({ accept: 'image/*' }));
+$('#fileBtn').addEventListener('click', () => pickFiles());
 $('#fileInput').addEventListener('change', (event) => {
   uploadFiles(event.target.files);
   event.target.value = '';
@@ -7322,7 +7399,7 @@ filesPanel.addEventListener('drop', (event) => {
   if (!files || !files.length) return;
   event.preventDefault();
   if (state.dragOut) return;
-  uploadToProject(files, state.filesPath);
+  uploadToProject(files);
 });
 
 /* Файл, вытащенный из панели, не должен открываться в самой странице:

@@ -580,35 +580,38 @@ try {
         ? ok('одиночный клик по строке файла не скачивает документ')
         : fail('одиночный клик по файлу', txtClick);
 
-      /* Папка в панели — отдельная строка, а её содержимое не подмешивается
-         в корень: сначала проверяем группировку, потом открываем папку. */
-      const insideInRoot = await evaluate(`[...document.querySelectorAll('.file-row .f-name')].some(n => n.textContent === 'inside.txt')`);
+      /* Папки в панели — дерево, как в «Проектах»: строка с треугольником и
+         содержимое с отступом. Ни «Наверх», ни перехода внутрь папки нет. */
+      const insideInRoot = await evaluate(`[...document.querySelectorAll('.files-list > .file-row .f-name, .files-list > .file-node > .file-row .f-name')].some(n => n.textContent === 'inside.txt')`);
       !insideInRoot
         ? ok('файл из подпапки не подмешан в корень списка')
         : fail('группировка файлов', 'inside.txt показан в корне вместо папки');
       const hasFolder = await evaluate(`[...document.querySelectorAll('.file-row')].some(r => r.querySelector('.f-name') && r.querySelector('.f-name').textContent === 'folder')`);
       if (hasFolder) {
-        await evaluate(`[...document.querySelectorAll('.file-row')].find(r => r.querySelector('.f-name') && r.querySelector('.f-name').textContent === 'folder').click()`);
-        const inside = await waitFor(`!!document.querySelector('.files-loc')`, 8000);
-        inside ? ok('папка открывается, путь показан без слэша') : fail('открытие папки', await text('#filesList'));
-        const folderFiles = await evaluate(`[...document.querySelectorAll('.file-row .f-name')].map(n => n.textContent)`);
-        folderFiles.includes('inside.txt')
-          ? ok('в открытой папке видны её документы')
-          : fail('документы папки', JSON.stringify(folderFiles));
-        const loc = (await text('.files-loc')).trim();
-        loc === 'folder'
-          ? ok('подпись открытой папки без «/»')
-          : fail('подпись папки', JSON.stringify(loc));
-        const upRow = await evaluate(`[...document.querySelectorAll('.file-row')].some(r => (r.querySelector('.f-name') || {}).textContent === 'Наверх')`);
-        if (upRow) {
-          await evaluate(`[...document.querySelectorAll('.file-row')].find(r => (r.querySelector('.f-name') || {}).textContent === 'Наверх').click()`);
-          /* Ждём именно корневой список с папкой: пока идёт запрос, в панели
-             крутится заглушка и подпись папки пропадает раньше времени. */
-          const backToRoot = await waitFor(`!document.querySelector('.files-loc') && [...document.querySelectorAll('.file-row .f-name')].some(n => n.textContent === 'folder')`, 8000);
-          backToRoot ? ok('«Наверх» возвращает в корень') : fail('«Наверх»', await text('#filesList'));
-        } else {
-          fail('папка', 'нет строки «Наверх»');
-        }
+        const folderPath = `[...document.querySelectorAll('.file-row')].find(r => r.querySelector('.f-name') && r.querySelector('.f-name').textContent === 'folder')`;
+        await evaluate(`${folderPath}.querySelector('.row-main').click()`);
+        const opened = await waitFor(`!!document.querySelector('.files-group') && [...document.querySelectorAll('.files-group .f-name')].some(n => n.textContent === 'inside.txt')`, 8000);
+        opened ? ok('папка раскрывается на месте, как проект в «Проектах»') : fail('раскрытие папки', await text('#filesList'));
+        const tree = await evaluate(`(() => {
+          const group = document.querySelector('.files-group');
+          return {
+            loc: !!document.querySelector('.files-loc'),
+            up: [...document.querySelectorAll('.file-row .f-name')].some(n => n.textContent === 'Наверх'),
+            indent: group ? parseFloat(getComputedStyle(group).paddingLeft) : 0,
+            caret: group ? getComputedStyle(group.parentElement.querySelector('.p-caret')).transform : '',
+            rowCaret: !!document.querySelector('.file-node > .file-row .p-caret svg'),
+          };
+        })()`);
+        !tree.loc ? ok('строки с путём над списком больше нет') : fail('строка пути', 'вернулась');
+        !tree.up ? ok('строки «Наверх» больше нет') : fail('«Наверх»', 'осталась в списке');
+        tree.indent >= 10 ? ok('документы папки стоят с отступом, как диалоги проекта', `${tree.indent}px`) : fail('отступ вложенного списка', `${tree.indent}px`);
+        tree.rowCaret ? ok('у папки есть треугольник раскрытия') : fail('треугольник папки', 'нет значка');
+        const openCaret = tree.caret;
+        await evaluate(`${folderPath}.querySelector('.row-main').click()`);
+        const collapsed = await waitFor(`!document.querySelector('.files-group')`, 8000);
+        const closedCaret = await evaluate(`getComputedStyle(document.querySelector('.file-node > .file-row .p-caret')).transform`);
+        collapsed ? ok('повторное нажатие сворачивает папку') : fail('сворачивание папки', await text('#filesList'));
+        openCaret !== closedCaret ? ok('треугольник повёрнут у свёрнутой папки') : fail('поворот треугольника', `${openCaret} / ${closedCaret}`);
       }
       // Удаление файла с подтверждением.
       await evaluate(`(() => {

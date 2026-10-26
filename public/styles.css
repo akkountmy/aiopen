@@ -2271,21 +2271,14 @@ html.kb-open .scroll-jump {
   gap: 4px;
 }
 
-/* Режимы ответа. Задуманы как в мобильном DeepSeek: две подписи-таблетки
-   над полем ввода, каждая включается отдельно и подсвечивается. На широком
-   экране не показываем — там композер остаётся прежним; на телефоне и в
-   ярлыке-приложении строка раскрывается (см. медиазапросы ниже). */
-.composer-modes {
+/* Режим ответа — один переключатель композера. На компьютере его нет: там
+   режим всегда максимальный, и лишняя кнопка только занимает место. На телефоне
+   и в ярлыке-приложении кнопка встаёт в нижний ряд — на место, где в приложении
+   DeepSeek стоит «＋» (раскладку задаёт html.compact-input ниже). */
+.mode-chip {
   display: none;
   align-items: center;
-  flex-wrap: wrap;
-  gap: 6px;
-  padding: 2px 4px 5px;
-}
-
-.mode-chip {
-  display: inline-flex;
-  align-items: center;
+  justify-content: center;
   gap: 6px;
   height: 30px;
   padding: 0 11px;
@@ -2333,46 +2326,6 @@ html.kb-open .scroll-jump {
 .mode-chip:disabled {
   opacity: 0.45;
   cursor: default;
-}
-
-@media (max-width: 860px) {
-  .composer-modes {
-    display: flex;
-  }
-}
-
-/* Ярлык-приложение на планшете может быть шире телефона: режимы всё равно
-   остаются доступными, потому что это отдельный установленный клиент. */
-@media (display-mode: standalone) {
-  .composer-modes {
-    display: flex;
-  }
-}
-
-/* Старые iOS не всегда отдают display-mode в CSS, хотя navigator.standalone
-   уже true. Класс ставит app.js по тому же признаку. */
-html.app-mode .composer-modes {
-  display: flex;
-}
-
-.attach-btn {
-  width: 34px;
-  height: 34px;
-  padding: 0;
-  margin-bottom: 1px;
-  border-radius: var(--radius-sm);
-  color: var(--text-3);
-  flex: none;
-}
-
-.attach-btn:hover:not(:disabled) {
-  color: var(--text);
-  background: var(--layer-hover);
-}
-
-.attach-btn svg {
-  width: 17px;
-  height: 17px;
 }
 
 #input {
@@ -2695,37 +2648,8 @@ html.app-mode .composer-modes {
    выезжающем ящике панель закрывают затемнением, кнопкой-папкой в шапке и
    Escape. */
 
-/* Название открытой папки. Строки с путём «/ compare» над кнопкой «Загрузить
-   файлы» больше нет: путь виден здесь, а возврат в корень — строкой «Наверх». */
-.files-loc {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 10px 2px;
-  font-size: var(--fs-12);
-  font-weight: 500;
-  color: var(--text-2);
-  overflow: hidden;
-  white-space: nowrap;
-  line-height: var(--lh-16);
-}
-
-.files-loc .loc-icon {
-  display: inline-flex;
-  flex: none;
-  color: var(--text-4);
-}
-
-.files-loc .loc-icon svg {
-  width: 14px;
-  height: 14px;
-  display: block;
-}
-
-.files-loc .loc-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
+/* Строки с путём над списком больше нет: папки раскрываются на месте, как в
+   панели «Проекты», и путь никуда не ведёт — перехода «внутрь папки» нет. */
 
 /* Строка состояния панели файлов. Заменила всплывающие подсказки внизу экрана:
    те вставали поверх поля ввода и закрывали текст, который человек печатал.
@@ -2867,6 +2791,52 @@ html.app-mode .composer-modes {
   color: var(--text-4);
   font-size: var(--fs-13);
   line-height: var(--lh-20);
+}
+
+/* Папки раскрываются на месте — тем же приёмом, что проекты в левой панели:
+   строка с треугольником, содержимое вложенным списком с отступом. Свёрнутая
+   папка прячет детей, поэтому ни «Наверх», ни перехода «внутрь папки» здесь
+   нет: список остаётся одним деревом от корня проекта. */
+.files-group {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 2px 0 4px 12px;
+}
+
+.file-node.collapsed > .files-group {
+  display: none;
+}
+
+.file-node.collapsed > .file-row .p-caret {
+  transform: rotate(-90deg);
+}
+
+/* У пустой папки раскрывать нечего, но место под треугольник остаётся: имена
+   строк не прыгают влево, когда рядом стоит пустая папка. */
+.file-node .p-caret.is-empty {
+  visibility: hidden;
+}
+
+.file-node > .file-row .f-icon {
+  color: var(--text-3);
+}
+
+/* Сколько файлов внутри — та же подпись, что счётчик диалогов у проекта. */
+.file-row .f-count {
+  color: var(--text-4);
+  font-size: var(--fs-11);
+  flex: none;
+  line-height: var(--lh-14);
+}
+
+/* Папка — цель для файлов с рабочего стола: подсвечиваем строку, чтобы было
+   видно, в какую папку попадёт документ. */
+.file-row.drop-target {
+  background: var(--accent-soft);
+  color: var(--text);
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
 }
 
 /* Небольшой индикатор ожидания: раньше он жил только внутри чипа инструмента,
@@ -4118,12 +4088,8 @@ html.app-mode .composer-modes {
     padding: 6px 6px 6px 2px;
     border-radius: var(--radius-lg);
   }
-  /* На телефоне пальцем удобнее попасть в кнопку 34 px: ряд режимов стоит
-     над полем и не отнимает ширину у скрепки и отправки. */
-  .composer-modes {
-    gap: 7px;
-    padding: 3px 6px 7px;
-  }
+  /* На телефоне пальцем удобнее попасть в кнопку 34 px: кнопка режима стоит в
+     нижнем ряду вместе с остальными и не отнимает ширину у поля. */
   .mode-chip {
     height: 34px;
     padding: 0 12px;
@@ -4139,18 +4105,6 @@ html.app-mode .composer-modes {
   .attach-strip {
     padding: 8px 8px 2px;
   }
-  .attach-btn {
-    width: 38px;
-    height: 38px;
-    margin-bottom: 0;
-  }
-  /* Скрепка нарисована в сетке 24 px: при том же размере значка штрих чуть
-     плотнее, иначе она выглядит тоньше орфографии и микрофона. */
-  .attach-btn svg {
-    width: 19px;
-    height: 19px;
-    stroke-width: 1.9;
-  }
   /* 16 px — иначе iOS сам увеличивает страницу при фокусе, и края уезжают:
      сообщения обрезаны справа, кнопка отправки оказывается за экраном. */
   /* Две строки видны сразу, ещё до первого символа: на телефоне и в ярлыке
@@ -4162,8 +4116,8 @@ html.app-mode .composer-modes {
     font-size: 16px;
     max-width: 100%;
   }
-  /* Скрепка, орфография и микрофон — одинаковые кнопки 38×38 с значком 19 px:
-     раньше скрепка была 38, инструменты 36, и ряд выглядел разнокалиберным. */
+  /* Три кнопки прикрепления, орфография и микрофон — одинаковые кнопки 38×38 с
+     значком 19 px: разнокалиберный ряд выглядел случайным. */
   .tool-btn {
     width: 38px;
     height: 38px;
@@ -4261,9 +4215,6 @@ html.app-mode .composer-modes {
   }
   .files-title {
     height: 40px;
-  }
-  .files-loc {
-    padding: 8px 8px 2px;
   }
   .files-upload {
     height: 40px;
@@ -4428,9 +4379,8 @@ html.app-mode .composer-modes {
   .composer-row {
     gap: 3px;
   }
-  /* На узком экране кнопки ввода не уменьшаем: ряд из скрепки, орфографии,
-     микрофона и отправки остаётся одного размера — 38×38. */
-  .attach-btn,
+  /* На узком экране кнопки ввода не уменьшаем: ряд из трёх кнопок
+     прикрепления, орфографии, микрофона и отправки остаётся 38×38. */
   .tool-btn {
     width: 38px;
     height: 38px;
@@ -6816,7 +6766,7 @@ html.app-mode .composer-modes {
 
 /* --------------- композер как в приложении DeepSeek ----------------------
    Телефон и установленный ярлык: поле ввода сверху, под ним чипы режимов,
-   ниже «＋» слева и микрофон с отправкой справа — та же раскладка, что в
+   ниже «Рассуждения» слева и остальные кнопки справа — та же раскладка, что в
    бесплатном приложении DeepSeek. Разметка не меняется (одна форма, один
    ряд кнопок), раскладку собирает сетка: .composer-row становится
    display: contents, и её дети встают в общую сетку формы. Поэтому на
@@ -6827,32 +6777,19 @@ html.app-mode .composer-modes {
    признаку (ширина ≤ 860 px или открыто как приложение). Медиазапросы и
    display-mode в CSS на старых iOS отвечают по-разному, а класс — один. */
 
-/* Значок на кнопке вложения: на компьютере скрепка, на телефоне «＋». */
-.attach-btn .icon-plus {
-  display: none;
-}
-
-html.compact-input .attach-btn .icon-clip {
-  display: none;
-}
-
-html.compact-input .attach-btn .icon-plus {
-  display: block;
-  stroke-width: 2;
-}
-
 html.compact-input .composer {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto auto auto;
+  /* Восемь колонок: кнопка режима, растяжка и шесть кнопок справа. Растяжка
+     прижимает «Рассуждения» к левому краю, остальные — к правому. */
+  grid-template-columns: auto minmax(0, 1fr) auto auto auto auto auto auto;
   grid-template-areas:
-    'strip strip strip strip strip'
-    'input input input input input'
-    'modes modes modes modes modes'
-    'dict dict dict dict dict'
-    'attach . spell mic send';
+    'strip strip strip strip strip strip strip strip'
+    'input input input input input input input input'
+    'dict dict dict dict dict dict dict dict'
+    'think . photo gal file spell mic send';
   align-items: center;
-  column-gap: 6px;
-  padding: 10px 10px 8px;
+  column-gap: 4px;
+  padding: 8px 8px 6px;
   border-color: var(--line);
   border-radius: 24px;
   box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04), 0 10px 28px rgba(16, 24, 40, 0.07);
@@ -6874,19 +6811,41 @@ html.compact-input #input {
   line-height: 24px;
 }
 
-html.compact-input #composerModes {
-  grid-area: modes;
-  display: flex;
-  padding: 6px 2px 4px;
-}
-
-html.compact-input #attachBtn {
-  grid-area: attach;
-  justify-self: start;
-}
-
 html.compact-input #dictationBar {
   grid-area: dict;
+}
+
+/* Кнопка режима стоит там, где в приложении DeepSeek стоит «＋»: внизу слева.
+   Подпись на телефоне скрыта — это круглый значок, как остальные кнопки ряда. */
+html.compact-input #thinkToggle {
+  grid-area: think;
+  justify-self: start;
+  display: inline-flex;
+  background: var(--layer-2);
+  border: 1px solid var(--line);
+  color: var(--text-2);
+}
+
+html.compact-input #thinkToggle span {
+  display: none;
+}
+
+html.compact-input #thinkToggle[aria-pressed="true"] {
+  color: var(--accent);
+  border-color: rgba(86, 134, 254, 0.5);
+  background: var(--accent-soft);
+}
+
+html.compact-input #photoBtn {
+  grid-area: photo;
+}
+
+html.compact-input #galleryBtn {
+  grid-area: gal;
+}
+
+html.compact-input #fileBtn {
+  grid-area: file;
 }
 
 html.compact-input #spellBtn {
@@ -6903,32 +6862,29 @@ html.compact-input #stopBtn {
   justify-self: end;
 }
 
-/* Кнопки ряда — круги 36 px, как в приложении: «＋» на светлой подложке,
-   микрофон и отправка без рамки. */
-html.compact-input .attach-btn,
+/* Кнопки ряда — круги 34 px, как в приложении: «Рассуждения» на светлой
+   подложке с рамкой, микрофон и отправка без рамки. */
+html.compact-input .mode-chip,
 html.compact-input .tool-btn,
 html.compact-input .btn-send,
 html.compact-input .btn-stop {
-  width: 36px;
-  height: 36px;
+  width: 34px;
+  height: 34px;
+  padding: 0;
   margin-bottom: 0;
   border-radius: 50%;
+  flex: none;
 }
 
-html.compact-input .attach-btn {
-  background: var(--layer-2);
-  border: 1px solid var(--line);
-  color: var(--text-2);
-}
-
-html.compact-input .attach-btn:hover:not(:disabled) {
+html.compact-input .mode-chip:hover:not(:disabled) {
   background: var(--layer-3);
   color: var(--text);
 }
 
-html.compact-input .attach-btn svg {
-  width: 20px;
-  height: 20px;
+html.compact-input .mode-chip svg,
+html.compact-input .tool-btn svg {
+  width: 19px;
+  height: 19px;
 }
 
 html.compact-input .tool-btn {
@@ -6943,60 +6899,6 @@ html.compact-input .btn-send svg {
 /* Подсказка про Enter — для клавиатуры компьютера; в приложении её нет. */
 html.compact-input .composer-hint {
   display: none;
-}
-
-/* Меню «＋»: три строки с значком, подписью и пояснением — камера, галерея,
-   файл. Действие сразу открывает выбор файла, поэтому строка — <button>. */
-.attach-menu {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.attach-menu-item {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  width: 100%;
-  padding: 12px 8px;
-  border: none;
-  border-radius: var(--radius-md);
-  background: transparent;
-  color: var(--text);
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-  -webkit-tap-highlight-color: transparent;
-}
-
-.attach-menu-item:hover:not(:disabled) {
-  background: var(--layer-hover);
-}
-
-.attach-menu-item svg {
-  width: 22px;
-  height: 22px;
-  flex: none;
-  color: var(--text-2);
-  stroke-width: 1.7;
-}
-
-.attach-menu-text {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
-
-.attach-menu-label {
-  font-size: var(--fs-14);
-  line-height: var(--lh-20);
-}
-
-.attach-menu-hint {
-  color: var(--text-4);
-  font-size: var(--fs-12);
-  line-height: var(--lh-16);
 }
 
 /* Приветствие на телефоне — как в приложении: спокойный кегль в две строки,
