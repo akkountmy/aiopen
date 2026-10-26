@@ -122,7 +122,7 @@ function paintAnswerModes() {
   const think = $('#thinkToggle');
   if (think) {
     think.setAttribute('aria-pressed', String(answerModes.thinking));
-    think.setAttribute('aria-label', answerModes.thinking ? 'Рассуждения включены' : 'Рассуждения выключены');
+    think.setAttribute('aria-label', answerModes.thinking ? 'Рассуждение включено' : 'Рассуждение выключено');
   }
 }
 
@@ -1448,7 +1448,7 @@ function renderMessage(message) {
     if (message.modes.thinking) {
       const badge = el('span', 'msg-mode');
       badge.innerHTML = '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 2.4l1.5 4.1 4.1 1.5-4.1 1.5L10 13.6 8.5 9.5 4.4 8l4.1-1.5L10 2.4z" /></svg>';
-      badge.appendChild(el('span', '', 'Рассуждения'));
+      badge.appendChild(el('span', '', 'Рассуждение'));
       badges.appendChild(badge);
     }
     if (message.modes.search) {

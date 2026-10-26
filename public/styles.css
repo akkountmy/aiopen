@@ -6760,7 +6760,7 @@ html.kb-open .scroll-jump {
 
 /* --------------- композер как в приложении DeepSeek ----------------------
    Телефон и установленный ярлык: поле ввода сверху, под ним чипы режимов,
-   ниже «Рассуждения» слева и остальные кнопки справа — та же раскладка, что в
+   ниже «Рассуждение» слева и остальные кнопки справа — та же раскладка, что в
    бесплатном приложении DeepSeek. Разметка не меняется (одна форма, один
    ряд кнопок), раскладку собирает сетка: .composer-row становится
    display: contents, и её дети встают в общую сетку формы. Поэтому на
@@ -6773,15 +6773,18 @@ html.kb-open .scroll-jump {
 
 html.compact-input .composer {
   display: grid;
-  /* Семь колонок: кнопка режима, растяжка и пять кнопок справа. Растяжка
-     прижимает «Рассуждения» к левому краю, остальные — к правому. Последняя
-     колонка — одна кнопка действия: микрофон или отправка (см. ниже). */
-  grid-template-columns: auto minmax(0, 1fr) auto auto auto auto auto;
+  /* Шесть колонок: кнопка режима, растяжка и четыре кнопки справа. Растяжка
+     прижимает «Рассуждение» к левому краю, остальные — к правому. Последняя
+     колонка — одна кнопка действия: микрофон или отправка (см. ниже).
+     Колонку режима задаём minmax(0, max-content), а не auto: на узком экране
+     она уступает место кнопкам, и подпись аккуратно усекается, вместо того
+     чтобы вылезти за рамку поля. */
+  grid-template-columns: minmax(0, max-content) minmax(0, 1fr) auto auto auto auto;
   grid-template-areas:
-    'strip strip strip strip strip strip strip'
-    'input input input input input input input'
-    'dict dict dict dict dict dict dict'
-    'think . photo gal file spell action';
+    'strip strip strip strip strip strip'
+    'input input input input input input'
+    'dict dict dict dict dict dict'
+    'think . photo gal file action';
   align-items: center;
   column-gap: 4px;
   padding: 8px 8px 6px;
@@ -6810,19 +6813,31 @@ html.compact-input #dictationBar {
   grid-area: dict;
 }
 
-/* Кнопка режима стоит там, где в приложении DeepSeek стоит «＋»: внизу слева.
-   Подпись на телефоне скрыта — это круглый значок, как остальные кнопки ряда. */
+/* «Рассуждение» — единственная кнопка с подписью: звёздочка без слов не
+   говорит, какой режим прячется за кнопкой. Подпись прижата к левому краю,
+   высота и толщина штриха у иконки те же, что у круглых кнопок, поэтому ряд
+   читается одним набором кнопок, а не разными значками. */
 html.compact-input #thinkToggle {
   grid-area: think;
   justify-self: start;
   display: inline-flex;
-  background: var(--layer-2);
+  height: 34px;
+  padding: 0 12px;
+  gap: 6px;
+  max-width: 100%;
   border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--layer-2);
   color: var(--text-2);
+  font-size: var(--fs-13);
+  line-height: 1;
 }
 
 html.compact-input #thinkToggle span {
-  display: none;
+  display: inline;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 html.compact-input #thinkToggle[aria-pressed="true"] {
@@ -6843,8 +6858,12 @@ html.compact-input #fileBtn {
   grid-area: file;
 }
 
+/* Проверки орфографии в нижнем ряду нет: в приложении там ровно пять кнопок —
+   «Рассуждение», камера, альбом, файл и действие. Ряд из шести кнопок на
+   телефоне ломается, а ради редкой проверки текста дублировать действия не
+   нужно; на компьютере кнопка осталась на месте. */
 html.compact-input #spellBtn {
-  grid-area: spell;
+  display: none;
 }
 
 /* Правая кнопка одна, как в приложении DeepSeek: пустое поле — микрофон,
@@ -6857,9 +6876,8 @@ html.compact-input #stopBtn {
   justify-self: end;
 }
 
-/* Кнопки ряда — круги 34 px, как в приложении: «Рассуждения» на светлой
-   подложке с рамкой, действие — заливкой акцента. */
-html.compact-input .mode-chip,
+/* Кнопки ряда — круги 34 px, как в приложении: прикрепление прозрачное,
+   действие — заливкой акцента. */
 html.compact-input .tool-btn,
 html.compact-input .btn-send,
 html.compact-input .btn-stop {
@@ -6876,19 +6894,18 @@ html.compact-input .mode-chip:hover:not(:disabled) {
   color: var(--text);
 }
 
+/* Иконки ряда одного размера и одного штриха (1,6 — из общего правила svg):
+   так кнопки читаются одним набором. 18 px — общий размер для всех пяти. */
 html.compact-input .mode-chip svg,
-html.compact-input .tool-btn svg {
-  width: 19px;
-  height: 19px;
+html.compact-input .tool-btn svg,
+html.compact-input .btn-send svg {
+  width: 18px;
+  height: 18px;
+  flex: none;
 }
 
 html.compact-input .tool-btn {
   color: var(--text-3);
-}
-
-html.compact-input .btn-send svg {
-  width: 18px;
-  height: 18px;
 }
 
 /* Микрофон в этой раскладке — не бледный значок, а та же залитая кнопка, что и
@@ -6938,4 +6955,18 @@ html.compact-input .empty-title {
   font-size: 19px;
   line-height: 26px;
   letter-spacing: -0.01em;
+}
+
+/* Совсем узкий экран (iPhone SE, 320 px): пять кнопок и подпись «Рассуждение»
+   в ряд уже не встают вместе со звёздочкой, поэтому значок уступает место
+   слову. Кнопка остаётся той же высоты, формы и цвета — меняется только её
+   содержимое, и подпись не обрезается. */
+@media (max-width: 359px) {
+  html.compact-input #thinkToggle svg {
+    display: none;
+  }
+
+  html.compact-input #thinkToggle {
+    padding: 0 10px;
+  }
 }

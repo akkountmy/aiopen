@@ -45,20 +45,25 @@ try {
     (await page.isVisible('#photoBtn')) && (await page.isVisible('#galleryBtn')) && (await page.isVisible('#fileBtn')));
   ok('кнопки «＋» больше нет', (await page.locator('#attachBtn').count()) === 0);
 
-  /* Видимые кнопки ряда: прикрепление, орфография и действие. Отправка в этом
-     состоянии скрыта — её место занимает микрофон, поэтому её верх сравнивать
-     не с чем (скрытый элемент отдаёт нулевой прямоугольник). */
+  /* Видимые кнопки ряда: режим с подписью, три прикрепления и действие.
+     Отправка в этом состоянии скрыта — её место занимает микрофон, поэтому её
+     верх сравнивать не с чем (скрытый элемент отдаёт нулевой прямоугольник).
+     Проверка орфографии на телефоне намеренно не показана: в ряду пять кнопок. */
   const row = await page.evaluate(() => {
     const box = (id) => document.getElementById(id).getBoundingClientRect();
     const shown = (id) => document.getElementById(id).getBoundingClientRect().width > 0;
     return {
-      tops: ['photoBtn', 'galleryBtn', 'fileBtn', 'spellBtn', 'micBtn'].filter(shown).map((id) => Math.round(box(id).top)),
+      tops: ['thinkToggle', 'photoBtn', 'galleryBtn', 'fileBtn', 'micBtn'].filter(shown).map((id) => Math.round(box(id).top)),
       micVisible: shown('micBtn'),
       sendVisible: shown('sendBtn'),
+      spellVisible: shown('spellBtn'),
+      thinkText: document.getElementById('thinkToggle').innerText.trim(),
     };
   });
-  ok('все три кнопки в одном ряду с орфографией и кнопкой действия',
+  ok('пять кнопок в одном ряду: режим, камера, альбом, файл и действие',
     row.tops.length === 5 && Math.max(...row.tops) - Math.min(...row.tops) < 2, row.tops.join(' / '));
+  ok('у кнопки режима видна подпись «Рассуждение»', row.thinkText === 'Рассуждение', row.thinkText);
+  ok('шестой кнопки (орфографии) в ряду нет', !row.spellVisible);
   ok('пустое поле: в ряду микрофон, а отправка уступает ему место',
     row.micVisible && !row.sendVisible, JSON.stringify(row));
 
@@ -119,7 +124,8 @@ try {
   await deskPage.waitForSelector('#fileBtn');
   ok('на компьютере три кнопки прикрепления тоже на месте',
     (await deskPage.isVisible('#photoBtn')) && (await deskPage.isVisible('#galleryBtn')) && (await deskPage.isVisible('#fileBtn')));
-  ok('кнопка «Рассуждения» на компьютере скрыта', !(await deskPage.isVisible('#thinkToggle')));
+  ok('кнопка «Рассуждение» на компьютере скрыта', !(await deskPage.isVisible('#thinkToggle')));
+  ok('на компьютере проверка орфографии на месте', await deskPage.isVisible('#spellBtn'));
   const deskChooser = deskPage.waitForEvent('filechooser', { timeout: 5000 });
   await deskPage.click('#fileBtn');
   const deskInput = await readInput(deskChooser);

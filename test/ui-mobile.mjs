@@ -187,9 +187,11 @@ try {
 
   for (const [width, height] of [[390, 844], [360, 780], [320, 640]]) await checkWidth(width, height);
 
-  // 2а. композер как в приложении DeepSeek: поле сверху, «Рассуждения» внизу
-  //     слева, справа прикрепление и орфография, а в самом углу — одна кнопка на
-  //     два дела: микрофон, пока поле пустое, и отправка, как только появился текст.
+  // 2а. композер как в приложении DeepSeek: поле сверху, в нижнем ряду ровно
+  //     пять кнопок — «Рассуждение» с подписью слева, камера, альбом, файл и в
+  //     самом углу одна кнопка на два дела: микрофон, пока поле пустое, и
+  //     отправка, как только появился текст. Проверки орфографии здесь нет, на
+  //     компьютере она остаётся.
   await cdp.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
   await goto(BASE + '/');
   await waitFor(`!!document.getElementById('micBtn') && document.documentElement.classList.contains('compact-input')`);
@@ -236,6 +238,16 @@ try {
     input.value = '';
     input.dispatchEvent(new Event('input', { bubbles: true }));
     read('cleared');
+    /* Ряд из пяти кнопок: подпись режима, три прикрепления и действие. Иконки
+       у всех одного размера и одного штриха, поэтому снимаем их метрики, а не
+       только факт видимости. Ширину берём из вычисленного стиля: отправка в
+       этом состоянии скрыта и её прямоугольник нулевой. */
+    const icongrab = (id) => {
+      const svg = q('#' + id + ' svg');
+      if (!svg) return null;
+      const style = getComputedStyle(svg);
+      return { width: style.width, stroke: style.strokeWidth };
+    };
     return {
       grid: css('#composer').display,
       placeholder: q('#input').placeholder,
@@ -244,8 +256,13 @@ try {
       thinkTop: Math.round(box('#thinkToggle').top),
       photoTop: Math.round(box('#photoBtn').top),
       thinkLabel: css('#thinkToggle span').display,
+      thinkText: q('#thinkToggle span').textContent.trim(),
       thinkShape: css('#thinkToggle').borderRadius,
+      thinkHeight: Math.round(box('#thinkToggle').height),
       round: css('#photoBtn').borderRadius,
+      photoHeight: Math.round(box('#photoBtn').height),
+      spell: css('#spellBtn').display,
+      icons: ['thinkToggle', 'photoBtn', 'galleryBtn', 'fileBtn', 'micBtn', 'sendBtn'].map(icongrab),
       plus: !!q('#attachBtn'),
       micFilled: css('#micBtn').backgroundColor === css('#sendBtn').backgroundColor,
       probe,
@@ -254,7 +271,7 @@ try {
   })()`);
   composer.grid === 'grid' ? ok('композер собран сеткой, как в приложении') : fail('раскладка композера', composer.grid);
   composer.inputTop < composer.thinkTop && Math.abs(composer.thinkTop - composer.photoTop) < 2
-    ? ok('поле сверху, ряд кнопок внизу: «Рассуждения» стоит с остальными кнопками')
+    ? ok('поле сверху, ряд кнопок внизу: «Рассуждение» стоит с остальными кнопками')
     : fail('порядок блоков композера', JSON.stringify(composer));
   const slot = composer.probe;
   slot.empty.mic && !slot.empty.send
@@ -273,8 +290,22 @@ try {
     ? ok('пока идёт ответ, кнопка действия уступает «Остановить»')
     : fail('кнопка действия во время ответа', JSON.stringify(slot.streaming));
   composer.micFilled ? ok('микрофон залит тем же акцентом, что и отправка') : fail('заливка микрофона', 'цвет не совпал с отправкой');
-  composer.thinkLabel === 'none' ? ok('«Рассуждения» на телефоне — кнопка без подписи') : fail('подпись кнопки режима', composer.thinkLabel);
-  composer.thinkShape === '50%' && composer.round === '50%' ? ok('круглые кнопки, как в приложении') : fail('форма кнопок', `${composer.thinkShape}/${composer.round}`);
+  composer.thinkLabel !== 'none' && composer.thinkText === 'Рассуждение'
+    ? ok('кнопка режима подписана словом «Рассуждение»')
+    : fail('подпись кнопки режима', `${composer.thinkLabel}/${composer.thinkText}`);
+  composer.thinkShape !== '50%' && composer.round === '50%'
+    ? ok('режим — пилюля с подписью, остальные кнопки — круги')
+    : fail('форма кнопок', `${composer.thinkShape}/${composer.round}`);
+  composer.thinkHeight === composer.photoHeight
+    ? ok('высота кнопки режима равна остальным кнопкам ряда')
+    : fail('высота кнопки режима', `${composer.thinkHeight}/${composer.photoHeight}`);
+  composer.spell === 'none'
+    ? ok('в нижнем ряду телефона ровно пять кнопок: орфографии нет')
+    : fail('лишняя кнопка в нижнем ряду', composer.spell);
+  const iconsOk = composer.icons.every((icon) => icon && icon.width === '18px' && icon.stroke === '1.6px');
+  iconsOk
+    ? ok('иконки всего ряда одного размера (18 px) и одного штриха (1,6)')
+    : fail('иконки ряда', JSON.stringify(composer.icons));
   composer.plus ? fail('кнопка «＋»', 'осталась в разметке') : ok('кнопки «＋» больше нет');
   composer.placeholder.includes('удерживайте') ? ok('подсказка в поле говорит про удержание') : fail('подсказка в поле', composer.placeholder);
   composer.greeting === 'Чем помочь?' ? ok('короткое приветствие на титульной странице') : fail('приветствие', composer.greeting);
@@ -366,8 +397,8 @@ try {
   voice.touchAction === 'none'
     ? ok('микрофон слушается удержания, а не прокрутки')
     : fail('touch-action микрофона', voice.touchAction);
-  voice.chips.length === 1 && voice.chips[0] === 'Рассуждения'
-    ? ok('в композере один режим — «Рассуждения»')
+  voice.chips.length === 1 && voice.chips[0] === 'Рассуждение'
+    ? ok('в композере один режим — «Рассуждение»')
     : fail('режимы композера', JSON.stringify(voice.chips));
 
   // 3. выезжающие ящики: «Файлы проекта» выезжает так же, как «Проекты»,
