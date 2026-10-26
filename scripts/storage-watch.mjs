@@ -16,7 +16,14 @@ const LOG_FILE = path.join(HOME, 'dshow-storage.log');
 const THRESHOLD_PCT = Number(process.env.DSHOW_STORAGE_ALERT_PCT || 70);
 const REMIND_DAYS = Number(process.env.DSHOW_STORAGE_REMIND_DAYS || 28);
 const FORCE_ALERT = process.env.DSHOW_STORAGE_FORCE_ALERT === '1';
-const TIMEOUT_MS = 30000;
+/* Бюджеты времени. Раньше на всё был один запрос с таймаутом 30 с — и холодный старт
+ * Amvera (замерено 17.7 с, иногда дольше) превращался в ложную тревогу «не смог проверить
+ * занятое место» (26.10.2026), хотя сервис был жив. Теперь: разминка /api/health до 3 попыток
+ * по 90 с, затем сама проверка до 2 попыток по 120 с. Тревога только если не вышло ни разу. */
+const TIMEOUT_MS = Number(process.env.DSHOW_STORAGE_TIMEOUT_MS || 120000);
+const WARMUP_TIMEOUT_MS = Number(process.env.DSHOW_STORAGE_WARMUP_TIMEOUT_MS || 90000);
+const WARMUP_ATTEMPTS = 3;
+const CHECK_ATTEMPTS = 2;
 const USER = process.env.DSHOW_USER || 'DSHOWMON';
 const PASS = process.env.DSHOW_PASS || '';
 
@@ -104,16 +111,17 @@ function cookieHeader() {
 }
 
 async function call(pathname, options = {}) {
+  const { timeoutMs = TIMEOUT_MS, ...init } = options;
   const response = await fetch(BASE + pathname, {
-    ...options,
+    ...init,
     headers: {
       'content-type': 'application/json',
       'user-agent': 'DSH-OPEN-WEB-storage-watch/1.0',
       ...(jar.size ? { cookie: cookieHeader() } : {}),
-      ...(options.headers || {}),
+      ...(init.headers || {}),
     },
-    body: options.body ? JSON.stringify(options.body) : undefined,
-    signal: AbortSignal.timeout(TIMEOUT_MS),
+    body: init.body ? JSON.stringify(init.body) : undefined,
+    signal: AbortSignal.timeout(timeoutMs),
   });
   for (const entry of response.headers.getSetCookie?.() || []) {
     const [pair] = entry.split(';');
@@ -145,24 +153,65 @@ if (!PASS) {
 
 let report = null;
 let failure = null;
-try {
-  const login = await call('/api/login', { method: 'POST', body: { username: USER, password: PASS } });
-  if (login.status !== 200 || !login.data?.user) {
-    failure = `вход не удался (HTTP ${login.status})`;
-  } else if (login.data.user.role !== 'admin') {
-    failure = 'учётная запись не администратор';
-  } else {
-    const storage = await call('/api/admin/storage');
-    if (storage.status !== 200 || !storage.data) {
-      failure = `ответ /api/admin/storage — HTTP ${storage.status}`;
-    } else if (!storage.data.plan) {
-      failure = 'сервис отвечает старой версией — нет данных о тарифе';
-    } else {
-      report = storage.data;
+
+/**
+ * Разбудить сервис перед проверкой.
+ * Amvera замораживает простаивающее приложение, и первый запрос ждёт холодного старта.
+ * Раньше разминки не было вовсе — единственный запрос упирался в таймаут, и в Telegram
+ * уходила тревога «не смог проверить», хотя сервис поднимался через 18 секунд.
+ * Разминка не валит проверку: если она не удалась, всё равно пробуем войти.
+ */
+async function warmUp() {
+  for (let attempt = 1; attempt <= WARMUP_ATTEMPTS; attempt += 1) {
+    const startedAt = Date.now();
+    try {
+      const res = await call('/api/health', { timeoutMs: WARMUP_TIMEOUT_MS });
+      if (res.status === 200) {
+        log(`разминка: сервис отвечает (${Date.now() - startedAt} мс, попытка ${attempt})`);
+        return true;
+      }
+      log(`разминка: /api/health — HTTP ${res.status} (попытка ${attempt})`);
+    } catch (error) {
+      const why = error.name === 'TimeoutError'
+        ? `нет ответа за ${Math.round(WARMUP_TIMEOUT_MS / 1000)} с`
+        : error.message;
+      log(`разминка: ${why} (попытка ${attempt})`);
     }
+    if (attempt < WARMUP_ATTEMPTS) await new Promise((r) => setTimeout(r, 5000 * attempt));
   }
-} catch (error) {
-  failure = error.name === 'TimeoutError' ? 'сервис не ответил за 30 с' : error.message;
+  return false;
+}
+
+/** Одна полная попытка: вход администратором и чтение занятого места. */
+async function checkOnce() {
+  const login = await call('/api/login', { method: 'POST', body: { username: USER, password: PASS } });
+  if (login.status !== 200 || !login.data?.user) return { failure: `вход не удался (HTTP ${login.status})` };
+  if (login.data.user.role !== 'admin') return { failure: 'учётная запись не администратор' };
+  const storage = await call('/api/admin/storage');
+  if (storage.status !== 200 || !storage.data) {
+    return { failure: `ответ /api/admin/storage — HTTP ${storage.status}` };
+  }
+  if (!storage.data.plan) return { failure: 'сервис отвечает старой версией — нет данных о тарифе' };
+  return { report: storage.data };
+}
+
+await warmUp();
+
+for (let attempt = 1; attempt <= CHECK_ATTEMPTS && !report; attempt += 1) {
+  try {
+    const res = await checkOnce();
+    if (res.report) { report = res.report; break; }
+    failure = res.failure;
+  } catch (error) {
+    failure = error.name === 'TimeoutError'
+      ? `сервис не ответил за ${Math.round(TIMEOUT_MS / 1000)} с`
+      : error.message;
+  }
+  log(`проверка, попытка ${attempt}: ${failure}`);
+  if (attempt < CHECK_ATTEMPTS) {
+    jar.clear();                                  // сессия могла остаться от неудачной попытки
+    await new Promise((r) => setTimeout(r, 8000));
+  }
 }
 
 if (failure) {
@@ -174,6 +223,7 @@ if (failure) {
       '',
       `Адрес: ${BASE}`,
       `Причина: ${failure}`,
+      `Попыток проверить: ${CHECK_ATTEMPTS} (тревога только после всех неудач)`,
       `Время: ${nowIso}`,
       '',
       'Проверки идут раз в неделю, следующая — через неделю.',
