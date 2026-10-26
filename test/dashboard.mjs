@@ -282,6 +282,19 @@ try {
   });
   check('результат запуска записан в задание', Boolean(finished?.lastChatId), String(finished?.lastStatus));
 
+  /* ---- удалённый диалог не оставляет сломанную ссылку ---- */
+  if (finished?.lastChatId) {
+    const chatGone = await call(`/api/chats/${finished.lastChatId}`, { method: 'DELETE', cookie });
+    check('диалог задания удаляется', chatGone.status === 200, `HTTP ${chatGone.status}`);
+    const afterChatGone = (await call('/api/dashboard', { cookie })).data.tasks || [];
+    const cleared = afterChatGone.find((item) => item.id === target.id);
+    check(
+      'удаление диалога очищает ссылку задания',
+      Boolean(cleared) && !cleared.lastChatId && !cleared.lastStatus,
+      `lastChatId=${cleared?.lastChatId || ''} lastStatus=${cleared?.lastStatus || ''}`,
+    );
+  }
+
   /* ---- документ убирается из задания ---- */
   const deleted = await call(`/api/dashboard/tasks/${target.id}/files/${doc.id}`, { method: 'DELETE', cookie });
   check(

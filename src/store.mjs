@@ -1341,6 +1341,18 @@ class Store {
     for (const [attId, att] of Object.entries(this.state.attachments)) {
       if (att.chatId === id) delete this.state.attachments[attId];
     }
+    /* Постоянное задание хранит ссылку на свой последний диалог. Если диалог
+       удалили, ссылка ведёт в никуда: карточка показывает «остановлено» и
+       открывает 404. Чистим её вместе с удалением, чтобы задание снова
+       выглядело как «ещё не запускалось», а не как сломанное. */
+    for (const task of Array.isArray(this.state.dashboard) ? this.state.dashboard : []) {
+      if (task.lastChatId === id) {
+        task.lastChatId = '';
+        task.lastStatus = '';
+        task.lastRunAt = null;
+        task.lastError = '';
+      }
+    }
     try {
       fs.unlinkSync(path.join(CHATS_DIR, `${id}.json`));
     } catch {
