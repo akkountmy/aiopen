@@ -9,7 +9,7 @@
  *  - к одной задаче могут подключиться две вкладки (ноутбук и телефон);
  *  - задача останавливается кнопкой «Стоп», а не закрытием окна;
  *  - повторная отправка в занятый диалог получает 429 с идентификатором задачи;
- *  - после перезапуска сервиса незавершённая задача честно помечается прерванной.
+ *  - после перезапуска сервиса незавершённая задача продолжается сама, без повторной отправки.
  *
  * Поднимает поддельную модель (OpenAI-совместимый поток) и отдельный экземпляр
  * сервиса на временных данных, поэтому настоящие данные и ключи не нужны.
@@ -239,6 +239,23 @@ async function waitFinished(cookie, timeout = 12000) {
   return false;
 }
 
+/* После перезапуска сервис поднимает задачу сам. Ждём, пока она закончится
+   и в диалоге появится настоящий ответ (а не пометка об обрыве). */
+async function waitAutoResumed(cookie, id, timeout = 25000) {
+  const until = Date.now() + timeout;
+  let chat = null;
+  while (Date.now() < until) {
+    chat = (await api(`/api/chats/${id}`, { cookie })).data.chat;
+    const messages = chat?.messages || [];
+    const last = messages[messages.length - 1];
+    /* Именно последнее сообщение — ответ на прерванный вопрос, а не старая
+       реплика из середины диалога. */
+    if (last?.role === 'assistant' && last.content && !chat.running) return chat;
+    await sleep(250);
+  }
+  return chat;
+}
+
 function assistantOf(chat) {
   return (chat.messages || []).filter((m) => m.role === 'assistant');
 }
@@ -346,7 +363,7 @@ try {
   check(busy.data.run?.id === fifth.runId, 'клиенту отдан идентификатор идущей задачи');
   await waitFinished(laptop);
 
-  /* 6. Перезапуск сервиса посреди задачи: честная пометка вместо вечного «идёт». */
+  /* 6. Перезапуск сервиса посреди задачи: работа продолжается сама. */
   const sixth = await startRun(laptop, 'Задача, которую прервёт перезапуск');
   await sleep(400);
   sixth.controller.abort();
@@ -354,25 +371,67 @@ try {
   await sleep(700);
   app = startApp();
   await waitReady();
-  /* Как после перезагрузки страницы: сначала загрузка состояния — она же
-     возвращает честные пометки о задачах, прерванных перезапуском сервиса. */
+  /* Как после перезагрузки страницы: вход и загрузка состояния. Старт сервиса
+     к этому моменту уже поднял прерванную задачу — человеку ничего не нужно. */
   const boot = await api('/api/me', { cookie: laptop });
   check(boot.status === 200, 'после перезапуска сервиса вход сохранился', `HTTP ${boot.status}`);
-  const afterRestart = (await api(`/api/chats/${chatId}`, { cookie: laptop })).data.chat;
-  const interrupted = assistantOf(afterRestart).pop();
-  check(Boolean(interrupted?.interrupted), 'после перезапуска ответ помечен прерванным');
+  const afterRestart = await waitAutoResumed(laptop, chatId);
+  const resumedAnswer = assistantOf(afterRestart || {}).pop();
   check(
-    (afterRestart?.messages || []).some((m) => m.role === 'user' && m.content.includes('перезапуск')),
-    'человеческий вопрос остался в диалоге',
+    Boolean(resumedAnswer?.content) && !resumedAnswer?.interrupted,
+    'после перезапуска задача продолжилась сама и получила ответ',
+    resumedAnswer?.interrupted ? 'осталась пометка об обрыве' : `ответ ${resumedAnswer?.content?.length || 0} знаков`,
+  );
+  check(
+    (afterRestart?.messages || []).filter((m) => m.role === 'user' && m.content.includes('перезапуск')).length === 1,
+    'вопрос не продублирован при автопродолжении',
   );
   /* Список проектов приходит в загрузке состояния — так же, как его видит
-     вкладка после перезагрузки страницы. */
-  const projects = boot.data.projects || [];
+     вкладка после перезагрузки страницы. После завершения метка снята. */
+  const finalBoot = await api('/api/me', { cookie: laptop });
+  const projects = finalBoot.data.projects || [];
   const tracked = projects.find((p) => p.id === project.id)?.chats || [];
   check(
     tracked.some((c) => c.id === chatId && !c.running),
-    'признак «идёт работа» снят после перезапуска',
+    'признак «идёт работа» снят после завершения',
     `проектов ${projects.length}, диалогов ${tracked.length}, статус ${tracked.find((c) => c.id === chatId)?.running}`,
+  );
+
+  /* 7. Старая пометка прежней версии: метка «идёт» уже снята, в диалоге лежит
+     ошибка с просьбой отправить задачу ещё раз. Старт сервиса должен поднять и
+     такую задачу — именно это видел человек после сбоя. */
+  app.kill();
+  await sleep(600);
+  const chatFile = path.join(DIR, 'chats', `${chatId}.json`);
+  const chatData = JSON.parse(fs.readFileSync(chatFile, 'utf8'));
+  if (chatData.messages.at(-1)?.role === 'assistant') chatData.messages.pop();
+  chatData.messages.push({
+    role: 'assistant',
+    content: '',
+    error: 'Сервис перезапускался, поэтому задача прервалась. Отправьте её ещё раз — контекст диалога сохранён.',
+    interrupted: true,
+    at: new Date().toISOString(),
+  });
+  fs.writeFileSync(chatFile, JSON.stringify(chatData));
+  const indexFile = path.join(DIR, 'index.json');
+  const indexData = JSON.parse(fs.readFileSync(indexFile, 'utf8'));
+  const meta = indexData.chats.find((item) => item.id === chatId);
+  if (meta) delete meta.running;
+  fs.writeFileSync(indexFile, JSON.stringify(indexData));
+
+  app = startApp();
+  await waitReady();
+  /* Входа и загрузки состояния здесь нет: задача должна подняться сама. */
+  const legacy = await waitAutoResumed(laptop, chatId);
+  const legacyAnswer = legacy?.messages?.at(-1);
+  check(
+    legacyAnswer?.role === 'assistant' && Boolean(legacyAnswer.content) && !legacyAnswer.interrupted,
+    'старая пометка о перезапуске заменена ответом без входа человека',
+    legacyAnswer?.interrupted ? 'пометка осталась' : `ответ ${legacyAnswer?.content?.length || 0} знаков`,
+  );
+  check(
+    (legacy?.messages || []).filter((m) => m.role === 'user' && m.content.includes('перезапуск')).length === 1,
+    'старый вопрос не продублирован',
   );
 } catch (error) {
   console.error('ошибка проверки:', error.stack || error.message);

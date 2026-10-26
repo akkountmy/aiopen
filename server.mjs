@@ -36,6 +36,7 @@ import { detectKind, extractDocumentText, kindLabel } from './src/docparse.mjs';
 import { previewDocument } from './src/docpreview.mjs';
 import { projectFilesBrief } from './src/filebrief.mjs';
 import { buildProjectContext } from './src/projectcontext.mjs';
+import { renderTaskState } from './src/taskstate.mjs';
 import { BACKUP_DEFAULTS, backupsDir, listBackups, snapshotState, startAutoBackup } from './src/backup.mjs';
 import { docEngines } from './src/doc/index.mjs';
 import { approvalMessage, notifyAdmin, suspicionMessage } from './src/notify.mjs';
@@ -146,7 +147,7 @@ function activeRunsFor(userId) {
     .map(publicRun);
 }
 
-function createRun({ user, project, chat }) {
+function createRun({ user, project, chat, attempts = 0 }) {
   const run = {
     id: uid('run_'),
     userId: user.id,
@@ -158,6 +159,8 @@ function createRun({ user, project, chat }) {
     status: 'running',
     startedAt: nowIso(),
     startedMs: Date.now(),
+    attempts: Number(attempts) || 0,
+    lastPersistMs: 0,
     seq: 0,
     text: '',
     reasoning: '',
@@ -172,9 +175,10 @@ function createRun({ user, project, chat }) {
   runningChats.add(chatRunKey(user.id, chat.id));
   runningByUser.set(user.id, (runningByUser.get(user.id) || 0) + 1);
   /* Метка в файле чата переживает перезапуск сервиса: если процесса, который
-     её поставил, уже нет, при следующем входе честно скажем, что задача
-     прервалась, вместо вечного «работаю…». */
-  store.setChatRunning(chat.id, { runId: run.id, startedAt: run.startedAt });
+     её поставил, уже нет, при следующем старте задача продолжится сама.
+     attempts растёт только при автоматическом продолжении — по нему видно,
+     что задача переживает уже не первый сбой. */
+  store.setChatRunning(chat.id, { runId: run.id, startedAt: run.startedAt, attempts: run.attempts });
   return run;
 }
 
@@ -199,6 +203,18 @@ function publishRun(run, data) {
     } catch {
       run.subscribers.delete(subscriber);
     }
+  }
+  /* Пока задача идёт, её история и карточка периодически ложатся на диск.
+     Раньше они сохранялись только в конце: перезапуск посреди работы терял
+     весь прогресс, и модели приходилось начинать с чистого листа. Частоту
+     ограничиваем, чтобы не переписывать файл на каждый кусочек текста. */
+  if (
+    data.type === 'delta' ||
+    data.type === 'reasoning' ||
+    data.type === 'tool' ||
+    data.type === 'stage'
+  ) {
+    persistRunProgress(run);
   }
   return event;
 }
@@ -256,26 +272,205 @@ function finishRun(run, status) {
   if (timer.unref) timer.unref();
 }
 
-/* Задача жила в памяти: после перезапуска сервиса в диалоге остаётся вопрос без
-   ответа. Дописываем пометку один раз — чтобы не выглядело, будто ответ идёт. */
+/* ---------------- автоматическое продолжение после сбоя ----------------
+   Задача живёт в памяти процесса, поэтому перезапуск сервиса (выкладка,
+   нехватка памяти, падение контейнера) обрывал её: в диалоге оставался вопрос
+   без ответа и просьба «отправьте ещё раз». Теперь при старте сервис сам
+   находит такие диалоги и продолжает работу: исходный вопрос и карточка задачи
+   уже лежат на диске, а история хода периодически сохраняется. Человеку не
+   нужно ничего повторять.
+
+   Предел попыток нужен, чтобы задача, которая сама роняет процесс, не
+   перезапускалась бесконечно. После исчерпания попыток в диалоге остаётся
+   честное сообщение — и только тогда человека просят продолжить вручную. */
+const RESUME_MAX_ATTEMPTS = 3;
+/* Старые пометки о перезапуске не воскрешаем бесконечно: задача недельной
+   давности уже не та, что была, и тратить на неё деньги без спроса нельзя. */
+const RESUME_MAX_AGE_MS = 72 * 60 * 60 * 1000;
+/* Как часто сохранять историю идущей задачи. Компромисс: потерять при сбое
+   успевают несколько секунд работы, а диск не переписывается на каждый токен. */
+const PROGRESS_SAVE_MS = 8000;
+const resumingChats = new Set();
+
+function chatFilePayload(chat) {
+  return {
+    messages: chat.messages,
+    history: chat.history,
+    memory: chat.memory,
+    task: chat.task || null,
+  };
+}
+
+/* Тихое сохранение только файла диалога: без переписывания общего индекса. */
+function saveChatState(chat) {
+  store.writeChat(chat.id, chatFilePayload(chat));
+}
+
+function persistRunProgress(run) {
+  if (run.status !== 'running') return;
+  const now = Date.now();
+  if (now - (run.lastPersistMs || 0) < PROGRESS_SAVE_MS) return;
+  run.lastPersistMs = now;
+  try {
+    saveChatState(run.chat);
+  } catch (error) {
+    console.error('[persist]', error?.message || error);
+  }
+}
+
+/* Последний ход, который можно продолжить. Обычно это вопрос без ответа.
+   Отдельно понимаем пометку прежней версии сервиса: она уже успела снять
+   метку «идёт работа» и дописать ошибку, но задачу всё равно можно поднять —
+   убираем эту пометку и берём вопрос перед ней. */
+function resumableTurn(chat) {
+  const messages = Array.isArray(chat?.messages) ? chat.messages : [];
+  const last = messages[messages.length - 1];
+  if (!last) return null;
+  if (last.role === 'user') return { user: last, drop: false };
+  if (last.role !== 'assistant' || !last.interrupted || last.resumeFailed) return null;
+  const text = String(last.error || last.content || '');
+  if (!/перезапуск/i.test(text)) return null;
+  const at = Date.parse(last.at || '') || 0;
+  if (at && Date.now() - at > RESUME_MAX_AGE_MS) return null;
+  const prev = messages[messages.length - 2];
+  if (prev?.role !== 'user') return null;
+  return { user: prev, drop: true };
+}
+
+/* Подсказка для продолжения: напоминаем цель, уже сделанное и вложения.
+   Если вопрос ещё не попал в сохранённую историю (сбой в первые секунды),
+   повторяем его целиком — иначе модель не поймёт, что продолжать. */
+function resumeTaskText(chat, originalText, userMessage) {
+  const head =
+    'Продолжи прерванную задачу с того места, где остановился. Предыдущая попытка прервалась ' +
+    'из-за перезапуска сервиса, работа не отменена. Не начинай с нуля: проверь, что уже сделано ' +
+    'в рабочей папке и в истории, и доведи задачу до результата. Если всё уже готово — коротко ' +
+    'подведи итог и перечисли файлы.';
+  const original = String(originalText || '').trim();
+  const snippet = original.slice(0, 80);
+  const history = Array.isArray(chat?.history) ? chat.history : [];
+  const inHistory =
+    snippet &&
+    history.some((item) => item?.role === 'user' && String(item.content || '').includes(snippet));
+  const goal = original && !inHistory ? `Исходная задача:\n${original}` : '';
+  const attachments = (userMessage?.attachments || [])
+    .map((att) => `«${att.name}» — ${att.relPath}`)
+    .join('\n');
+  const files = attachments ? `Вложения задачи уже лежат в проекте:\n${attachments}` : '';
+  return [head, goal, files, renderTaskState(chat?.task)].filter(Boolean).join('\n\n');
+}
+
+/* Запуск продолжения. Возвращает true, если новая работа действительно
+   началась. Вызывается и при старте сервиса, и при входе человека — повторно
+   задача не запустится: живую работу отсекает runByChat. */
+function resumeChat(meta, user, source = 'startup') {
+  if (resumingChats.has(meta.id)) return false;
+  if (liveRunForChat(user.id, meta.id)) return false;
+  const chat = store.getChat(meta.id, user.id);
+  if (!chat) {
+    store.setChatRunning(meta.id, null);
+    return false;
+  }
+  const project = store.getProject(chat.projectId, user.id);
+  if (!project) {
+    store.setChatRunning(meta.id, null);
+    return false;
+  }
+  const turn = resumableTurn(chat);
+  if (!turn) {
+    /* Отвечать уже нечего: работа закончилась или пометка не наша. */
+    store.setChatRunning(meta.id, null);
+    return false;
+  }
+  /* За задачу, прерванную до появления счётчика, считаем одну попытку. */
+  const attempts = meta.running ? (Number(meta.running.attempts) || 0) + 1 : 1;
+  const since = Date.parse(meta.running?.startedAt || turn.user.at || '') || 0;
+  const tooOld = Boolean(since) && Date.now() - since > RESUME_MAX_AGE_MS;
+  if (attempts > RESUME_MAX_ATTEMPTS || tooOld) {
+    store.setChatRunning(meta.id, null);
+    if (turn.drop) chat.messages.pop();
+    chat.messages.push({
+      role: 'assistant',
+      content: '',
+      error: tooOld
+        ? 'Задача была прервана слишком давно, поэтому автоматически продолжать её я не стал. Напишите «продолжи» — и я подхвачу её с сохранённого места.'
+        : `Задача прерывалась уже ${RESUME_MAX_ATTEMPTS} раза подряд. Автоматически продолжать её не буду, чтобы не зациклиться. Напишите «продолжи» — и я подхвачу её с сохранённого места.`,
+      interrupted: true,
+      resumeFailed: true,
+      at: nowIso(),
+    });
+    store.saveChat(chat.id, chatFilePayload(chat));
+    console.warn(`[resume] диалог ${chat.id}: попытки исчерпаны (${attempts - 1})`);
+    return false;
+  }
+
+  resumingChats.add(meta.id);
+  try {
+    if (turn.drop) chat.messages.pop();
+    /* Пометку прежней версии убрали — фиксируем это до запуска, чтобы при
+       следующем сбое вопрос снова был последним сообщением. */
+    if (turn.drop) store.saveChat(chat.id, chatFilePayload(chat));
+    const run = createRun({ user, project, chat, attempts });
+    const isFirst = chat.messages.filter((item) => item.role === 'user').length <= 1;
+    console.log(`[resume] диалог ${chat.id}: продолжаю автоматически (попытка ${attempts}, ${source})`);
+    void executeRun(run, {
+      text: turn.user.content || '',
+      attachmentIds: [],
+      modes: turn.user.modes || { thinking: false, search: true },
+      isFirstMessage: isFirst,
+      resume: true,
+      resumeUser: turn.user,
+    }).catch((error) => {
+      console.error('[resume] продолжение упало:', error?.message || error);
+    });
+    return true;
+  } catch (error) {
+    console.error('[resume]', error?.message || error);
+    store.setChatRunning(meta.id, null);
+    return false;
+  } finally {
+    resumingChats.delete(meta.id);
+  }
+}
+
+/* Вызывается при входе: если задача всё ещё помечена идущей, а процесса уже
+   нет, поднимаем её. Штатный путь — старт сервиса, здесь страховка для
+   старых данных и для случая, когда старт пришёлся на момент выкладки. */
 function recoverStaleRuns(user) {
   for (const meta of store.state.chats) {
     if (meta.ownerId !== user.id || !meta.running) continue;
     if (liveRunForChat(user.id, meta.id)) continue;
-    store.setChatRunning(meta.id, null);
-    const chat = store.getChat(meta.id, user.id);
-    if (!chat) continue;
-    const last = chat.messages[chat.messages.length - 1];
-    if (last?.interrupted) continue;
-    chat.messages.push({
-      role: 'assistant',
-      content: '',
-      error: 'Сервис перезапускался, поэтому задача прервалась. Отправьте её ещё раз — контекст диалога сохранён.',
-      interrupted: true,
-      at: nowIso(),
-    });
-    store.saveChat(chat.id, { messages: chat.messages, history: chat.history, memory: chat.memory, task: chat.task || null });
+    resumeChat(meta, user, 'login');
   }
+}
+
+/* Старт сервиса: сначала задачи с меткой «идёт», затем диалоги, которым
+   прежняя версия успела оставить ошибку о перезапуске. Второй проход нужен,
+   чтобы поднять и ту задачу, которую человек уже видел прерванной. */
+function resumeInterruptedRuns() {
+  let started = 0;
+  for (const meta of [...store.state.chats]) {
+    if (!meta.running) continue;
+    const user = store.getUser(meta.ownerId);
+    if (!user) continue;
+    if (resumeChat(meta, user, 'startup')) started += 1;
+  }
+  for (const meta of [...store.state.chats]) {
+    if (meta.running) continue;
+    const user = store.getUser(meta.ownerId);
+    if (!user) continue;
+    let chat;
+    try {
+      chat = store.getChat(meta.id, user.id);
+    } catch (error) {
+      console.error('[resume] чтение диалога:', error?.message || error);
+      continue;
+    }
+    if (!chat?.messages?.length) continue;
+    if (!resumableTurn(chat)?.drop) continue;
+    if (resumeChat(meta, user, 'legacy')) started += 1;
+  }
+  if (started) console.log(`[resume] автоматически продолжаю задач: ${started}`);
 }
 
 const MIME = {
@@ -1415,16 +1610,66 @@ async function handleMessageStream(req, res, user, chatId) {
    события складываются в запуск — подключиться и догнать можно в любой момент. */
 async function executeRun(run, job) {
   const { user, project, chat } = run;
-  const { text, attachmentIds, isFirstMessage, modes = { thinking: false, search: true } } = job;
+  const {
+    text,
+    attachmentIds,
+    isFirstMessage,
+    modes = { thinking: false, search: true },
+    resume = false,
+    resumeUser = null,
+  } = job;
   const controller = run.controller;
   const stream = { emit: (data) => publishRun(run, data) };
 
   let assistantText = '';
   try {
-    const attachments = await waitForAttachments(attachmentIds, user, chat, stream.emit);
-    /* Пока ждали вложения, человек мог нажать «Стоп» — тогда работу не начинаем. */
-    if (controller.signal.aborted) throw Object.assign(new Error('Остановлено'), { name: 'AbortError' });
-    const ctx = attachmentContext(attachments);
+    let attachments = [];
+    let ctx = { text: '', images: [] };
+    let userMessage = null;
+    if (!resume) {
+      /* Вопрос фиксируем сразу, не дожидаясь разбора вложений. Если сервис
+         перезапустится, пока файл ещё обрабатывается, задача всё равно будет
+         видна и продолжится: вопрос уже лежит в диалоге. */
+      const known = attachmentIds
+        .map((id) => store.getAttachment(id))
+        .filter((att) => att && att.ownerId === user.id && att.projectId === chat.projectId);
+      userMessage = {
+        role: 'user',
+        content: text,
+        attachments: known.map((att) => ({
+          id: att.id,
+          name: att.name,
+          kind: att.kind,
+          label: kindLabel(att.kind),
+          size: att.size,
+          relPath: att.relPath,
+        })),
+        /* Режимы нужны продолжению после сбоя: иначе «Рассуждения» тихо
+           выключатся, хотя человек их включал. */
+        modes: { thinking: modes.thinking === true, search: modes.search !== false },
+        at: nowIso(),
+      };
+      chat.messages.push(userMessage);
+      store.saveChat(chat.id, chatFilePayload(chat));
+
+      attachments = await waitForAttachments(attachmentIds, user, chat, stream.emit);
+      /* Пока ждали вложения, человек мог нажать «Стоп» — тогда работу не начинаем. */
+      if (controller.signal.aborted) throw Object.assign(new Error('Остановлено'), { name: 'AbortError' });
+      ctx = attachmentContext(attachments);
+      /* Уточняем метаданные: пока файл обрабатывался, у него могли появиться
+         размер, путь и распознанный текст. */
+      if (attachments.length) {
+        userMessage.attachments = attachments.map((att) => ({
+          id: att.id,
+          name: att.name,
+          kind: att.kind,
+          label: kindLabel(att.kind),
+          size: att.size,
+          relPath: att.relPath,
+        }));
+        store.saveChat(chat.id, chatFilePayload(chat));
+      }
+    }
     /* Что уже лежит в проекте: свежие файлы пересказаны коротко, чтобы задача
        про загруженный файл решалась сразу, без «пришлите ещё раз». Вложения
        этого же сообщения уже целиком в тексте — их не дублируем. */
@@ -1436,23 +1681,10 @@ async function executeRun(run, job) {
     } catch (error) {
       console.error('[files]', error?.message || error);
     }
-    const userMessage = {
-      role: 'user',
-      content: text,
-      attachments: attachments.map((att) => ({
-        id: att.id,
-        name: att.name,
-        kind: att.kind,
-        label: kindLabel(att.kind),
-        size: att.size,
-        relPath: att.relPath,
-      })),
-      at: nowIso(),
-    };
-    chat.messages.push(userMessage);
-    store.saveChat(chat.id, { messages: chat.messages, history: chat.history, memory: chat.memory, task: chat.task || null });
 
-    const userText = [text, ctx.text].filter(Boolean).join('\n\n');
+    const userText = resume
+      ? resumeTaskText(chat, text, resumeUser)
+      : [text, ctx.text].filter(Boolean).join('\n\n');
     stream.emit({ type: 'start' });
 
     /* Прошлые диалоги этого же проекта: короткая выжимка, чтобы новый разговор
@@ -2950,6 +3182,13 @@ server.listen(PORT, HOST, () => {
   console.log(`  Режим:  ${TRUST_PROXY ? 'за прокси (облако)' : 'локальный'}`);
   console.log(`  Дашборд: ${process.env.DSHOW_DASHBOARD === '0' ? 'выключен' : 'постоянные задания включены'}`);
   console.log('');
+  /* Задачи, прерванные перезапуском, продолжаются сами — без входа человека.
+     Небольшая задержка даёт серверу принять первые запросы, а нам — не
+     стартовать модель одновременно с инициализацией остальных служб. */
+  if (process.env.DSHOW_AUTO_RESUME !== '0') {
+    const timer = setTimeout(resumeInterruptedRuns, 300);
+    timer.unref?.();
+  }
 });
 
 /* Планировщик «Дашборда» поднимается вместе с сервисом. Выключается

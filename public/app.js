@@ -1842,8 +1842,43 @@ async function watchRun(runId, chatId) {
    пропала и вернулась сеть — догоняем все незавершённые задачи. Телефон мог
    «заморозить» соединение, поэтому давно молчащий поток пересоздаём: сервер
    отдаст свежий снимок, а старую подписку закроет сам. */
-function resumeLiveRuns() {
+async function resumeLiveRuns() {
   if (!state.user) return;
+  /* После перезапуска сервиса задача продолжается уже под новым
+     идентификатором. Старый поток получить её не может, поэтому сначала
+     спрашиваем сервис о живых задачах и подхватываем те, о которых вкладка
+     ещё не знает. Иначе открытая страница оставалась бы с ошибкой, хотя
+     работа на сервере уже идёт. */
+  try {
+    const data = await api('/api/runs');
+    for (const active of data.runs || []) {
+      if (!active?.id || state.liveRuns.has(active.id)) continue;
+      /* В одном диалоге идёт только одна задача. Если в памяти вкладки остался
+         прежний запуск (он умер вместе с сервисом), убираем его недописанный
+         пузырь: новый запуск даст целый ответ, а не два ответа подряд. */
+      for (const [knownId, known] of [...state.liveRuns]) {
+        if (knownId === active.id || known.chatId !== active.chatId) continue;
+        const stream = state.liveStreams.get(knownId);
+        if (stream) {
+          state.liveStreams.delete(knownId);
+          try {
+            stream.controller.abort();
+          } catch {
+            /* уже закрыт */
+          }
+        }
+        state.liveRuns.delete(knownId);
+        if (state.chat?.id === active.chatId) {
+          state.chat.messages = (state.chat.messages || []).filter((item) => item.runId !== knownId);
+        }
+      }
+      const run = trackRun(active.id, active.chatId);
+      if (active.projectId) run.projectId = active.projectId;
+    }
+    scheduleStreamRender();
+  } catch {
+    /* Сервис ещё поднимается — попробуем при следующем возвращении на страницу. */
+  }
   for (const run of state.liveRuns.values()) {
     const stream = state.liveStreams.get(run.id);
     if (stream && Date.now() - (stream.lastEventAt || 0) < RUN_IDLE_MS) continue;

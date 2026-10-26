@@ -1281,8 +1281,12 @@ class Store {
   setChatRunning(id, info) {
     const meta = this.getChatMeta(id);
     if (!meta) return null;
-    if (info) meta.running = { runId: String(info.runId || ''), startedAt: info.startedAt || nowIso() };
-    else delete meta.running;
+    if (info) {
+      meta.running = { runId: String(info.runId || ''), startedAt: info.startedAt || nowIso() };
+      /* Сколько раз задача уже поднималась автоматически. Счётчик переживает
+         перезапуск вместе с меткой: иначе сбойная задача зациклилась бы. */
+      if (Number(info.attempts) > 0) meta.running.attempts = Number(info.attempts);
+    } else delete meta.running;
     this.save();
     return meta;
   }
