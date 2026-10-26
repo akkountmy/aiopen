@@ -199,10 +199,15 @@ try {
       if (!svg) return null;
       const css = getComputedStyle(svg);
       const node = document.getElementById(id);
+      /* ink — размер самого рисунка внутри клетки 20×20. У «A» с галочкой прежний
+         путь занимал 15×9 в нижней половине, и при той же коробке 34×34 кнопка
+         читалась мельче соседей: сверяем не только размер svg, но и рисунок. */
+      const box = svg.getBBox();
       return {
         width: css.width,
         stroke: css.strokeWidth,
         box: id === 'thinkToggle' ? Math.round(node.getBoundingClientRect().height) : Math.round(node.getBoundingClientRect().width),
+        ink: [Math.round(box.width), Math.round(box.height)],
       };
     };
     return {
@@ -227,6 +232,13 @@ try {
     && (item.box === 34 || item.box === 0));
   ok('значки ряда на компьютере одного размера (19 px), штриха и кнопки (34 px)',
     deskIconsOk, JSON.stringify(deskAction.icons));
+  /* Видимые кнопки рисуют значок почти на всю клетку: у «A» с галочкой прежний
+     путь был 15×9, и кнопка рядом с камерой (17×15) и скрепкой (16×16) казалась
+     меньше при одинаковой коробке 34×34. */
+  const inkOf = (id) => (deskAction.icons.find((_, i) => ['thinkToggle', 'photoBtn', 'fileBtn', 'spellBtn', 'micBtn', 'sendBtn'][i] === id) || {}).ink || [0, 0];
+  const spellInk = inkOf('spellBtn');
+  ok('«A» с галочкой нарисована во всю клетку, не мельче соседей',
+    spellInk[0] >= 14 && spellInk[1] >= 12, JSON.stringify(spellInk));
 
   await deskPage.fill('#input', 'Проверка кнопки');
   const deskTyped = await deskPage.evaluate(() => {
