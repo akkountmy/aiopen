@@ -171,9 +171,9 @@ try {
          viewport: window.innerWidth,
        };
      })()`);
-    layout.cards.length === 4 ? ok(`подсказки при ${width}px: четыре подсказки`) : fail(`подсказки при ${width}px`, String(layout.cards.length));
+    layout.cards.length === 6 ? ok(`подсказки при ${width}px: шесть подсказок`) : fail(`подсказки при ${width}px`, String(layout.cards.length));
     layout.columns === 2 ? ok(`две подсказки в ряд при ${width}px`, `ширина ${layout.cards[0].w}px`) : fail(`колонки при ${width}px`, `колонок ${layout.columns}`);
-    layout.rows === 2 ? ok(`два ряда при ${width}px`) : fail(`ряды при ${width}px`, `рядов ${layout.rows}`);
+    layout.rows === 3 ? ok(`три полных ряда при ${width}px`) : fail(`ряды при ${width}px`, `рядов ${layout.rows}`);
     layout.cards[0].x < layout.cards[1].x && layout.cards[0].y === layout.cards[1].y
       ? ok(`первая пара стоит рядом при ${width}px`)
       : fail(`раскладка при ${width}px`, JSON.stringify(layout.cards));
