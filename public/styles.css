@@ -5650,6 +5650,22 @@ html.kb-open .scroll-jump {
   margin-left: auto;
 }
 
+.dash-del {
+  width: 32px;
+  height: 32px;
+  color: var(--text-4);
+}
+
+.dash-del:hover:not(:disabled) {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+}
+
+.dash-del svg {
+  width: 15px;
+  height: 15px;
+}
+
 .dash-foot {
   margin: 22px 0 0;
   max-width: 82ch;
@@ -5664,6 +5680,15 @@ html.kb-open .scroll-jump {
   color: var(--danger);
   font-size: var(--fs-13);
   line-height: var(--lh-20);
+}
+
+.dash-empty {
+  margin: 0;
+  max-width: 62ch;
+  color: var(--text-3);
+  font-size: var(--fs-13);
+  line-height: var(--lh-20);
+  text-wrap: pretty;
 }
 
 /* Окно настроек задания */

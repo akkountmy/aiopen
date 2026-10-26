@@ -666,7 +666,7 @@ class Store {
     const list = Array.isArray(this.state.dashboard) ? this.state.dashboard : [];
     const order = new Map(DASHBOARD_BLOCKS.map((block, index) => [block.id, index]));
     return list
-      .filter((task) => task.ownerId === userId)
+      .filter((task) => task.ownerId === userId && !task.deletedAt)
       .map((task) => ({ ...task }))
       .sort((a, b) => (order.get(a.blockId) ?? 99) - (order.get(b.blockId) ?? 99));
   }
@@ -706,13 +706,54 @@ class Store {
     return task ? { ...task } : null;
   }
 
+  /* Удаление задания не стирает запись: шесть блоков — фиксированный набор,
+     и ensureDashboardTasks иначе создал бы удалённый блок заново при следующем
+     открытии экрана. Запись остаётся надгробием с deletedAt, поэтому блок
+     скрыт, но его можно вернуть вместе с текстом, расписанием и документами. */
+  deleteDashboardTask(id, userId) {
+    const list = Array.isArray(this.state.dashboard) ? this.state.dashboard : [];
+    const task = list.find((item) => item.id === id && item.ownerId === userId);
+    if (!task) return null;
+    if (!task.deletedAt) {
+      task.deletedAt = nowIso();
+      task.enabled = false;
+      task.nextRunAt = null;
+      task.updatedAt = task.deletedAt;
+      this.save();
+    }
+    return { ...task };
+  }
+
+  /** Вернуть все удалённые задания. Обратно они приходят выключенными, чтобы
+      неожиданный отчёт не списал деньги сразу после восстановления. */
+  restoreDashboardTasks(userId) {
+    const list = Array.isArray(this.state.dashboard) ? this.state.dashboard : [];
+    let restored = 0;
+    const at = nowIso();
+    for (const task of list) {
+      if (task.ownerId !== userId || !task.deletedAt) continue;
+      delete task.deletedAt;
+      task.enabled = false;
+      task.nextRunAt = null;
+      task.updatedAt = at;
+      restored += 1;
+    }
+    if (restored) this.save();
+    return restored;
+  }
+
+  dashboardDeletedCount(userId) {
+    const list = Array.isArray(this.state.dashboard) ? this.state.dashboard : [];
+    return list.filter((task) => task.ownerId === userId && task.deletedAt).length;
+  }
+
   /* Правка настроек. Время следующего запуска пересчитывается, если изменилось
      само расписание или если оно уже в прошлом: иначе задание «зависло» бы на
      старой дате после включения. Выключенное задание даты не держит. */
   updateDashboardTask(id, userId, patch) {
     const list = Array.isArray(this.state.dashboard) ? this.state.dashboard : [];
     const task = list.find((item) => item.id === id && item.ownerId === userId);
-    if (!task) return null;
+    if (!task || task.deletedAt) return null;
     const before = { enabled: task.enabled, cadence: task.cadence, dayOfMonth: task.dayOfMonth, dayOfWeek: task.dayOfWeek, hour: task.hour };
     const changed = applyDashboardPatch(task, patch);
     const scheduleChanged = ['enabled', 'cadence', 'dayOfMonth', 'dayOfWeek', 'hour'].some((key) => before[key] !== task[key]);
@@ -755,7 +796,7 @@ class Store {
   addDashboardFile(id, userId, file) {
     const list = Array.isArray(this.state.dashboard) ? this.state.dashboard : [];
     const task = list.find((item) => item.id === id && item.ownerId === userId);
-    if (!task) return null;
+    if (!task || task.deletedAt) return null;
     if (!Array.isArray(task.files)) task.files = [];
     if (task.files.length >= DASHBOARD_LIMITS.maxFiles) return null;
     task.files.push(file);
@@ -767,7 +808,7 @@ class Store {
   deleteDashboardFile(id, userId, fileId) {
     const list = Array.isArray(this.state.dashboard) ? this.state.dashboard : [];
     const task = list.find((item) => item.id === id && item.ownerId === userId);
-    if (!task || !Array.isArray(task.files)) return null;
+    if (!task || task.deletedAt || !Array.isArray(task.files)) return null;
     const index = task.files.findIndex((file) => file.id === fileId);
     if (index < 0) return null;
     const [removed] = task.files.splice(index, 1);
@@ -780,7 +821,7 @@ class Store {
   dashboardDue(nowMs = Date.now()) {
     const list = Array.isArray(this.state.dashboard) ? this.state.dashboard : [];
     return list
-      .filter((task) => task.enabled && task.nextRunAt && Date.parse(task.nextRunAt) <= nowMs)
+      .filter((task) => task.enabled && !task.deletedAt && task.nextRunAt && Date.parse(task.nextRunAt) <= nowMs)
       .map((task) => ({ ...task }));
   }
 

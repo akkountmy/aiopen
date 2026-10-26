@@ -349,6 +349,32 @@ try {
   const missing = await call('/api/dashboard/tasks/d_nope_000000', { method: 'PATCH', cookie, body: { enabled: true } });
   check('несуществующее задание — 404', missing.status === 404, `HTTP ${missing.status}`);
 
+  /* ---- удаление и возврат задания ----
+     Удалённый блок не должен воскресать при следующем открытии дашборда:
+     ensureDashboardTasks видит надгробие и не создаёт блок заново. */
+  const market = (await call('/api/dashboard', { cookie })).data.tasks.find((item) => item.blockId === 'market');
+  const removed = await call(`/api/dashboard/tasks/${market.id}`, { method: 'DELETE', cookie });
+  check('задание удаляется', removed.status === 200 && removed.data.deleted === 1, `HTTP ${removed.status}`);
+  const afterDelete = await call('/api/dashboard', { cookie });
+  check('удалённого задания нет в списке', (afterDelete.data.tasks || []).length === 5, `заданий: ${afterDelete.data.tasks?.length}`);
+  check('счётчик удалённых доходит до экрана', afterDelete.data.deleted === 1, String(afterDelete.data.deleted));
+  const stillGone = await call('/api/dashboard', { cookie });
+  check('удалённое задание не создаётся заново', (stillGone.data.tasks || []).length === 5, `заданий: ${stillGone.data.tasks?.length}`);
+  const patchDeleted = await call(`/api/dashboard/tasks/${market.id}`, {
+    method: 'PATCH',
+    cookie,
+    body: { enabled: true },
+  });
+  check('удалённое задание нельзя включить', patchDeleted.status === 404, `HTTP ${patchDeleted.status}`);
+  const restored = await call('/api/dashboard/restore', { method: 'POST', cookie, body: {} });
+  check(
+    'удалённые задания возвращаются',
+    restored.status === 200 && restored.data.restored === 1 && (restored.data.tasks || []).length === 6,
+    `HTTP ${restored.status}, заданий: ${restored.data.tasks?.length}`,
+  );
+  const returned = (restored.data.tasks || []).find((item) => item.id === market.id);
+  check('возвращённое задание выключено', returned?.enabled === false && !returned?.nextRunAt, JSON.stringify(returned?.enabled));
+
   /* ---- второй аккаунт не видит чужие задания ---- */
   const other = await call('/api/admin/users', {
     method: 'POST',

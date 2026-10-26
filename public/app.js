@@ -109,7 +109,7 @@ const state = {
 };
 
 function emptyDashboardState() {
-  return { loaded: false, loading: false, tasks: [], tz: 'Europe/Minsk', nextRunAt: null, canAutoRun: false, balanceUsd: 0 };
+  return { loaded: false, loading: false, tasks: [], deleted: 0, tz: 'Europe/Minsk', nextRunAt: null, canAutoRun: false, balanceUsd: 0 };
 }
 
 /* Выбранные режимы ответа. Как в мобильном приложении, это не разовая
@@ -6841,6 +6841,7 @@ async function loadDashboard() {
   try {
     const data = await api('/api/dashboard');
     state.dashboard.tasks = Array.isArray(data.tasks) ? data.tasks : [];
+    state.dashboard.deleted = Number(data.deleted || 0);
     state.dashboard.tz = data.tz || state.dashboard.tz;
     state.dashboard.nextRunAt = data.nextRunAt || null;
     state.dashboard.canAutoRun = Boolean(data.canAutoRun);
@@ -6863,21 +6864,37 @@ function renderDashboard() {
   grid.innerHTML = '';
   for (const task of state.dashboard.tasks) grid.appendChild(dashboardCard(task));
   if (!state.dashboard.tasks.length) {
-    grid.appendChild(el('p', 'dash-error', 'Заданий нет — обновите экран, сервер создаст их заново.'));
+    grid.appendChild(
+      el(
+        'p',
+        'dash-empty',
+        state.dashboard.deleted
+          ? 'Все задания удалены. Верните их кнопкой «Вернуть удалённые» — настройки и документы сохранились.'
+          : 'Заданий нет — обновите экран, сервер создаст их заново.',
+      ),
+    );
   }
 
   const enabled = state.dashboard.tasks.filter((task) => task.enabled);
   const allButton = $('#dashEnableAll');
   if (allButton) {
-    allButton.textContent = enabled.length === state.dashboard.tasks.length ? 'Выключить всё' : 'Включить всё';
+    allButton.textContent =
+      state.dashboard.tasks.length && enabled.length === state.dashboard.tasks.length ? 'Выключить всё' : 'Включить всё';
     allButton.disabled = !state.dashboard.tasks.length;
+  }
+  const restoreButton = $('#dashRestore');
+  if (restoreButton) {
+    restoreButton.textContent = `Вернуть удалённые (${state.dashboard.deleted})`;
+    restoreButton.classList.toggle('hidden', !state.dashboard.deleted);
   }
 
   const notice = $('#dashNotice');
   if (!notice) return;
   let text = '';
   let kind = 'note';
-  if (!state.dashboard.canAutoRun) {
+  if (!state.dashboard.tasks.length) {
+    text = '';
+  } else if (!state.dashboard.canAutoRun) {
     text = 'На балансе нет средств: по расписанию задания не запустятся. Пополните баланс — или запускайте отчёты вручную, сразу после пополнения.';
     kind = 'warn';
   } else if (!enabled.length) {
@@ -6967,6 +6984,13 @@ function dashboardCard(task) {
   setup.innerHTML = `${ICONS.sliders}<span>Настроить</span>`;
   setup.addEventListener('click', () => openDashboardTaskModal(task));
   actions.appendChild(setup);
+  const remove = el('button', 'btn btn-ghost btn-icon dash-del');
+  remove.type = 'button';
+  remove.title = `Удалить «${task.title}»`;
+  remove.setAttribute('aria-label', `Удалить «${task.title}»`);
+  remove.innerHTML = ICONS.trash;
+  remove.addEventListener('click', () => deleteDashboardTask(task, remove));
+  actions.appendChild(remove);
   card.appendChild(actions);
 
   return card;
@@ -7007,6 +7031,44 @@ async function toggleAllDashboardTasks() {
   } catch (error) {
     if (!error.unauthorized) toast(error.message || 'Не удалось сохранить настройку');
     renderDashboard();
+  }
+}
+
+async function deleteDashboardTask(task, button) {
+  const confirmed = await confirmPopover({
+    anchor: button,
+    title: 'Удалить задание?',
+    text: `«${task.title}» больше не будет запускаться по расписанию. Настройки и документы сохранятся: задание можно вернуть кнопкой «Вернуть удалённые».`,
+  });
+  if (!confirmed) return;
+  if (button) button.disabled = true;
+  try {
+    const data = await api(`/api/dashboard/tasks/${task.id}`, { method: 'DELETE' });
+    state.dashboard.tasks = state.dashboard.tasks.filter((item) => item.id !== task.id);
+    state.dashboard.deleted = Number(data.deleted || 0);
+    renderDashboard();
+    toast('Задание удалено — вернуть его можно в «Дашборде»', 'ok');
+  } catch (error) {
+    if (!error.unauthorized) toast(error.message || 'Не удалось удалить задание');
+    if (button) button.disabled = false;
+  }
+}
+
+async function restoreDashboardTasks() {
+  const button = $('#dashRestore');
+  if (button) button.disabled = true;
+  try {
+    const data = await api('/api/dashboard/restore', { method: 'POST', body: {} });
+    state.dashboard.tasks = Array.isArray(data.tasks) ? data.tasks : [];
+    state.dashboard.deleted = Number(data.deleted || 0);
+    state.dashboard.nextRunAt = data.nextRunAt || null;
+    state.dashboard.canAutoRun = Boolean(data.canAutoRun);
+    state.dashboard.balanceUsd = Number(data.balanceUsd || 0);
+    renderDashboard();
+    toast('Задания возвращены выключенными — включите нужные', 'ok');
+  } catch (error) {
+    if (!error.unauthorized) toast(error.message || 'Не удалось вернуть задания');
+    if (button) button.disabled = false;
   }
 }
 
@@ -7317,6 +7379,7 @@ $('#dashboardBtn').addEventListener('click', () => {
 });
 $('#dashRefresh').addEventListener('click', () => loadDashboard());
 $('#dashEnableAll').addEventListener('click', toggleAllDashboardTasks);
+$('#dashRestore').addEventListener('click', restoreDashboardTasks);
 
 $('#loginForm').addEventListener('submit', onLogin);
 $('#signupForm').addEventListener('submit', onSignup);

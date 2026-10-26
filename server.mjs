@@ -2008,6 +2008,9 @@ function dashboardTaskText(task, docs = []) {
  * Возвращает причину и подсказку «когда повторить», если запустить нельзя.
  */
 function beginDashboardRun(task, { manual = false } = {}) {
+  /* Снимок списка мог быть сделан до удаления: задание, которого уже нет,
+     не должно успеть создать диалог и списать деньги. */
+  if (task.deletedAt) return { ok: false, reason: 'задание удалено' };
   const user = store.getUser(task.ownerId);
   if (!user || user.disabled) return { ok: false, reason: 'аккаунт недоступен', disable: true };
   if (!manual && user.role !== 'admin') {
@@ -2159,6 +2162,7 @@ function dashboardPayload(user) {
   const balanceUsd = store.publicUser(user.id)?.balanceUsd ?? 0;
   return {
     tasks,
+    deleted: store.dashboardDeletedCount(user.id),
     nextRunAt: upcoming ? upcoming.nextRunAt : null,
     tz: DASHBOARD_TZ,
     balanceUsd,
@@ -2805,9 +2809,17 @@ async function route(req, res) {
        (dashboardTick), а «Запустить сейчас» — эта же ручка, но по кнопке. */
     if (parts[1] === 'dashboard') {
       if (parts.length === 2 && method === 'GET') return sendJson(res, 200, dashboardPayload(user));
+      if (parts[2] === 'restore' && parts.length === 3 && method === 'POST') {
+        const restored = store.restoreDashboardTasks(user.id);
+        return sendJson(res, 200, { restored, ...dashboardPayload(user) });
+      }
       if (parts[2] === 'tasks' && parts[3]) {
         const task = store.getDashboardTask(parts[3], user.id);
-        if (!task) return sendError(res, 404, 'Задание не найдено');
+        if (!task || task.deletedAt) return sendError(res, 404, 'Задание не найдено');
+        if (parts.length === 4 && method === 'DELETE') {
+          store.deleteDashboardTask(task.id, user.id);
+          return sendJson(res, 200, { ok: true, deleted: store.dashboardDeletedCount(user.id) });
+        }
         if (parts.length === 4 && method === 'PATCH') {
           const body = await readJsonBody(req);
           const patch = {};
