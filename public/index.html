@@ -231,8 +231,12 @@
               </button>
             </div>
             <div class="composer-row">
-              <button id="attachBtn" class="btn btn-ghost attach-btn" type="button" title="Прикрепить файлы (фото, документы, таблицы)" aria-label="Прикрепить файлы">
-                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21.4 11l-9.2 9.2a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 1 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5" /></svg>
+              <button id="attachBtn" class="btn btn-ghost attach-btn" type="button" title="Прикрепить" aria-label="Прикрепить файлы и фото">
+                <!-- Скрепка — для компьютера, «＋» — для телефона: одно и то же
+                     действие, но на узком экране кнопка выглядит как в
+                     приложении DeepSeek. Какой значок показать, решает CSS. -->
+                <svg class="icon-clip" viewBox="0 0 24 24" aria-hidden="true"><path d="M21.4 11l-9.2 9.2a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 1 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5" /></svg>
+                <svg class="icon-plus" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5.2v13.6M5.2 12h13.6" /></svg>
               </button>
               <div id="dictationBar" class="dictation-bar hidden" title="Нажмите микрофон, чтобы закончить запись">
                 <span class="dictation-dot" aria-hidden="true"></span>

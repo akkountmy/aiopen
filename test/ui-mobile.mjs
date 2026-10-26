@@ -187,6 +187,87 @@ try {
 
   for (const [width, height] of [[390, 844], [360, 780], [320, 640]]) await checkWidth(width, height);
 
+  // 2а. композер как в приложении DeepSeek: поле сверху, чипы под ним, «＋»
+  //     слева, микрофон и отправка справа. «＋» открывает меню из трёх
+  //     действий: камера, галерея, файл — и сразу зовёт выбор файла.
+  await cdp.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
+  await goto(BASE + '/');
+  await waitFor(`!!document.getElementById('micBtn') && document.documentElement.classList.contains('compact-input')`);
+  const composer = await evaluate(`(() => {
+    const q = (selector) => document.querySelector(selector);
+    const box = (selector) => q(selector).getBoundingClientRect();
+    const css = (selector) => getComputedStyle(q(selector));
+    return {
+      grid: css('#composer').display,
+      placeholder: q('#input').placeholder,
+      greeting: q('.empty-title') ? q('.empty-title').textContent.trim() : '',
+      inputTop: Math.round(box('#input').top),
+      modesTop: Math.round(box('#composerModes').top),
+      buttonsTop: Math.round(box('#attachBtn').top),
+      sameRow: Math.abs(box('#micBtn').top - box('#sendBtn').top) < 2,
+      plus: css('#attachBtn .icon-plus').display,
+      clip: css('#attachBtn .icon-clip').display,
+      round: css('#attachBtn').borderRadius,
+      overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    };
+  })()`);
+  composer.grid === 'grid' ? ok('композер собран сеткой, как в приложении') : fail('раскладка композера', composer.grid);
+  composer.inputTop < composer.modesTop && composer.modesTop < composer.buttonsTop
+    ? ok('поле сверху, чипы под ним, кнопки внизу')
+    : fail('порядок блоков композера', JSON.stringify(composer));
+  composer.sameRow ? ok('микрофон и отправка в одном ряду') : fail('ряд кнопок правой стороны', JSON.stringify(composer));
+  composer.plus === 'block' && composer.clip === 'none' ? ok('на телефоне «＋», а не скрепка') : fail('значок вложения', `${composer.plus}/${composer.clip}`);
+  composer.round === '50%' ? ok('круглые кнопки, как в приложении') : fail('форма кнопки вложения', composer.round);
+  composer.placeholder.includes('удерживайте') ? ok('подсказка в поле говорит про удержание') : fail('подсказка в поле', composer.placeholder);
+  composer.greeting.startsWith('Привет!') ? ok('приветствие как в приложении') : fail('приветствие', composer.greeting);
+  composer.overflow <= 0 ? ok('композер не даёт горизонтальной прокрутки') : fail('переполнение композера', `${composer.overflow}px`);
+
+  await evaluate(`(() => {
+    window.__picked = [];
+    const proto = HTMLInputElement.prototype;
+    const original = proto.click;
+    proto.click = function () {
+      if (this.id === 'fileInput') {
+        window.__picked.push({ accept: this.accept, capture: this.getAttribute('capture') });
+        return;
+      }
+      return original.call(this);
+    };
+    return true;
+  })()`);
+  await evaluate(`document.getElementById('attachBtn').click(); true`);
+  const menuOpen = await waitFor(`!!document.querySelector('.attach-menu')`);
+  const menu = await evaluate(`[...document.querySelectorAll('.attach-menu-label')].map((n) => n.textContent.trim())`);
+  menuOpen ? ok('«＋» открывает меню вложений') : fail('меню «＋»', 'не открылось');
+  menu.join('|') === 'Сфотографировать|Фото из галереи|Файл' ? ok('в меню камера, галерея и файл') : fail('пункты меню', menu.join(' | '));
+  if (process.env.DSHOW_MOBILE_SHOT) {
+    const shot = await cdp.send('Page.captureScreenshot', { format: 'png' });
+    fs.writeFileSync(process.env.DSHOW_MOBILE_SHOT.replace('.png', '-attach.png'), Buffer.from(shot.data, 'base64'));
+  }
+  await evaluate(`[...document.querySelectorAll('.attach-menu-item')][0].click(); true`);
+  const camera = await evaluate(`JSON.stringify(window.__picked[0] || null)`).then((text) => JSON.parse(text));
+  camera && camera.accept === 'image/*' && camera.capture === 'environment'
+    ? ok('«Сфотографировать» зовёт камеру на фото')
+    : fail('камера из меню', JSON.stringify(camera));
+  (await evaluate(`!document.querySelector('.attach-menu')`)) ? ok('после выбора меню закрывается') : fail('закрытие меню', 'осталось открытым');
+
+  // 2б. на компьютере всё прежнее: ряд кнопок, скрепка, своя подсказка.
+  await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false });
+  await goto(BASE + '/');
+  await waitFor(`!!document.getElementById('micBtn') && !document.documentElement.classList.contains('compact-input')`);
+  const desktop = await evaluate(`(() => {
+    const css = (selector) => getComputedStyle(document.querySelector(selector));
+    return {
+      grid: css('#composer').display,
+      plus: css('#attachBtn .icon-plus').display,
+      clip: css('#attachBtn .icon-clip').display,
+      placeholder: document.querySelector('#input').placeholder,
+    };
+  })()`);
+  desktop.grid !== 'grid' ? ok('на компьютере композер остался прежним') : fail('раскладка на компьютере', desktop.grid);
+  desktop.clip === 'block' && desktop.plus === 'none' ? ok('на компьютере скрепка, а не «＋»') : fail('значок вложения на компьютере', `${desktop.clip}/${desktop.plus}`);
+  desktop.placeholder === 'Спросите или поставьте задачу…' ? ok('подсказка на компьютере прежняя') : fail('подсказка на компьютере', desktop.placeholder);
+
   // 2б. голос с удержанием: слой подсказки есть, спрятан и не перехватывает
   //     касания, микрофон слушается удержания, режим ответа — один.
   await cdp.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });

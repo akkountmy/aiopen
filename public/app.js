@@ -23,6 +23,8 @@ const ICONS = {
   file: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 3.5A1.5 1.5 0 016.5 2h4L15 6.5v10A1.5 1.5 0 0113.5 18h-7A1.5 1.5 0 015 16.5v-13z"/><path d="M10.5 2v4.5H15"/></svg>',
   image:
     '<svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="4" width="14" height="12" rx="1.6"/><circle cx="7.4" cy="8.2" r="1.1"/><path d="M3.5 14l4-4 3 3 2.4-2.4 3.6 3.6"/></svg>',
+  camera:
+    '<svg viewBox="0 0 20 20" aria-hidden="true"><rect x="2.6" y="6.2" width="14.8" height="10.2" rx="2.2"/><path d="M7.4 6.2l1-2.2h3.2l1 2.2"/><circle cx="10" cy="11.3" r="2.7"/></svg>',
   dots: '<svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="4.5" cy="10" r="1.4"/><circle cx="10" cy="10" r="1.4"/><circle cx="15.5" cy="10" r="1.4"/></svg>',
   download:
     '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4v9M6.2 9.5L10 13.3l3.8-3.8M4 16h12"/></svg>',
@@ -1350,7 +1352,7 @@ function renderEmpty() {
   const empty = el('div', 'empty');
   empty.innerHTML = `
     <div class="empty-mark">${WHALE_SVG}</div>
-    <h2 class="empty-title">Чем помочь?</h2>
+    <h2 class="empty-title">Привет! О чём хотите поговорить сегодня?</h2>
     <p class="empty-sub">Выберите подсказку или напишите задачу.</p>
     <div class="suggestions" aria-label="Возможности ассистента">
       <button class="suggestion" type="button" data-prompt="Подготовь отчёт в Word и Excel по данным проекта: таблицы, расчёты и выводы.">Word и Excel</button>
@@ -2317,6 +2319,43 @@ function renderAttachStrip() {
     chip.appendChild(remove);
     strip.appendChild(chip);
   }
+}
+
+/* «＋» на телефоне открывает то же меню, что в бесплатном приложении
+   DeepSeek: снять фото камерой, выбрать фото из галереи или файл. Действие
+   сразу открывает выбор файла — поэтому строка меню это <button>, а выбор
+   вызывается в том же обработчике: Safari открывает фото и файлы только из
+   живого нажатия, после таймера окно выбора не откроется. */
+function pickFiles({ accept = '', capture = '', multiple = true } = {}) {
+  const input = $('#fileInput');
+  if (!input) return;
+  input.accept = accept;
+  input.multiple = multiple;
+  if (capture) input.setAttribute('capture', capture);
+  else input.removeAttribute('capture');
+  input.click();
+}
+
+function openAttachMenu() {
+  const body = el('div', 'attach-menu');
+  const item = (icon, label, hint, onClick) => {
+    const button = el('button', 'attach-menu-item');
+    button.type = 'button';
+    button.innerHTML = `${icon}<span class="attach-menu-text"><span class="attach-menu-label">${label}</span><span class="attach-menu-hint">${hint}</span></span>`;
+    button.addEventListener('click', () => {
+      /* Сначала выбор файла, потом закрытие листа: так нажатие остаётся
+         пользовательским жестом для системы. */
+      onClick();
+      closeModal();
+    });
+    return button;
+  };
+  body.append(
+    item(ICONS.camera, 'Сфотографировать', 'Камера телефона', () => pickFiles({ accept: 'image/*', capture: 'environment', multiple: false })),
+    item(ICONS.image, 'Фото из галереи', 'Снимки и скриншоты', () => pickFiles({ accept: 'image/*' })),
+    item(ICONS.file, 'Файл', 'Word, Excel, PDF, текст', () => pickFiles()),
+  );
+  openModal({ title: 'Прикрепить', body, className: 'attach-menu-modal' });
 }
 
 async function uploadFiles(fileList) {
@@ -5484,6 +5523,17 @@ function autoResize(force = false) {
 function syncInputPlaceholder() {
   const input = $('#input');
   if (!input) return;
+  /* Композер-«как в приложении»: там микрофон работает удержанием, и об этом
+     говорит само поле. Фраза длинная — на телефоне она видна до края, как в
+     приложении DeepSeek. */
+  if (compactMedia().matches || openedAsApp()) {
+    /* На узком телефоне длинная фраза обрывается на середине слова — берём
+       короткий вариант с многоточием, как обрезанная подсказка в приложении. */
+    input.placeholder = window.matchMedia('(max-width: 430px)').matches
+      ? 'Напишите или удерживайте…'
+      : 'Напишите или удерживайте, чтобы говорить…';
+    return;
+  }
   const veryNarrow = window.matchMedia('(max-width: 420px)').matches;
   const narrow = window.matchMedia('(max-width: 560px)').matches;
   input.placeholder = veryNarrow ? 'Вопрос…' : narrow ? 'Задайте вопрос…' : 'Спросите или поставьте задачу…';
@@ -6555,9 +6605,23 @@ $('#thinkToggle')?.addEventListener('click', () => toggleAnswerMode('thinking'))
 /* На старых iOS CSS-медиазапрос display-mode может не сработать, хотя ярлык
    уже открыт как приложение. Дублируем состояние классом на <html>. */
 document.documentElement.classList.toggle('app-mode', openedAsApp());
+/* Тот же признак решает вид композера: на телефоне и в ярлыке — раскладка
+   как в приложении DeepSeek («＋», чипы под полем, круглые кнопки). */
+applyComposerLayout();
+compactMedia().addEventListener('change', applyComposerLayout);
+let composerLayoutTimer = 0;
+window.addEventListener('resize', () => {
+  clearTimeout(composerLayoutTimer);
+  composerLayoutTimer = setTimeout(applyComposerLayout, 120);
+});
 loadAnswerModes();
 $('#stopBtn').addEventListener('click', stopGeneration);
-$('#attachBtn').addEventListener('click', () => $('#fileInput').click());
+/* На компьютере скрепка сразу открывает выбор файлов, на телефоне «＋»
+   сначала показывает меню: камера, галерея, файл. */
+$('#attachBtn').addEventListener('click', () => {
+  if (document.documentElement.classList.contains('compact-input')) openAttachMenu();
+  else pickFiles();
+});
 $('#fileInput').addEventListener('change', (event) => {
   uploadFiles(event.target.files);
   event.target.value = '';
@@ -7698,6 +7762,28 @@ function openedAsApp() {
     window.navigator.standalone === true ||
     ['standalone', 'fullscreen', 'minimal-ui'].some((mode) => window.matchMedia(`(display-mode: ${mode})`).matches)
   );
+}
+
+/* На телефоне и в ярлыке-приложении композер выглядит как в приложении
+   DeepSeek: поле сверху, чипы режимов под ним, «＋» слева и микрофон с
+   отправкой справа. Раскладку собирает CSS по классу compact-input, а здесь
+   решается только сам факт: ширина до 860 px или открыто как приложение.
+   Тот же признак меняет подсказку в поле — на телефоне микрофон работает
+   удержанием, и об этом говорит сам placeholder. */
+/* matchMedia создаётся при первом обращении: раскладка применяется в начале
+   запуска, когда объявления ниже по файлу ещё не выполнены (const здесь дал
+   бы «Cannot access before initialization»). */
+var compactMq = null;
+
+function compactMedia() {
+  if (!compactMq) compactMq = window.matchMedia('(max-width: 860px)');
+  return compactMq;
+}
+
+function applyComposerLayout() {
+  const compact = compactMedia().matches || openedAsApp();
+  document.documentElement.classList.toggle('compact-input', compact);
+  syncInputPlaceholder();
 }
 
 const HOME_SCREEN_STEPS = {
