@@ -82,6 +82,24 @@ try {
     cameraInput.accept === 'image/*' && cameraInput.capture === 'environment' && !cameraInput.multiple,
     JSON.stringify(cameraInput));
 
+  /* Поле выбора создаётся заново на каждое нажатие: iOS Safari помнит режим
+     поля по первому открытию, и переиспользованное поле продолжает показывать
+     общий лист «Сфотографировать / Медиатека / Выбрать файл». Метим прошлое
+     поле — у нового элемента этой метки быть не должно. */
+  await page.evaluate(() => {
+    document.getElementById('fileInput').dataset.stale = '1';
+  });
+  const freshChooser = page.waitForEvent('filechooser', { timeout: 5000 });
+  await page.click('#photoBtn');
+  await (await freshChooser).element();
+  const freshState = await page.evaluate(() => {
+    const input = document.getElementById('fileInput');
+    return { fresh: input.dataset.stale !== '1', id: input.id, type: input.type };
+  });
+  ok('поле выбора новое на каждое нажатие — телефон не помнит прошлый режим',
+    freshState.fresh && freshState.id === 'fileInput' && freshState.type === 'file',
+    JSON.stringify(freshState));
+
   const galleryChooser = page.waitForEvent('filechooser', { timeout: 5000 });
   await page.click('#galleryBtn');
   const galleryInput = await readInput(galleryChooser);
@@ -91,8 +109,13 @@ try {
   const fileChooser = page.waitForEvent('filechooser', { timeout: 5000 });
   await page.click('#fileBtn');
   const fileInput = await readInput(fileChooser);
-  ok('«Файл» разрешает любые файлы и несколько сразу',
-    fileInput.accept === '' && !fileInput.capture && fileInput.multiple, JSON.stringify(fileInput));
+  /* На телефоне «Прикрепить файл» — это документы из «Файлов». С пустым accept
+     телефон показывал общий лист «Сфотографировать / Медиатека / Выбрать файл»,
+     то есть дублировал две другие кнопки. */
+  ok('«Файл» на телефоне открывает документы, без камеры и альбома',
+    fileInput.accept.includes('.pdf') && fileInput.accept.includes('.docx')
+      && !fileInput.accept.includes('image') && !fileInput.capture && fileInput.multiple,
+    JSON.stringify(fileInput));
 
   ok('никакого меню на экране не появляется', !(await page.isVisible('.attach-menu')));
 
@@ -164,6 +187,112 @@ try {
   ok('на компьютере «Файл» сразу открывает выбор файлов',
     deskInput.accept === '' && deskInput.multiple, JSON.stringify(deskInput));
   ok('на компьютере меню не появляется', !(await deskPage.isVisible('.attach-menu')));
+
+  /* Одна кнопка действия и одинаковые значки: на компьютере ряд справа такой же,
+     как в ярлыке-приложении, — пустое поле показывает микрофон, текст меняет его
+     на отправку, и все значки ряда одного размера и одного штриха. */
+  const deskAction = await deskPage.evaluate(() => {
+    const rect = (id) => document.getElementById(id).getBoundingClientRect();
+    const style = (id) => getComputedStyle(document.getElementById(id));
+    const icon = (id) => {
+      const svg = document.querySelector('#' + id + ' svg');
+      if (!svg) return null;
+      const css = getComputedStyle(svg);
+      const node = document.getElementById(id);
+      return {
+        width: css.width,
+        stroke: css.strokeWidth,
+        box: id === 'thinkToggle' ? Math.round(node.getBoundingClientRect().height) : Math.round(node.getBoundingClientRect().width),
+      };
+    };
+    return {
+      empty: {
+        mic: rect('micBtn').width > 0,
+        send: rect('sendBtn').width > 0,
+        micRight: Math.round(rect('micBtn').right),
+        micTop: Math.round(rect('micBtn').top),
+      },
+      filled: style('micBtn').backgroundColor === style('sendBtn').backgroundColor,
+      icons: ['thinkToggle', 'photoBtn', 'fileBtn', 'spellBtn', 'micBtn', 'sendBtn'].map(icon),
+    };
+  });
+  ok('на компьютере пустое поле показывает микрофон, а не отправку',
+    deskAction.empty.mic && !deskAction.empty.send, JSON.stringify(deskAction.empty));
+  ok('микрофон на компьютере залит тем же акцентом, что и отправка',
+    deskAction.filled === true);
+  /* Кнопка режима — плашка с подписью: у неё сверяем рост ряда, а не ширину.
+     Отправка при пустом поле скрыта — у неё нулевая коробка, зато размер значка
+     и штрих те же. */
+  const deskIconsOk = deskAction.icons.every((item) => item && item.width === '19px' && item.stroke === '1.6px'
+    && (item.box === 34 || item.box === 0));
+  ok('значки ряда на компьютере одного размера (19 px), штриха и кнопки (34 px)',
+    deskIconsOk, JSON.stringify(deskAction.icons));
+
+  await deskPage.fill('#input', 'Проверка кнопки');
+  const deskTyped = await deskPage.evaluate(() => {
+    const rect = (id) => document.getElementById(id).getBoundingClientRect();
+    return {
+      send: rect('sendBtn').width > 0,
+      mic: rect('micBtn').width > 0,
+      sendRight: Math.round(rect('sendBtn').right),
+      sendTop: Math.round(rect('sendBtn').top),
+    };
+  });
+  ok('появился текст: на месте микрофона стоит отправка',
+    deskTyped.send && !deskTyped.mic && deskTyped.sendRight === deskAction.empty.micRight
+      && Math.abs(deskTyped.sendTop - deskAction.empty.micTop) < 2,
+    `${JSON.stringify(deskAction.empty)} → ${JSON.stringify(deskTyped)}`);
+  await deskPage.fill('#input', '');
+
+  /* Ярлык-приложение: та же раскладка compact-input, только на широком экране.
+     Кнопки там круги 34 px с теми же значками 19 px — размеры и стиль совпадают
+     с телефоном и компьютером. */
+  const appShot = await deskPage.evaluate(() => {
+    const html = document.documentElement;
+    html.classList.add('compact-input');
+    const rect = (id) => document.getElementById(id).getBoundingClientRect();
+    const icon = (id) => {
+      const svg = document.querySelector('#' + id + ' svg');
+      const css = getComputedStyle(svg);
+      return { width: css.width, stroke: css.strokeWidth, radius: getComputedStyle(document.getElementById(id)).borderRadius };
+    };
+    const result = {
+      grid: getComputedStyle(document.getElementById('composer')).display,
+      mic: rect('micBtn').width > 0,
+      send: rect('sendBtn').width > 0,
+      round: getComputedStyle(document.getElementById('photoBtn')).borderRadius,
+      icons: ['thinkToggle', 'photoBtn', 'fileBtn', 'micBtn', 'sendBtn'].map((id) => ({ id, ...icon(id) })),
+    };
+    html.classList.remove('compact-input');
+    return result;
+  });
+  ok('в ярлыке-приложении та же одна кнопка действия и те же значки',
+    appShot.grid === 'grid' && appShot.mic && !appShot.send && appShot.round === '50%'
+      && appShot.icons.every((item) => item.width === '19px' && item.stroke === '1.6px'),
+    JSON.stringify(appShot));
+
+  /* Вложение без текста тоже отправляют: пока в строке есть снимок, справа
+     стоит отправка, а микрофон уступает ей место. */
+  await deskPage.evaluate(() => {
+    const strip = document.getElementById('attachStrip');
+    const chip = document.createElement('span');
+    chip.className = 'file-chip';
+    chip.innerHTML = '<span class="fc-name">Снимок.jpg</span><span class="fc-status ready">✓</span>';
+    strip.classList.remove('hidden');
+    strip.appendChild(chip);
+    document.getElementById('composer').classList.add('has-attachments');
+  });
+  const withFile = await deskPage.evaluate(() => ({
+    send: document.getElementById('sendBtn').getBoundingClientRect().width > 0,
+    mic: document.getElementById('micBtn').getBoundingClientRect().width > 0,
+  }));
+  ok('со вложением справа отправка, микрофон уступает место',
+    withFile.send && !withFile.mic, JSON.stringify(withFile));
+  await deskPage.evaluate(() => {
+    document.getElementById('attachStrip').innerHTML = '';
+    document.getElementById('attachStrip').classList.add('hidden');
+    document.getElementById('composer').classList.remove('has-attachments');
+  });
 
   /* «Сфотографировать» на компьютере — окно с камерой ноутбука, а не выбор
      файла: раньше здесь открывался проводник, и снять себя было нечем. */

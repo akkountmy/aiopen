@@ -307,9 +307,9 @@ try {
   composer.spell === 'none'
     ? ok('в нижнем ряду телефона ровно пять кнопок: орфографии нет')
     : fail('лишняя кнопка в нижнем ряду', composer.spell);
-  const iconsOk = composer.icons.every((icon) => icon && icon.width === '18px' && icon.stroke === '1.6px');
+  const iconsOk = composer.icons.every((icon) => icon && icon.width === '19px' && icon.stroke === '1.6px');
   iconsOk
-    ? ok('иконки всего ряда одного размера (18 px) и одного штриха (1,6)')
+    ? ok('иконки всего ряда одного размера (19 px) и одного штриха (1,6)')
     : fail('иконки ряда', JSON.stringify(composer.icons));
   composer.plus ? fail('кнопка «＋»', 'осталась в разметке') : ok('кнопки «＋» больше нет');
   composer.placeholder.includes('удерживайте') ? ok('подсказка в поле говорит про удержание') : fail('подсказка в поле', composer.placeholder);
@@ -344,8 +344,11 @@ try {
   picked[1] && picked[1].accept === 'image/*' && !picked[1].capture
     ? ok('«Фото из галереи» берёт снимки без камеры')
     : fail('галерея', JSON.stringify(picked[1]));
-  picked[2] && picked[2].accept === '' && !picked[2].capture
-    ? ok('«Файл» берёт любые файлы')
+  /* На телефоне «Файл» открывает сразу «Файлы» с документами: с пустым accept
+     телефон показывал общий лист «Сфотографировать / Медиатека / Выбрать файл»,
+     то есть дублировал камеру и альбом. */
+  picked[2] && picked[2].accept.includes('.pdf') && !picked[2].accept.includes('image') && !picked[2].capture
+    ? ok('«Файл» берёт документы из «Файлов» телефона')
     : fail('файл', JSON.stringify(picked[2]));
 
   // 2б. на компьютере ряд остаётся одной линией, но кнопки собраны справа от

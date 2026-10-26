@@ -646,8 +646,8 @@ svg {
 }
 
 .btn-send svg {
-  width: 17px;
-  height: 17px;
+  width: 19px;
+  height: 19px;
   fill: currentColor;
   stroke: none;
 }
@@ -2359,11 +2359,14 @@ html.kb-open .scroll-jump {
   line-height: var(--lh-16);
 }
 
+/* Кнопки вложений — того же размера, что отправка и микрофон: ряд стоит по
+   одной линии, и значки в нём не «пляшут» по высоте из-за разных коробок
+   (раньше здесь было 32 px против 34 у действия). */
 .tool-btn {
-  width: 32px;
-  height: 32px;
+  width: 34px;
+  height: 34px;
   color: var(--text-3);
-  margin-bottom: 1px;
+  margin-bottom: 0;
 }
 
 .tool-btn:hover:not(:disabled) {
@@ -2382,6 +2385,18 @@ html.kb-open .scroll-jump {
 
 .tool-btn.busy svg {
   animation: pulse 1.1s ease-in-out infinite;
+}
+
+/* Значки ряда — одного размера (19 px) и одного штриха (1,6 из общего правила
+   svg) во всех раскладках: телефон, ярлык-приложение и компьютер. Раньше на
+   компьютере они были 17 px, на телефоне — 18 px, и ряд читался разнокалиберным
+   при одинаковых кнопках. */
+.composer-row .mode-chip svg,
+.composer-row .tool-btn svg,
+.composer-row .btn-send svg {
+  width: 19px;
+  height: 19px;
+  flex: none;
 }
 
 #micBtn.active,
@@ -2527,11 +2542,8 @@ html.kb-open .scroll-jump {
   user-select: none;
 }
 
-#micBtn.active {
-  color: var(--danger);
-  border-color: rgba(220, 76, 76, 0.45);
-  background: rgba(220, 76, 76, 0.1);
-}
+/* Заливку кнопки и её красное состояние при записи задаёт одно правило для всех
+   раскладок — см. #micBtn в разделе композера ниже. */
 
 @keyframes voice-track {
   from {
@@ -6776,10 +6788,10 @@ html:not(.compact-input) #input {
 
 html:not(.compact-input) #thinkToggle {
   display: inline-flex;
-  /* Высота и нижний отступ — как у соседних .tool-btn: подпись стоит на одной
-     линии с иконками, а не на полпикселя выше. */
-  height: 30px;
-  margin-bottom: 1px;
+  /* Высота — как у соседних .tool-btn и действия: подпись стоит на одной линии
+     с иконками, низ ряда ровный. */
+  height: 34px;
+  margin-bottom: 0;
 }
 
 html:not(.compact-input) #galleryBtn {
@@ -7046,12 +7058,16 @@ html.compact-input #attachStrip {
   grid-area: strip;
 }
 
+/* Поле ввода на телефоне выше, чем на компьютере: здесь это единственное окно,
+   куда человек пишет, и строка в 28 px читается как щель. 36 px — та же
+   строка, но с воздухом вокруг текста; от этого поле диалога становится чуть
+   выше, а лента сообщений не страдает — запас берётся из отступов ряда. */
 html.compact-input #input {
   grid-area: input;
-  min-height: 28px;
-  padding: 2px 6px 0;
+  min-height: 36px;
+  padding: 4px 6px 2px;
   font-size: 16px;
-  line-height: 24px;
+  line-height: 26px;
 }
 
 html.compact-input #dictationBar {
@@ -7140,12 +7156,12 @@ html.compact-input .mode-chip:hover:not(:disabled) {
 }
 
 /* Иконки ряда одного размера и одного штриха (1,6 — из общего правила svg):
-   так кнопки читаются одним набором. 18 px — общий размер для всех пяти. */
+   так кнопки читаются одним набором. 19 px — общий размер для всех пяти. */
 html.compact-input .mode-chip svg,
 html.compact-input .tool-btn svg,
 html.compact-input .btn-send svg {
-  width: 18px;
-  height: 18px;
+  width: 19px;
+  height: 19px;
   flex: none;
 }
 
@@ -7153,33 +7169,46 @@ html.compact-input .tool-btn {
   color: var(--text-3);
 }
 
-/* Микрофон в этой раскладке — не бледный значок, а та же залитая кнопка, что и
-   отправка: место одно, и человеку не нужно догадываться, что кнопка сменила
-   дело. При записи кнопка краснеет — видно, что микрофон слушает. */
-html.compact-input #micBtn {
+/* Микрофон — не бледный значок, а та же залитая кнопка, что и отправка: место
+   одно, и человеку не нужно догадываться, что кнопка сменила дело. Так на всех
+   раскладках, включая компьютер, где микрофон теперь тоже единственная кнопка
+   действия. При записи кнопка краснеет — видно, что микрофон слушает. */
+#micBtn {
   background: var(--accent-fill);
   border: 0;
   color: #fff;
 }
 
-html.compact-input #micBtn:hover:not(:disabled) {
+#micBtn:hover:not(:disabled) {
   background: var(--accent-fill-hover);
   color: #fff;
 }
 
-html.compact-input #micBtn.active,
-html.compact-input #micBtn.active:hover:not(:disabled) {
+#micBtn.active,
+#micBtn.active:hover:not(:disabled) {
   background: var(--danger);
   border: 0;
   color: #fff;
 }
 
-/* Одна кнопка на два дела: пока поле пустое, в правом углу микрофон; как только
+/* Одна кнопка на два дела: пока поле пустое, справа микрофон; как только
    появился текст, его место занимает отправка. Пока идёт ответ, обе уступают
-   «Остановить». */
-html.compact-input #input:placeholder-shown ~ #sendBtn,
-html.compact-input #input:not(:placeholder-shown) ~ #micBtn,
-html.compact-input .composer.streaming #micBtn {
+   «Остановить». Правило общее для всех раскладок — на компьютере ряд кнопок
+   тоже кончается одной кнопкой действия, как в ярлыке-приложении. */
+#input:placeholder-shown ~ #sendBtn,
+#input:not(:placeholder-shown) ~ #micBtn,
+.composer.streaming #micBtn {
+  display: none;
+}
+
+/* Вложение без текста тоже отправляют: пока в строке есть готовый файл, справа
+   стоит отправка, а микрофон уступает ей место (но остаётся виден, пока идёт
+   запись). */
+.composer.has-attachments #input ~ #sendBtn {
+  display: inline-flex;
+}
+
+.composer.has-attachments #input:placeholder-shown ~ #micBtn:not(.active) {
   display: none;
 }
 

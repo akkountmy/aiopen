@@ -1863,8 +1863,9 @@ function setStreaming(active) {
   state.streaming = active;
   $('#sendBtn').classList.toggle('hidden', active);
   $('#stopBtn').classList.toggle('hidden', !active);
-  /* На телефоне и в ярлыке справа одна кнопка: пока идёт ответ, она уступает
-     место «Остановить», иначе микрофон и «стоп» встали бы друг на друга. */
+  /* Справа одна кнопка действия на всех раскладках: пока идёт ответ, она
+     уступает место «Остановить», иначе микрофон и «стоп» встали бы друг на
+     друга. */
   $('#composer').classList.toggle('streaming', active);
   $('#input').disabled = false;
 }
@@ -2297,6 +2298,9 @@ async function stopGeneration() {
 function renderAttachStrip() {
   const strip = $('#attachStrip');
   strip.innerHTML = '';
+  /* Признак для CSS: пока в строке есть вложение, справа стоит отправка, даже
+     если поле пустое, — такие сообщения отправлять можно. */
+  $('#composer').classList.toggle('has-attachments', state.attachments.length > 0);
   if (!state.attachments.length) {
     strip.classList.add('hidden');
     return;
@@ -2338,14 +2342,33 @@ function renderAttachStrip() {
    выбор файла: никакого промежуточного меню, поэтому и окно выбора открывается
    в живом нажатии — Safari пускает фото и файлы только так. Исключение —
    компьютер: там «Сфотографировать» включает камеру ноутбука (openCameraDialog),
-   потому что выбор файла с capture на компьютере открывал обычный проводник. */
+   потому что выбор файла с capture на компьютере открывал обычный проводник.
+
+   Поле выбора делается заново на каждое нажатие, а не переиспользуется.
+   iOS Safari запоминает режим поля по первому открытию: если у одного и того же
+   <input> менять accept и capture, телефон продолжает показывать прежний общий
+   лист «Сфотографировать / Медиатека / Выбрать файл» — то есть ровно те
+   дублирующие функции, которых быть не должно. Новый элемент читает атрибуты
+   заново, поэтому камера открывается камерой, альбом — альбомом, а файл —
+   файлами телефона. */
 function pickFiles({ accept = '', capture = '', multiple = true } = {}) {
-  const input = $('#fileInput');
-  if (!input) return;
+  const previous = $('#fileInput');
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.id = 'fileInput';
+  /* Поле не прячем через hidden: на части версий iOS клик по полю, которого нет
+     в выводе страницы, игнорируется. Уводим его за край экрана — оно видимо для
+     браузера, но не для человека. */
+  input.style.cssText = 'position:fixed;left:-9999px;top:0;width:1px;height:1px;opacity:0;';
   input.accept = accept;
   input.multiple = multiple;
   if (capture) input.setAttribute('capture', capture);
-  else input.removeAttribute('capture');
+  input.addEventListener('change', () => {
+    uploadFiles(input.files);
+    input.value = '';
+  }, { once: true });
+  if (previous) previous.replaceWith(input);
+  else $('#composer')?.appendChild(input);
   input.click();
 }
 
@@ -7290,10 +7313,19 @@ $('#photoBtn').addEventListener('click', () => {
   else pickFiles({ accept: 'image/*', capture: 'environment', multiple: false });
 });
 $('#galleryBtn').addEventListener('click', () => pickFiles({ accept: 'image/*' }));
-$('#fileBtn').addEventListener('click', () => pickFiles());
-$('#fileInput').addEventListener('change', (event) => {
-  uploadFiles(event.target.files);
-  event.target.value = '';
+/* «Прикрепить файл из телефона» — это документы из «Файлов», а не камера и не
+   альбом: у них свои кнопки. Поэтому на телефоне и в ярлыке список типов узкий.
+   С пустым accept телефон открывает общий лист «Сфотографировать / Медиатека /
+   Выбрать файл» — те самые дубли. С документными типами iOS и Android сразу
+   показывают «Файлы». На компьютере список не сужаем: там это единственный
+   вход за любым файлом. */
+const PHONE_FILE_ACCEPT = [
+  '.pdf', '.doc', '.docx', '.rtf', '.odt', '.txt', '.md', '.csv',
+  '.xls', '.xlsx', '.ods', '.ppt', '.pptx', '.odp', '.json', '.xml', '.zip',
+].join(',');
+$('#fileBtn').addEventListener('click', () => {
+  if (compactMedia().matches || openedAsApp()) pickFiles({ accept: PHONE_FILE_ACCEPT });
+  else pickFiles();
 });
 $('#filesBtn').addEventListener('click', () => toggleFilesDrawer());
 $('#filesUploadBtn').addEventListener('click', () => $('#filesPanelInput').click());
