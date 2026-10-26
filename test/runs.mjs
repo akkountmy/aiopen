@@ -433,6 +433,49 @@ try {
     (legacy?.messages || []).filter((m) => m.role === 'user' && m.content.includes('перезапуск')).length === 1,
     'старый вопрос не продублирован',
   );
+
+  /* 8. Сбой ровно во время вызова инструмента: в истории остался assistant с
+     tool_calls без результата. Продолжение обязано закрыть вызов, иначе
+     модель отвергнет диалог по формату сообщений. */
+  app.kill();
+  await sleep(600);
+  const broken = JSON.parse(fs.readFileSync(chatFile, 'utf8'));
+  const callId = 'call_interrupted_test';
+  const brokenAt = new Date().toISOString();
+  const brokenQuestion = 'Проверь, что осталось после сбоя инструмента.';
+  broken.messages.push({ role: 'user', content: brokenQuestion, at: brokenAt });
+  broken.history = Array.isArray(broken.history) ? broken.history : [];
+  broken.history.push({ role: 'user', content: brokenQuestion });
+  broken.history.push({
+    role: 'assistant',
+    content: null,
+    tool_calls: [
+      { id: callId, type: 'function', function: { name: 'project_files', arguments: '{}' } },
+    ],
+  });
+  fs.writeFileSync(chatFile, JSON.stringify(broken));
+  const indexData2 = JSON.parse(fs.readFileSync(indexFile, 'utf8'));
+  const meta2 = indexData2.chats.find((item) => item.id === chatId);
+  if (meta2) meta2.running = { runId: 'run_broken_tool', startedAt: brokenAt, attempts: 0 };
+  fs.writeFileSync(indexFile, JSON.stringify(indexData2));
+
+  app = startApp();
+  await waitReady();
+  const afterTool = await waitAutoResumed(laptop, chatId);
+  const repairedChat = JSON.parse(fs.readFileSync(chatFile, 'utf8'));
+  const repairedTool = (repairedChat.history || []).find(
+    (item) => item.role === 'tool' && item.tool_call_id === callId,
+  );
+  check(
+    Boolean(repairedTool?.content),
+    'прерванный вызов инструмента закрыт перед продолжением',
+    repairedTool ? repairedTool.content.slice(0, 50) : 'результата нет',
+  );
+  check(
+    afterTool?.messages?.at(-1)?.role === 'assistant' && Boolean(afterTool.messages.at(-1).content),
+    'задача продолжилась после сбоя внутри инструмента',
+    `ответ ${afterTool?.messages?.at(-1)?.content?.length || 0} знаков`,
+  );
 } catch (error) {
   console.error('ошибка проверки:', error.stack || error.message);
   failures += 1;

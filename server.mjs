@@ -209,10 +209,11 @@ function publishRun(run, data) {
      весь прогресс, и модели приходилось начинать с чистого листа. Частоту
      ограничиваем, чтобы не переписывать файл на каждый кусочек текста. */
   if (
-    data.type === 'delta' ||
-    data.type === 'reasoning' ||
-    data.type === 'tool' ||
-    data.type === 'stage'
+    (data.type === 'delta' || data.type === 'reasoning' || data.type === 'stage') ||
+    /* Начало вызова инструмента сохранять нельзя: в истории уже лежит
+       assistant с tool_calls, а результата ещё нет — следующий запрос к модели
+       такой диалог отвергнет. Дождёмся окончания вызова (ok/error). */
+    (data.type === 'tool' && data.status !== 'run')
   ) {
     persistRunProgress(run);
   }
@@ -360,6 +361,41 @@ function resumeTaskText(chat, originalText, userMessage) {
   return [head, goal, files, renderTaskState(chat?.task)].filter(Boolean).join('\n\n');
 }
 
+/* Перезапуск мог застать инструмент в работе: в истории уже есть assistant с
+   tool_calls, а результата ещё нет. Модель такой диалог отвергнет, поэтому
+   закрываем прерванные вызовы честной пометкой. Если же результаты успели
+   записаться, ничего не трогаем. */
+function repairInterruptedHistory(chat) {
+  const history = Array.isArray(chat?.history) ? chat.history : null;
+  if (!history?.length) return 0;
+  let index = -1;
+  for (let i = history.length - 1; i >= 0; i -= 1) {
+    if (history[i]?.role === 'assistant') {
+      index = i;
+      break;
+    }
+  }
+  if (index < 0) return 0;
+  const calls = Array.isArray(history[index]?.tool_calls) ? history[index].tool_calls : [];
+  if (!calls.length) return 0;
+  const after = history.slice(index + 1);
+  if (after.some((item) => item?.role !== 'tool')) return 0;
+  const answered = new Set(
+    after.filter((item) => item?.role === 'tool').map((item) => item.tool_call_id),
+  );
+  const missing = calls.filter((call) => call?.id && !answered.has(call.id));
+  for (const call of missing) {
+    history.push({
+      role: 'tool',
+      tool_call_id: call.id,
+      content:
+        'Вызов прерван перезапуском сервиса, результат неизвестен. Проверь, что уже сделано ' +
+        'в рабочей папке, и при необходимости повтори вызов.',
+    });
+  }
+  return missing.length;
+}
+
 /* Запуск продолжения. Возвращает true, если новая работа действительно
    началась. Вызывается и при старте сервиса, и при входе человека — повторно
    задача не запустится: живую работу отсекает runByChat. */
@@ -381,6 +417,14 @@ function resumeChat(meta, user, source = 'startup') {
     /* Отвечать уже нечего: работа закончилась или пометка не наша. */
     store.setChatRunning(meta.id, null);
     return false;
+  }
+  /* Историю могли сохранить ровно в момент вызова инструмента. Закрываем
+     такие вызовы до обращения к модели, иначе продолжение упадёт на проверке
+     формата сообщений. */
+  const repaired = repairInterruptedHistory(chat);
+  if (repaired) {
+    store.writeChat(chat.id, chatFilePayload(chat));
+    console.log(`[resume] диалог ${chat.id}: закрыл прерванных вызовов инструментов: ${repaired}`);
   }
   /* За задачу, прерванную до появления счётчика, считаем одну попытку. */
   const attempts = meta.running ? (Number(meta.running.attempts) || 0) + 1 : 1;
