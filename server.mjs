@@ -1945,7 +1945,11 @@ function serveStatic(req, res, urlPath, versioned = false) {
     res.writeHead(304, { ETag: etag, ...SECURITY_HEADERS });
     return res.end();
   }
-  const cacheControl = isHtml
+  /* sw.js и манифест — часть «ярлыка-приложения»: их браузер обязан перепроверять
+     каждый раз, иначе обновление воркера (например, правил уведомлений) застрянет
+     в кэше на часы. Статике с меткой ?v= кэш навсегда, остальному — час. */
+  const pwaFile = full === path.join(PUBLIC_DIR, 'sw.js') || full === path.join(PUBLIC_DIR, 'manifest.webmanifest');
+  const cacheControl = isHtml || pwaFile
     ? 'no-cache'
     : versioned
       ? 'public, max-age=31536000, immutable'

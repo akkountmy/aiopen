@@ -88,6 +88,48 @@ async function main() {
     ok('неверный пароль → 401');
   });
 
+  await test('ярлык-приложение', async () => {
+    const page = await call('/', { auth: false });
+    const html = String(page.data);
+    const meta = /name="dshow-asset-version"\s+content="([^"]+)"/.exec(html)?.[1] || '';
+    if (!meta) throw new Error('в странице нет метки версии сборки');
+    if (!/rel="manifest"/.test(html)) throw new Error('в странице нет ссылки на манифест');
+    const manifestLink = /href="([^"]*manifest\.webmanifest[^"]*)"/.exec(html)?.[1];
+    if (!manifestLink) throw new Error('не найден адрес манифеста');
+
+    const manifest = await call('/manifest.webmanifest', { auth: false });
+    let parsed = null;
+    try {
+      parsed = JSON.parse(String(manifest.data));
+    } catch {
+      throw new Error('манифест не разбирается как JSON');
+    }
+    if (parsed.display !== 'standalone') throw new Error(`display=${parsed.display}`);
+    const icons = Array.isArray(parsed.icons) ? parsed.icons : [];
+    if (icons.length < 2) throw new Error('в манифесте меньше двух иконок');
+    for (const icon of icons) {
+      const response = await fetch(`${BASE}${icon.src}`, { method: 'GET' });
+      if (!response.ok) throw new Error(`иконка ${icon.src} → ${response.status}`);
+    }
+
+    const sw = await call('/sw.js', { auth: false, expect: null });
+    if (sw.status === 304) throw new Error('sw.js отдаётся как неизменяемый — обновление воркера застрянет');
+    if (sw.status !== 200) throw new Error(`sw.js → ${sw.status}`);
+    const swCache = String(sw.headers.get('cache-control') || '');
+    if (!swCache.includes('no-cache')) throw new Error(`sw.js кэшируется: ${swCache || 'без заголовка'}`);
+
+    const version = await call('/api/version', { auth: false });
+    if (String(version.data?.version || '') !== meta) {
+      throw new Error(`версия страницы ${meta} ≠ версии сервера ${version.data?.version}`);
+    }
+
+    const appScript = /src="(\/app\.js[^"]*)"/.exec(html)?.[1];
+    if (!appScript) throw new Error('в странице нет адреса app.js');
+    const app = await fetch(`${BASE}${appScript.replace(/&amp;/g, '&')}`);
+    if (!app.ok) throw new Error(`${appScript} → ${app.status}`);
+    ok('ярлык-приложение', `версия ${meta}, воркер без кэша, ${icons.length} иконки`);
+  });
+
   await test('вход', async () => {
     const { data } = await call('/api/login', { method: 'POST', body: { username: USERNAME, password: PASSWORD }, auth: false });
     if (!data?.user?.username) throw new Error('нет пользователя в ответе');
