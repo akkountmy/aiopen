@@ -53,6 +53,20 @@ const gate = { busy: false, waiters: [] };
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/* Библиотеки NSS рядом с сервисом: в node-сборке в облаке их нет, а встроенному
+   Chromium они нужны для TLS. Каталог необязательный — если его нет, ничего не
+   меняем и работаем как раньше. */
+const VENDOR_LIBS = path.resolve(import.meta.dirname, '..', 'vendor', 'chromium-nss', 'lib');
+
+export function useVendorLibs() {
+  if (process.platform === 'win32' || !fs.existsSync(VENDOR_LIBS)) return '';
+  const current = process.env.LD_LIBRARY_PATH || '';
+  if (!current.split(':').includes(VENDOR_LIBS)) {
+    process.env.LD_LIBRARY_PATH = current ? `${VENDOR_LIBS}:${current}` : VENDOR_LIBS;
+  }
+  return VENDOR_LIBS;
+}
+
 function shortError(error) {
   return String(error?.message || error || 'сбой').split('\n')[0].slice(0, 240);
 }
@@ -260,6 +274,7 @@ async function engine() {
 }
 
 async function launch(found, timeoutMs) {
+  useVendorLibs();
   if (found.driver === 'playwright') {
     return found.module.chromium.launch({
       executablePath: found.executablePath || undefined,

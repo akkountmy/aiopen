@@ -68,7 +68,7 @@ if (mode === 'status') {
     /* аргументы из PowerShell приходят с обратными слэшами — дальше работаем как с posix-путём */
     const rel = raw.replace(/\\/g, '/');
     const full = path.join(ROOT, rel);
-    const binary = /\.(ttf|otf|woff2?|png|jpe?g|gif|ico|zip|pdf)$/i.test(rel);
+    const binary = /\.(ttf|otf|woff2?|png|jpe?g|gif|ico|zip|pdf|so|chk)$/i.test(rel);
     const dir = path.posix.dirname(rel);
     const r = await callTool('uploadFiles', {
       slug: SLUG,

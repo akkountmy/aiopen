@@ -291,6 +291,30 @@ Chrome) и берёт первого, кто реально поднялся. И
 
 Например: `{"browser":{"engine":"встроенный Chromium (@sparticuz)","available":true,"checked":"запуском"}}`.
 
+Библиотеки NSS. 26.10.2026 выяснилось, что одного `@sparticuz/chromium` в этом образе
+мало: запуск падал с `Code: 127`, потому что в образе нет `libnss3.so`,
+`libnssutil3.so` и `libnspr4.so`, а Chromium без NSS не стартует. Теперь нужные
+библиотеки лежат в репозитории (`vendor/chromium-nss/lib`, 4.5 МБ, из пакетов Ubuntu
+20.04 — см. `vendor/chromium-nss/README.md`) и добавляются в `LD_LIBRARY_PATH` перед
+запуском. В `/api/health?browser=1` есть поле `diagnostics`: если браузер снова не
+поднимется, там будут имена недостающих библиотек (`ldd`), а не только «Code: 127».
+
+### Как обновляется боевой сервис
+
+GitHub — это хранилище кода, а не канал выкладки: push в `origin` ничего не разворачивает.
+Живая сборка обновляется через MCP платформы (токен — `node scripts/amvera-login.mjs`,
+живёт 30 минут):
+
+```powershell
+node scripts/amvera-login.mjs                     # токен в %TEMP%\amvera-token.json
+node scripts/deploy-amvera.mjs push server.mjs src/browser.mjs   # коммит в репозиторий проекта
+node scripts/deploy-amvera.mjs build               # rebuildProject: сборка и перезапуск
+```
+
+Каждый `push` создаёт коммит, но сборка запускается только явной командой `build`
+(или кнопкой в панели Amvera). После перезапуска проверить движок:
+`GET /api/health?browser=1`.
+
 Память. На «Начальном» около 1 ГБ, а Chromium — новый житель, поэтому проверки идут
 строго по одной (очередь до 45 с, дальше честное «занято»), браузер поднимается один раз
 на всю проверку и закрывается в конце, а если свободной памяти меньше

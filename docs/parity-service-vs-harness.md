@@ -355,6 +355,33 @@ Docker-ветка на тарифе «Начальный» перестала з
   puppeteer + системный Chrome, playwright + явный путь; в каждом сверяется режим отчёта
   и ответ `/api/health`.
 
+#### 15.1.1. Библиотеки NSS: почему «Code: 127» и что сделано (26.10.2026, живая проверка)
+
+Первая же выкладка в облако показала честный отказ, а не мнимый успех:
+`/api/health?browser=1` вернул `available: false`, `reason: «ни один браузер не
+запустился (встроенный Chromium (@sparticuz): Failed to launch the browser process:
+Code: 127)»`. Код 127 — это отсутствующая разделяемая библиотека, и в сообщении
+Puppeteer её не видно.
+
+- **Диагностика**: в `browserStatus({probe: true})` добавлено поле `diagnostics` —
+  при отказе запуска по каждому кандидату выполняется `ldd` и в ответ попадают строки
+  вида `libnss3.so => not found`. Это постоянная часть health, а не временный отладочный
+  маршрут.
+- **Что именно не хватало**: `libnss3.so`, `libnssutil3.so`, `libnspr4.so` (NSS/NSPR).
+  `@sparticuz/chromium` несёт только свой набор для Amazon Linux 2023, NSS в него не входит.
+- **Решение**: библиотеки лежат рядом с сервисом в `vendor/chromium-nss/lib`
+  (4.5 МБ, 16 файлов: nss, nspr, softokn, freebl, nssckbi; источник — пакеты Ubuntu 20.04
+  `libnss3 3.98`, `libnspr4 4.25`, glibc 2.31, совместимо с более новыми). Перед запуском
+  каталог добавляется в `LD_LIBRARY_PATH` (`useVendorLibs()` в `src/browser.mjs`).
+  Каталог необязательный: нет его — поведение прежнее, ничего не ломается.
+- **Результат на живом сервисе**: `/api/health?browser=1` →
+  `{"engine":"встроенный Chromium (@sparticuz)","available":true,"checked":"запуском"}`.
+- **Выкладка**: GitHub — хранилище, а не канал доставки. Живая сборка обновляется так:
+  `node scripts/amvera-login.mjs` → `node scripts/deploy-amvera.mjs push <файлы>` →
+  `node scripts/deploy-amvera.mjs build` (`rebuildProject`). Каждый `push` создаёт коммит,
+  но сборка идёт только по явной команде; `getCommitHistory` показывает коммиты,
+  `getBuildLogs`/`getRunLogs` — журналы.
+
 
 
 
