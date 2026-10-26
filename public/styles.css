@@ -1682,10 +1682,9 @@ html.kb-open .scroll-jump {
 }
 
 .empty-mark {
-  width: 48px;
-  height: 48px;
-  margin-bottom: 10px;
-  filter: drop-shadow(0 6px 18px rgba(249, 33, 33, 0.16));
+  width: 40px;
+  height: 40px;
+  margin-bottom: 6px;
 }
 
 .empty-title {
@@ -1695,38 +1694,33 @@ html.kb-open .scroll-jump {
   line-height: var(--lh-32);
 }
 
-.empty-sub {
-  color: var(--text-3);
-  font-size: var(--fs-14);
-  margin: 0 0 16px;
-  line-height: var(--lh-22);
-}
-
+/* Один тихий ряд подсказок вместо сетки залитых карточек: прозрачная подложка,
+   волосяная рамка и скругление «пилюлей». Четыре подписи в ряд на компьютере,
+   по две в ряд на телефоне (см. медиазапрос ниже). Ширина подобрана так, чтобы
+   самая длинная подпись («Поиск в интернете») влезала в строку целиком — иначе
+   одна кнопка становится выше остальных и ряд выглядит рваным. */
 .suggestions {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 8px;
-  /* Шесть коротких подсказок по три в ряд: колонки узкие, поэтому кнопки
-     компактные — мелкий кегль и меньше отступы. Ширина блока подобрана так,
-     чтобы три кнопки с самым длинным текстом («Поиск в интернете») влезали в
-     строку без переноса. */
-  width: min(560px, 100%);
+  margin-top: 12px;
+  width: min(620px, 100%);
 }
 
 /* Если подсказок станет нечётное число, последняя иначе оставила бы пустые
    клетки справа: в неполном ряду она занимает всю ширину. Сейчас подсказок
-   шесть, правило про запас. */
+   четыре, правило про запас. */
 .suggestions > .suggestion:last-child:nth-child(odd) {
   grid-column: 1 / -1;
 }
 
 .suggestion {
-  text-align: left;
+  text-align: center;
   padding: 8px 10px;
-  background: var(--layer-1);
+  background: transparent;
   border: 1px solid var(--line);
-  border-radius: var(--radius-md);
-  color: var(--text-2);
+  border-radius: 999px;
+  color: var(--text-3);
   font-size: var(--fs-13);
   cursor: pointer;
   transition: background 0.14s ease, border-color 0.14s ease, color 0.14s ease;
@@ -4065,8 +4059,8 @@ html.kb-open .scroll-jump {
     -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 18px), transparent);
     mask-image: linear-gradient(to right, #000 calc(100% - 18px), transparent);
   }
-  /* Подсказки на телефоне — по две в ряд: три узкие кнопки в строку на 390 px
-     дали бы переносы. Шесть кнопок занимают ровно три ряда, кегль общий. */
+  /* Подсказки на телефоне — по две в ряд: четыре узкие кнопки в строку на
+     390 px дали бы переносы. Четыре подписи занимают ровно два ряда. */
   .suggestions {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 8px;
@@ -6779,14 +6773,15 @@ html.kb-open .scroll-jump {
 
 html.compact-input .composer {
   display: grid;
-  /* Восемь колонок: кнопка режима, растяжка и шесть кнопок справа. Растяжка
-     прижимает «Рассуждения» к левому краю, остальные — к правому. */
-  grid-template-columns: auto minmax(0, 1fr) auto auto auto auto auto auto;
+  /* Семь колонок: кнопка режима, растяжка и пять кнопок справа. Растяжка
+     прижимает «Рассуждения» к левому краю, остальные — к правому. Последняя
+     колонка — одна кнопка действия: микрофон или отправка (см. ниже). */
+  grid-template-columns: auto minmax(0, 1fr) auto auto auto auto auto;
   grid-template-areas:
-    'strip strip strip strip strip strip strip strip'
-    'input input input input input input input input'
-    'dict dict dict dict dict dict dict dict'
-    'think . photo gal file spell mic send';
+    'strip strip strip strip strip strip strip'
+    'input input input input input input input'
+    'dict dict dict dict dict dict dict'
+    'think . photo gal file spell action';
   align-items: center;
   column-gap: 4px;
   padding: 8px 8px 6px;
@@ -6852,18 +6847,18 @@ html.compact-input #spellBtn {
   grid-area: spell;
 }
 
-html.compact-input #micBtn {
-  grid-area: mic;
-}
-
+/* Правая кнопка одна, как в приложении DeepSeek: пустое поле — микрофон,
+   есть текст — отправка, идёт ответ — «Остановить». Все три стоят в одной
+   клетке сетки, показывает их CSS по состоянию поля (см. ниже). */
+html.compact-input #micBtn,
 html.compact-input #sendBtn,
 html.compact-input #stopBtn {
-  grid-area: send;
+  grid-area: action;
   justify-self: end;
 }
 
 /* Кнопки ряда — круги 34 px, как в приложении: «Рассуждения» на светлой
-   подложке с рамкой, микрофон и отправка без рамки. */
+   подложке с рамкой, действие — заливкой акцента. */
 html.compact-input .mode-chip,
 html.compact-input .tool-btn,
 html.compact-input .btn-send,
@@ -6896,14 +6891,44 @@ html.compact-input .btn-send svg {
   height: 18px;
 }
 
+/* Микрофон в этой раскладке — не бледный значок, а та же залитая кнопка, что и
+   отправка: место одно, и человеку не нужно догадываться, что кнопка сменила
+   дело. При записи кнопка краснеет — видно, что микрофон слушает. */
+html.compact-input #micBtn {
+  background: var(--accent-fill);
+  border: 0;
+  color: #fff;
+}
+
+html.compact-input #micBtn:hover:not(:disabled) {
+  background: var(--accent-fill-hover);
+  color: #fff;
+}
+
+html.compact-input #micBtn.active,
+html.compact-input #micBtn.active:hover:not(:disabled) {
+  background: var(--danger);
+  border: 0;
+  color: #fff;
+}
+
+/* Одна кнопка на два дела: пока поле пустое, в правом углу микрофон; как только
+   появился текст, его место занимает отправка. Пока идёт ответ, обе уступают
+   «Остановить». */
+html.compact-input #input:placeholder-shown ~ #sendBtn,
+html.compact-input #input:not(:placeholder-shown) ~ #micBtn,
+html.compact-input .composer.streaming #micBtn {
+  display: none;
+}
+
 /* Подсказка про Enter — для клавиатуры компьютера; в приложении её нет. */
 html.compact-input .composer-hint {
   display: none;
 }
 
-/* Приветствие на телефоне — как в приложении: спокойный кегль в две строки,
-   а не заголовок на полэкрана. Тот же признак compact-input, что и у
-   композера, поэтому вид меняется ровно там, где нужно. */
+/* Приветствие на телефоне — как в приложении: спокойный кегль, а не заголовок
+   на полэкрана. Тот же признак compact-input, что и у композера, поэтому вид
+   меняется ровно там, где нужно. */
 html.compact-input .empty {
   padding-top: 8vh;
   gap: 6px;
@@ -6913,8 +6938,4 @@ html.compact-input .empty-title {
   font-size: 19px;
   line-height: 26px;
   letter-spacing: -0.01em;
-}
-
-html.compact-input .empty-sub {
-  margin-bottom: 12px;
 }

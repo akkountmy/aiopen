@@ -1,7 +1,7 @@
 // Проверка подсказок в мобильной версии в настоящем Chrome через DevTools-протокол (без зависимостей):
-//   - шесть коротких карточек «Чем помочь?» стоят по две в ряд на телефоне (390 px и 320 px),
-//     последняя занимает всю ширину;
-//   - ничего не вылезает по горизонтали, текст карточек не обрезан;
+//   - четыре коротких подсказки «Чем помочь?» стоят по две в ряд на телефоне (390 px и 320 px);
+//   - ничего не вылезает по горизонтали, текст подсказок не обрезан;
+//   - справа в поле ввода одна кнопка: пусто — микрофон, есть текст — отправка;
 //   - «Файлы проекта» выезжают таким же ящиком, как «Проекты», и закрываются крестиком.
 //
 // Запуск (нужен уже работающий сервер):
@@ -171,9 +171,9 @@ try {
          viewport: window.innerWidth,
        };
      })()`);
-    layout.cards.length === 6 ? ok(`подсказки при ${width}px: шесть карточек`) : fail(`карточки при ${width}px`, String(layout.cards.length));
-    layout.columns === 2 ? ok(`две карточки в ряд при ${width}px`, `ширина ${layout.cards[0].w}px`) : fail(`колонки при ${width}px`, `колонок ${layout.columns}`);
-    layout.rows === 3 ? ok(`три ряда при ${width}px`) : fail(`ряды при ${width}px`, `рядов ${layout.rows}`);
+    layout.cards.length === 4 ? ok(`подсказки при ${width}px: четыре подсказки`) : fail(`подсказки при ${width}px`, String(layout.cards.length));
+    layout.columns === 2 ? ok(`две подсказки в ряд при ${width}px`, `ширина ${layout.cards[0].w}px`) : fail(`колонки при ${width}px`, `колонок ${layout.columns}`);
+    layout.rows === 2 ? ok(`два ряда при ${width}px`) : fail(`ряды при ${width}px`, `рядов ${layout.rows}`);
     layout.cards[0].x < layout.cards[1].x && layout.cards[0].y === layout.cards[1].y
       ? ok(`первая пара стоит рядом при ${width}px`)
       : fail(`раскладка при ${width}px`, JSON.stringify(layout.cards));
@@ -188,7 +188,8 @@ try {
   for (const [width, height] of [[390, 844], [360, 780], [320, 640]]) await checkWidth(width, height);
 
   // 2а. композер как в приложении DeepSeek: поле сверху, «Рассуждения» внизу
-  //     слева, справа — прикрепление, орфография, микрофон и отправка.
+  //     слева, справа прикрепление и орфография, а в самом углу — одна кнопка на
+  //     два дела: микрофон, пока поле пустое, и отправка, как только появился текст.
   await cdp.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
   await goto(BASE + '/');
   await waitFor(`!!document.getElementById('micBtn') && document.documentElement.classList.contains('compact-input')`);
@@ -196,6 +197,45 @@ try {
     const q = (selector) => document.querySelector(selector);
     const box = (selector) => q(selector).getBoundingClientRect();
     const css = (selector) => getComputedStyle(q(selector));
+    /* Состояния правой кнопки снимаем, меняя поле так же, как это делает
+       человек: значение и событие input. Пустое поле — микрофон, текст —
+       отправка, идут ответы — «Остановить». */
+    const probe = {};
+    const read = (name) => {
+      const mic = document.getElementById('micBtn').getBoundingClientRect();
+      const send = document.getElementById('sendBtn').getBoundingClientRect();
+      const stop = document.getElementById('stopBtn').getBoundingClientRect();
+      probe[name] = {
+        mic: mic.width > 0,
+        send: send.width > 0,
+        stop: stop.width > 0,
+        micRight: Math.round(mic.right),
+        sendRight: Math.round(send.right),
+        micTop: Math.round(mic.top),
+        sendTop: Math.round(send.top),
+      };
+    };
+    read('empty');
+    const input = q('#input');
+    input.value = 'Проверка кнопки';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    read('typed');
+    /* Ответ идёт: setStreaming() прячет отправку классом hidden и показывает
+       «Остановить», а микрофон уступает им обеим через .composer.streaming.
+       Повторяем ровно эти действия. */
+    const form = q('#composer');
+    const send = q('#sendBtn');
+    const stop = q('#stopBtn');
+    form.classList.add('streaming');
+    send.classList.add('hidden');
+    stop.classList.remove('hidden');
+    read('streaming');
+    stop.classList.add('hidden');
+    form.classList.remove('streaming');
+    send.classList.remove('hidden');
+    input.value = '';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    read('cleared');
     return {
       grid: css('#composer').display,
       placeholder: q('#input').placeholder,
@@ -203,11 +243,12 @@ try {
       inputTop: Math.round(box('#input').top),
       thinkTop: Math.round(box('#thinkToggle').top),
       photoTop: Math.round(box('#photoBtn').top),
-      sameRow: Math.abs(box('#micBtn').top - box('#sendBtn').top) < 2,
       thinkLabel: css('#thinkToggle span').display,
       thinkShape: css('#thinkToggle').borderRadius,
       round: css('#photoBtn').borderRadius,
       plus: !!q('#attachBtn'),
+      micFilled: css('#micBtn').backgroundColor === css('#sendBtn').backgroundColor,
+      probe,
       overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
     };
   })()`);
@@ -215,12 +256,28 @@ try {
   composer.inputTop < composer.thinkTop && Math.abs(composer.thinkTop - composer.photoTop) < 2
     ? ok('поле сверху, ряд кнопок внизу: «Рассуждения» стоит с остальными кнопками')
     : fail('порядок блоков композера', JSON.stringify(composer));
-  composer.sameRow ? ok('микрофон и отправка в одном ряду') : fail('ряд кнопок правой стороны', JSON.stringify(composer));
+  const slot = composer.probe;
+  slot.empty.mic && !slot.empty.send
+    ? ok('пустое поле: справа микрофон, отправки не видно')
+    : fail('кнопка при пустом поле', JSON.stringify(slot.empty));
+  slot.typed.send && !slot.typed.mic
+    ? ok('появился текст: та же кнопка стала отправкой')
+    : fail('кнопка при тексте', JSON.stringify(slot.typed));
+  slot.cleared.mic && !slot.cleared.send
+    ? ok('поле снова пустое: вернулся микрофон')
+    : fail('кнопка после очистки поля', JSON.stringify(slot.cleared));
+  slot.empty.micRight === slot.typed.sendRight && Math.abs(slot.empty.micTop - slot.typed.sendTop) < 2
+    ? ok('микрофон и отправка стоят на одном месте — это одна кнопка')
+    : fail('место кнопки действия', `${JSON.stringify(slot.empty)} / ${JSON.stringify(slot.typed)}`);
+  !slot.streaming.mic && !slot.streaming.send && slot.streaming.stop
+    ? ok('пока идёт ответ, кнопка действия уступает «Остановить»')
+    : fail('кнопка действия во время ответа', JSON.stringify(slot.streaming));
+  composer.micFilled ? ok('микрофон залит тем же акцентом, что и отправка') : fail('заливка микрофона', 'цвет не совпал с отправкой');
   composer.thinkLabel === 'none' ? ok('«Рассуждения» на телефоне — кнопка без подписи') : fail('подпись кнопки режима', composer.thinkLabel);
   composer.thinkShape === '50%' && composer.round === '50%' ? ok('круглые кнопки, как в приложении') : fail('форма кнопок', `${composer.thinkShape}/${composer.round}`);
   composer.plus ? fail('кнопка «＋»', 'осталась в разметке') : ok('кнопки «＋» больше нет');
   composer.placeholder.includes('удерживайте') ? ok('подсказка в поле говорит про удержание') : fail('подсказка в поле', composer.placeholder);
-  composer.greeting.startsWith('Привет!') ? ok('приветствие как в приложении') : fail('приветствие', composer.greeting);
+  composer.greeting === 'Чем помочь?' ? ok('короткое приветствие на титульной странице') : fail('приветствие', composer.greeting);
   composer.overflow <= 0 ? ok('композер не даёт горизонтальной прокрутки') : fail('переполнение композера', `${composer.overflow}px`);
 
   await evaluate(`(() => {

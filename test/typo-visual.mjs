@@ -111,7 +111,6 @@ const EXPECTED = {
   '.crumb-chat': ['14.5px', '20px', '500'],
   '#input': ['14.5px', '24px', null],
   '.empty-title': ['26.5px', '32px', '500'],
-  '.empty-sub': ['14.5px', '22px', null],
   '.suggestion': ['13.5px', '20px', null],
   '.btn-primary': ['14.5px', '22px', '500'],
   '.files-title': ['14.5px', '22px', '500'],
@@ -119,10 +118,16 @@ const EXPECTED = {
   '.modal-title': ['16.5px', '24px', '600'],
 };
 
-// Осознанное отклонение от «шкала не зависит от ширины»: на телефоне и узком
-// планшете поле ввода набирается кеглем 16 px, иначе iOS приближает страницу
-// при фокусе и правый край уезжает за экран.
-const IOS_INPUT_FIX = { selector: '#input', upTo: 860, value: ['16px', '24px', null] };
+// Осознанные отклонения от «шкала не зависит от ширины» на телефоне и узком
+// планшете (раскладка html.compact-input, ≤860 px):
+//   - поле ввода набирается кеглем 16 px, иначе iOS приближает страницу при
+//     фокусе и правый край уезжает за экран (см. test/ui-keyboard.mjs);
+//   - приветствие на титульной странице уменьшается до 19/26 — это подпись
+//     над подсказками, а не заголовок на полэкрана, как в приложении.
+const COMPACT_FIXES = [
+  { selector: '#input', upTo: 860, value: ['16px', '24px', null] },
+  { selector: '.empty-title', upTo: 860, value: ['19px', '26px', '500'] },
+];
 
 // Значения внутри markdown проверяем на искусственном блоке: он получает те же
 // классы, что и ответ ассистента, поэтому CSS применяется ровно тот же.
@@ -273,7 +278,9 @@ try {
     })()`);
 
     const expectedFor = { ...EXPECTED };
-    if (breakpoint.width <= IOS_INPUT_FIX.upTo) expectedFor[IOS_INPUT_FIX.selector] = IOS_INPUT_FIX.value;
+    for (const fix of COMPACT_FIXES) {
+      if (breakpoint.width <= fix.upTo) expectedFor[fix.selector] = fix.value;
+    }
 
     const problems = [];
     for (const [selector, expected] of Object.entries(expectedFor)) {
@@ -316,7 +323,8 @@ try {
         for (const [selector, actual] of Object.entries(measured)) {
           const base = desktop[selector];
           if (!actual || !base) continue;
-          if (selector === IOS_INPUT_FIX.selector && breakpoint.width <= IOS_INPUT_FIX.upTo) continue;
+          const fixed = COMPACT_FIXES.some((fix) => fix.selector === selector && breakpoint.width <= fix.upTo);
+          if (fixed) continue;
           if (actual[0] !== base[0] || actual[1] !== base[1]) {
             scale.push(`${selector}: ${base.slice(0, 2).join('/')} -> ${actual.slice(0, 2).join('/')}`);
           }

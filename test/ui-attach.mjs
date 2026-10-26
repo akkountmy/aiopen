@@ -1,9 +1,10 @@
-// РџСЂРѕРІРµСЂРєР° РїСЂРёРєСЂРµРїР»РµРЅРёСЏ С„Р°Р№Р»РѕРІ РІ РєРѕРјРїРѕР·РµСЂРµ: В«РЎС„РѕС‚РѕРіСЂР°С„РёСЂРѕРІР°С‚СЊВ», В«Р¤РѕС‚Рѕ РёР·
-// РіР°Р»РµСЂРµРёВ» Рё В«Р¤Р°Р№Р»В» вЂ” С‚СЂРё РѕС‚РґРµР»СЊРЅС‹Рµ РєРЅРѕРїРєРё РІ РЅРёР¶РЅРµРј СЂСЏРґСѓ, С‚Р°Рј Р¶Рµ, РіРґРµ
-// РѕСЂС„РѕРіСЂР°С„РёСЏ, РјРёРєСЂРѕС„РѕРЅ Рё РѕС‚РїСЂР°РІРєР°. РњРµРЅСЋ В«пј‹В» Р±РѕР»СЊС€Рµ РЅРµС‚, РєР°Р¶РґР°СЏ РєРЅРѕРїРєР° СЃСЂР°Р·Сѓ
-// РѕС‚РєСЂС‹РІР°РµС‚ СЃРІРѕР№ РІС‹Р±РѕСЂ С„Р°Р№Р»Р°.
+// Проверка прикрепления файлов в композере: «Сфотографировать», «Фото из
+// галереи» и «Файл» — три отдельные кнопки в нижнем ряду, там же, где
+// орфография и кнопка действия (на телефоне это одна кнопка: микрофон, пока
+// поле пустое, и отправка, как только появился текст). Меню «＋» больше нет,
+// каждая кнопка сразу открывает свой выбор файла.
 //
-// Р—Р°РїСѓСЃРє (РЅСѓР¶РµРЅ СѓР¶Рµ СЂР°Р±РѕС‚Р°СЋС‰РёР№ СЃРµСЂРІРµСЂ СЃ Р°РґРјРёРЅРѕРј РёР· DSHOW_ADMIN_PASSWORD):
+// Запуск (нужен уже работающий сервер с админом из DSHOW_ADMIN_PASSWORD):
 //   $env:DSHOW_BASE='http://127.0.0.1:3131'; $env:DSHOW_USER='DSH'; $env:DSHOW_PASS='...'
 //   node test/ui-attach.mjs
 import { chromium } from 'playwright';
@@ -14,7 +15,7 @@ const PASS = process.env.DSHOW_PASS || 'Test-pass-2026';
 
 let failed = 0;
 const ok = (name, pass, detail = '') => {
-  console.log(`${pass ? 'OK  ' : 'FAIL'} ${name}${detail ? ' вЂ” ' + detail : ''}`);
+  console.log(`${pass ? 'OK  ' : 'FAIL'} ${name}${detail ? ' — ' + detail : ''}`);
   if (!pass) failed++;
 };
 
@@ -24,8 +25,8 @@ const describe = (input) => ({
   multiple: input.multiple,
 });
 
-/* РџР°СЂР°РјРµС‚СЂС‹ РІС‹Р±РѕСЂР° С‡РёС‚Р°РµРј РІ СЃР°РјРѕР№ СЃС‚СЂР°РЅРёС†Рµ: Сѓ <input type=file> РѕРЅРё Р¶РёРІСѓС‚ РІ
-   Р°С‚СЂРёР±СѓС‚Р°С…, Р° РЅРµ РІ РѕР±СЉРµРєС‚Рµ, РєРѕС‚РѕСЂС‹Р№ РІРµСЂРЅС‘С‚ РІС‹Р±РѕСЂ С„Р°Р№Р»Р°. */
+/* Параметры выбора читаем в самой странице: у <input type=file> они живут в
+   атрибутах, а не в объекте, который вернёт выбор файла. */
 const readInput = async (chooser) => (await (await chooser).element()).evaluate(describe);
 
 const browser = await chromium.launch();
@@ -36,74 +37,99 @@ try {
     isMobile: true,
   });
   const login = await phone.request.post(`${BASE}/api/login`, { data: { username: USER, password: PASS } });
-  if (!login.ok()) throw new Error(`РІС…РѕРґ РЅРµ СѓРґР°Р»СЃСЏ: ${login.status()}`);
+  if (!login.ok()) throw new Error(`вход не удался: ${login.status()}`);
   const page = await phone.newPage();
   await page.goto(BASE, { waitUntil: 'load' });
   await page.waitForSelector('#fileBtn');
-  ok('РЅР° С‚РµР»РµС„РѕРЅРµ С‚СЂРё РєРЅРѕРїРєРё РїСЂРёРєСЂРµРїР»РµРЅРёСЏ РµСЃС‚СЊ',
+  ok('на телефоне три кнопки прикрепления есть',
     (await page.isVisible('#photoBtn')) && (await page.isVisible('#galleryBtn')) && (await page.isVisible('#fileBtn')));
-  ok('РєРЅРѕРїРєРё В«пј‹В» Р±РѕР»СЊС€Рµ РЅРµС‚', (await page.locator('#attachBtn').count()) === 0);
+  ok('кнопки «＋» больше нет', (await page.locator('#attachBtn').count()) === 0);
 
+  /* Видимые кнопки ряда: прикрепление, орфография и действие. Отправка в этом
+     состоянии скрыта — её место занимает микрофон, поэтому её верх сравнивать
+     не с чем (скрытый элемент отдаёт нулевой прямоугольник). */
   const row = await page.evaluate(() => {
     const box = (id) => document.getElementById(id).getBoundingClientRect();
+    const shown = (id) => document.getElementById(id).getBoundingClientRect().width > 0;
     return {
-      photo: box('photoBtn').top,
-      gallery: box('galleryBtn').top,
-      file: box('fileBtn').top,
-      spell: box('spellBtn').top,
-      mic: box('micBtn').top,
-      send: box('sendBtn').top,
+      tops: ['photoBtn', 'galleryBtn', 'fileBtn', 'spellBtn', 'micBtn'].filter(shown).map((id) => Math.round(box(id).top)),
+      micVisible: shown('micBtn'),
+      sendVisible: shown('sendBtn'),
     };
   });
-  const tops = Object.values(row).map((value) => Math.round(value));
-  ok('РІСЃРµ С‚СЂРё РєРЅРѕРїРєРё РІ РѕРґРЅРѕРј СЂСЏРґСѓ СЃ РѕСЂС„РѕРіСЂР°С„РёРµР№, РјРёРєСЂРѕС„РѕРЅРѕРј Рё РѕС‚РїСЂР°РІРєРѕР№',
-    Math.max(...tops) - Math.min(...tops) < 2, tops.join(' / '));
+  ok('все три кнопки в одном ряду с орфографией и кнопкой действия',
+    row.tops.length === 5 && Math.max(...row.tops) - Math.min(...row.tops) < 2, row.tops.join(' / '));
+  ok('пустое поле: в ряду микрофон, а отправка уступает ему место',
+    row.micVisible && !row.sendVisible, JSON.stringify(row));
 
-  /* РљР°РјРµСЂР°: Chrome РІ headless РЅРµ С„РѕС‚РѕРіСЂР°С„РёСЂСѓРµС‚, РЅРѕ РѕР±СЏР·Р°РЅ РїРѕРєР°Р·Р°С‚СЊ РІС‹Р±РѕСЂ Рё
-     РїРѕРјРµС‚РёС‚СЊ СЃРµР±СЏ РєР°Рє СЃСЉС‘РјРєСѓ вЂ” РёРЅР°С‡Рµ iPhone РѕС‚РєСЂРѕРµС‚ РіР°Р»РµСЂРµСЋ РІРјРµСЃС‚Рѕ РєР°РјРµСЂС‹. */
+  /* Камера: Chrome в headless не фотографирует, но обязан показать выбор и
+     пометить себя как съёмку — иначе iPhone откроет галерею вместо камеры. */
   const cameraChooser = page.waitForEvent('filechooser', { timeout: 5000 });
   await page.click('#photoBtn');
   const cameraInput = await readInput(cameraChooser);
-  ok('В«РЎС„РѕС‚РѕРіСЂР°С„РёСЂРѕРІР°С‚СЊВ» Р·РѕРІС‘С‚ РєР°РјРµСЂСѓ РЅР° С„РѕС‚Рѕ',
+  ok('«Сфотографировать» зовёт камеру на фото',
     cameraInput.accept === 'image/*' && cameraInput.capture === 'environment' && !cameraInput.multiple,
     JSON.stringify(cameraInput));
 
   const galleryChooser = page.waitForEvent('filechooser', { timeout: 5000 });
   await page.click('#galleryBtn');
   const galleryInput = await readInput(galleryChooser);
-  ok('В«Р¤РѕС‚Рѕ РёР· РіР°Р»РµСЂРµРёВ» Р±РµСЂС‘С‚ С‚РѕР»СЊРєРѕ СЃРЅРёРјРєРё Рё Р±РµР· РєР°РјРµСЂС‹',
+  ok('«Фото из галереи» берёт только снимки и без камеры',
     galleryInput.accept === 'image/*' && !galleryInput.capture, JSON.stringify(galleryInput));
 
   const fileChooser = page.waitForEvent('filechooser', { timeout: 5000 });
   await page.click('#fileBtn');
   const fileInput = await readInput(fileChooser);
-  ok('В«Р¤Р°Р№Р»В» СЂР°Р·СЂРµС€Р°РµС‚ Р»СЋР±С‹Рµ С„Р°Р№Р»С‹ Рё РЅРµСЃРєРѕР»СЊРєРѕ СЃСЂР°Р·Сѓ',
+  ok('«Файл» разрешает любые файлы и несколько сразу',
     fileInput.accept === '' && !fileInput.capture && fileInput.multiple, JSON.stringify(fileInput));
 
-  ok('РЅРёРєР°РєРѕРіРѕ РјРµРЅСЋ РЅР° СЌРєСЂР°РЅРµ РЅРµ РїРѕСЏРІР»СЏРµС‚СЃСЏ', !(await page.isVisible('.attach-menu')));
+  ok('никакого меню на экране не появляется', !(await page.isVisible('.attach-menu')));
+
+  /* С текстом в поле та же правая кнопка становится отправкой, и ряд не
+     разъезжается: микрофон уходит, отправка встаёт ровно на его место. */
+  const micSlot = await page.evaluate(() => {
+    const rect = document.getElementById('micBtn').getBoundingClientRect();
+    return { right: Math.round(rect.right), top: Math.round(rect.top) };
+  });
+  await page.fill('#input', 'Проверка кнопки');
+  const typed = await page.evaluate(() => {
+    const rect = (id) => document.getElementById(id).getBoundingClientRect();
+    const send = rect('sendBtn');
+    return {
+      sendVisible: send.width > 0,
+      micVisible: rect('micBtn').width > 0,
+      sameRow: Math.abs(send.top - rect('photoBtn').top) < 2,
+      right: Math.round(send.right),
+      top: Math.round(send.top),
+    };
+  });
+  ok('появился текст: отправка встала в тот же ряд на место микрофона',
+    typed.sendVisible && !typed.micVisible && typed.sameRow && typed.right === micSlot.right && typed.top === micSlot.top,
+    `${JSON.stringify(micSlot)} → ${JSON.stringify(typed)}`);
+  await page.fill('#input', '');
   await phone.close();
 
-  /* РљРѕРјРїСЊСЋС‚РµСЂ: С‚Рµ Р¶Рµ С‚СЂРё РєРЅРѕРїРєРё, Р±РµР· РєР°РјРµСЂС‹ вЂ” РѕРЅР° РЅСѓР¶РЅР° С‚РѕР»СЊРєРѕ С‚РµР»РµС„РѕРЅСѓ, РЅРѕ
-     РЅР°Р¶Р°С‚РёРµ РІСЃС‘ СЂР°РІРЅРѕ РѕС‚РєСЂС‹РІР°РµС‚ РІС‹Р±РѕСЂ С„Р°Р№Р»РѕРІ СЃ РїРѕРґС…РѕРґСЏС‰РёРј accept. */
+  /* Компьютер: те же три кнопки, без камеры — она нужна только телефону, но
+     нажатие всё равно открывает выбор файлов с подходящим accept. */
   const desktop = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   const deskLogin = await desktop.request.post(`${BASE}/api/login`, { data: { username: USER, password: PASS } });
-  if (!deskLogin.ok()) throw new Error(`РІС…РѕРґ РЅР° РєРѕРјРїСЊСЋС‚РµСЂРµ РЅРµ СѓРґР°Р»СЃСЏ: ${deskLogin.status()}`);
+  if (!deskLogin.ok()) throw new Error(`вход на компьютере не удался: ${deskLogin.status()}`);
   const deskPage = await desktop.newPage();
   await deskPage.goto(BASE, { waitUntil: 'load' });
   await deskPage.waitForSelector('#fileBtn');
-  ok('РЅР° РєРѕРјРїСЊСЋС‚РµСЂРµ С‚СЂРё РєРЅРѕРїРєРё РїСЂРёРєСЂРµРїР»РµРЅРёСЏ С‚РѕР¶Рµ РЅР° РјРµСЃС‚Рµ',
+  ok('на компьютере три кнопки прикрепления тоже на месте',
     (await deskPage.isVisible('#photoBtn')) && (await deskPage.isVisible('#galleryBtn')) && (await deskPage.isVisible('#fileBtn')));
-  ok('РєРЅРѕРїРєР° В«Р Р°СЃСЃСѓР¶РґРµРЅРёСЏВ» РЅР° РєРѕРјРїСЊСЋС‚РµСЂРµ СЃРєСЂС‹С‚Р°', !(await deskPage.isVisible('#thinkToggle')));
+  ok('кнопка «Рассуждения» на компьютере скрыта', !(await deskPage.isVisible('#thinkToggle')));
   const deskChooser = deskPage.waitForEvent('filechooser', { timeout: 5000 });
   await deskPage.click('#fileBtn');
   const deskInput = await readInput(deskChooser);
-  ok('РЅР° РєРѕРјРїСЊСЋС‚РµСЂРµ В«Р¤Р°Р№Р»В» СЃСЂР°Р·Сѓ РѕС‚РєСЂС‹РІР°РµС‚ РІС‹Р±РѕСЂ С„Р°Р№Р»РѕРІ',
+  ok('на компьютере «Файл» сразу открывает выбор файлов',
     deskInput.accept === '' && deskInput.multiple, JSON.stringify(deskInput));
-  ok('РЅР° РєРѕРјРїСЊСЋС‚РµСЂРµ РјРµРЅСЋ РЅРµ РїРѕСЏРІР»СЏРµС‚СЃСЏ', !(await deskPage.isVisible('.attach-menu')));
+  ok('на компьютере меню не появляется', !(await deskPage.isVisible('.attach-menu')));
   await desktop.close();
 } finally {
   await browser.close();
 }
 
-console.log(failed ? `РџСЂРѕРІР°Р»РѕРІ: ${failed}` : 'Р’РЎРЃ РџР РћРЁР›Рћ');
+console.log(failed ? `Провалов: ${failed}` : 'ВСЁ ПРОШЛО');
 process.exit(failed ? 1 : 0);

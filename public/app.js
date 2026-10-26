@@ -1355,17 +1355,19 @@ function renderEmpty() {
   const thread = $('#thread');
   thread.innerHTML = '';
   const empty = el('div', 'empty');
+  /* Титульная страница диалога: одно короткое приветствие и четыре подсказки.
+     Длинная фраза с вопросом, строка «выберите подсказку» и шесть залитых
+     карточек занимали весь первый экран — вышло наляписто. Остальные
+     возможности человек всё равно видит рядом: камера, галерея и файл стоят
+     в поле ввода, а папка проекта — в панели «Файлы проекта». */
   empty.innerHTML = `
     <div class="empty-mark">${WHALE_SVG}</div>
-    <h2 class="empty-title">Привет! О чём хотите поговорить сегодня?</h2>
-    <p class="empty-sub">Выберите подсказку или напишите задачу.</p>
+    <h2 class="empty-title">Чем помочь?</h2>
     <div class="suggestions" aria-label="Возможности ассистента">
-      <button class="suggestion" type="button" data-prompt="Подготовь отчёт в Word и Excel по данным проекта: таблицы, расчёты и выводы.">Word и Excel</button>
+      <button class="suggestion" type="button" data-prompt="Подготовь отчёт в Word и Excel по данным проекта: таблицы, расчёты и выводы.">Отчёт</button>
       <button class="suggestion" type="button" data-prompt="Сделай презентацию по материалам проекта: слайды с тезисами, цифрами и выводами.">Презентация</button>
       <button class="suggestion" type="button" data-prompt="Разбери файлы проекта: выдели главное, ключевые цифры и возможные ошибки.">Разбор файлов</button>
-      <button class="suggestion" type="button" data-prompt="Распознай текст на скриншотах или фото проекта и собери его в аккуратный документ.">Фото в текст</button>
       <button class="suggestion" type="button" data-prompt="Найди актуальные данные по теме в интернете, проверь по первоисточникам и оформи ссылки.">Поиск в интернете</button>
-      <button class="suggestion" type="button" data-prompt="Собери по описанию готовую страницу сайта, лендинг или 3D-схему, с адаптацией под телефон. Для лендинга: первый экран с заголовком и призывом к действию, блоки с выгодами и ценами, форма заявки.">Сайт, лендинг, 3D</button>
     </div>`;
   empty.addEventListener('click', (event) => {
     const button = event.target.closest('[data-prompt]');
@@ -1858,6 +1860,9 @@ function setStreaming(active) {
   state.streaming = active;
   $('#sendBtn').classList.toggle('hidden', active);
   $('#stopBtn').classList.toggle('hidden', !active);
+  /* На телефоне и в ярлыке справа одна кнопка: пока идёт ответ, она уступает
+     место «Остановить», иначе микрофон и «стоп» встали бы друг на друга. */
+  $('#composer').classList.toggle('streaming', active);
   $('#input').disabled = false;
 }
 
@@ -7858,8 +7863,9 @@ function openedAsApp() {
 }
 
 /* На телефоне и в ярлыке-приложении композер выглядит как в приложении
-   DeepSeek: поле сверху, чипы режимов под ним, «＋» слева и микрофон с
-   отправкой справа. Раскладку собирает CSS по классу compact-input, а здесь
+   DeepSeek: поле сверху, чипы режимов под ним, прикрепление слева, а справа
+   одна кнопка действия — микрофон, пока поле пустое, и отправка, как только
+   появился текст. Раскладку собирает CSS по классу compact-input, а здесь
    решается только сам факт: ширина до 860 px или открыто как приложение.
    Тот же признак меняет подсказку в поле — на телефоне микрофон работает
    удержанием, и об этом говорит сам placeholder. */
