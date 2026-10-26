@@ -315,8 +315,12 @@ const SECURITY_HEADERS = {
   'X-Content-Type-Options': 'nosniff',
   'X-Frame-Options': 'DENY',
   'Referrer-Policy': 'no-referrer',
+  /* media-src для blob: нужен записи с камеры: снятое видео живёт в памяти
+     страницы, пока его не прикрепили, и проигрывается из blob-ссылки. Без этого
+     правила браузер показывал в окне камеры пустой проигрыватель, а в консоли
+     писал, что загрузку медиа запретил CSP. */
   'Content-Security-Policy':
-    "default-src 'self'; img-src 'self' data: blob:; connect-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; font-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
+    "default-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; font-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
 };
 
 function sendJson(res, status, data, extraHeaders = {}) {

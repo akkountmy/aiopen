@@ -126,11 +126,12 @@ function paintAnswerModes() {
   }
 }
 
-/* Режимы относятся только к мобильной версии и ярлыку-приложению. На широком
-   экране кнопки нет, поэтому и скрытое состояние из localStorage не должно
-   влиять на обычный компьютерный диалог. */
+/* «Рассуждение» есть на всех устройствах: на телефоне круглой кнопкой без
+   подписи, на компьютере — подписанной плашкой в ряду вложений (см.
+   html:not(.compact-input) #thinkToggle в styles.css). Поэтому выбранное
+   состояние действует везде, где кнопка видна. */
 function answerModesAvailable() {
-  return openedAsApp() || window.matchMedia('(max-width: 860px)').matches;
+  return Boolean($('#thinkToggle'));
 }
 
 function activeAnswerModes() {
@@ -2333,9 +2334,11 @@ function renderAttachStrip() {
   }
 }
 
-/* Три отдельные кнопки прикрепления — камера, галерея, файл. Каждая сразу
-   открывает свой выбор файла: никакого промежуточного меню, поэтому и окно
-   выбора открывается в живом нажатии — Safari пускает фото и файлы только так. */
+/* Кнопки прикрепления — камера, альбом, файл. Каждая сразу открывает свой
+   выбор файла: никакого промежуточного меню, поэтому и окно выбора открывается
+   в живом нажатии — Safari пускает фото и файлы только так. Исключение —
+   компьютер: там «Сфотографировать» включает камеру ноутбука (openCameraDialog),
+   потому что выбор файла с capture на компьютере открывал обычный проводник. */
 function pickFiles({ accept = '', capture = '', multiple = true } = {}) {
   const input = $('#fileInput');
   if (!input) return;
@@ -2420,6 +2423,567 @@ async function pollAttachment(local) {
       return;
     }
   }
+}
+
+/* ---------------------------- камера ноутбука ----------------------------
+   «Сфотографировать» на компьютере включает камеру ноутбука: открывается окно
+   с живым кадром, где снимают фото или записывают видео со звуком. Раньше эта
+   кнопка звала выбор файла с признаком capture — на компьютере признак ничего
+   не значит, открывался обычный проводник, и снять себя с ноутбука было нельзя.
+   На телефоне остаётся прежний путь: камеру открывает сама система (она умеет
+   зум, вспышку и стабилизацию), а браузерный живой кадр этого не даёт.
+   Снимок и видео уходят в сообщение тем же путём, что и выбранные файлы, —
+   через uploadFiles, поэтому потолки по размеру и числу вложений те же. */
+
+const CAMERA_MAX_SECONDS = 120;
+/* Потолок тот же, что у вложений: файл крупнее интерфейс всё равно не отправит,
+   поэтому и запись длиннее держать незачем. */
+const CAMERA_MAX_BYTES = 32 * 1024 * 1024;
+
+const camera = {
+  /* Токен отличает текущее окно от прошлого: ответ getUserMedia и запись
+     MediaRecorder приходят позже закрытия, и без этой метки они бы трогали
+     уже убранные элементы. */
+  token: 0,
+  stream: null,
+  audio: null,
+  recorder: null,
+  chunks: [],
+  result: null,
+  mode: 'photo',
+  devices: [],
+  deviceId: '',
+  recording: false,
+  timer: 0,
+  startedAt: 0,
+  mirror: true,
+  ui: null,
+};
+
+/* Живой кадр — там, где он лучше системной камеры: на компьютере с мышью.
+   На телефоне и планшете остаётся системная камера. */
+function cameraLivePreferred() {
+  if (!navigator.mediaDevices?.getUserMedia) return false;
+  try {
+    return window.matchMedia('(pointer: fine)').matches;
+  } catch {
+    return false;
+  }
+}
+
+/* Имя файла короткое и с расширением: в списке вложений видно, что это снимок
+   или видео, а время в имени не даёт двум снимкам подряд затереть друг друга. */
+function cameraStamp(prefix, ext) {
+  const now = new Date();
+  const pad = (value) => String(value).padStart(2, '0');
+  const date = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+  const time = `${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+  return `${prefix}-${date}-${time}.${ext}`;
+}
+
+function cameraErrorText(error) {
+  const name = error?.name || '';
+  if (name === 'NotAllowedError' || name === 'SecurityError') {
+    return 'Доступ к камере запрещён. Разрешите его в настройках сайта (значок камеры в адресной строке) и нажмите «Включить камеру».';
+  }
+  if (name === 'NotFoundError' || name === 'OverconstrainedError') {
+    return 'Камера не найдена или занята другой программой. Закройте её и попробуйте снова.';
+  }
+  if (name === 'NotReadableError') {
+    return 'Камеру не удалось открыть: скорее всего, она занята другой программой.';
+  }
+  return 'Камеру не удалось включить. Попробуйте ещё раз или выберите файл с диска.';
+}
+
+/* Каждый байт камеры освобождаем на месте: и дорожки, и таймер, и незакрытую
+   запись. Иначе камера ноутбука остаётся включённой после закрытия окна, а на
+   многих ноутбуках ещё и горит её лампочка. */
+function stopCameraStreams() {
+  clearInterval(camera.timer);
+  camera.timer = 0;
+  camera.recording = false;
+  const recorder = camera.recorder;
+  camera.recorder = null;
+  if (recorder && recorder.state !== 'inactive') {
+    try {
+      recorder.stop();
+    } catch {
+      /* запись уже остановлена */
+    }
+  }
+  for (const stream of [camera.stream, camera.audio]) {
+    if (!stream) continue;
+    for (const track of stream.getTracks()) {
+      try {
+        track.stop();
+      } catch {
+        /* поток уже закрыт браузером */
+      }
+    }
+  }
+  camera.stream = null;
+  camera.audio = null;
+  /* Кадр снимаем с самого элемента: остановленные дорожки оставляют в нём
+     последнюю картинку, и в окне за снимком продолжало бы висеть «живое» видео. */
+  if (camera.ui?.video) camera.ui.video.srcObject = null;
+}
+
+function dropCameraResult() {
+  if (camera.result?.url) {
+    try {
+      URL.revokeObjectURL(camera.result.url);
+    } catch {
+      /* ссылку уже отозвали */
+    }
+  }
+  camera.result = null;
+}
+
+function clearCameraResult() {
+  const ui = camera.ui;
+  dropCameraResult();
+  if (!ui) return;
+  ui.shot.removeAttribute('src');
+  ui.playback.pause();
+  ui.playback.removeAttribute('src');
+  ui.playback.load?.();
+}
+
+/* Одна функция на всё состояние окна: по ней решается, что видно в кадре,
+   как подписана главная кнопка и что написано в подсказке. Разложенное по
+   обработчикам состояние расходилось: после «Переснять» кнопка оставалась
+   подписанной «Прикрепить». */
+function cameraSyncUi() {
+  const ui = camera.ui;
+  if (!ui) return;
+  const live = Boolean(camera.stream);
+  const result = camera.result;
+  const videoMode = Boolean(window.MediaRecorder);
+  if (!videoMode) camera.mode = 'photo';
+
+  ui.video.classList.toggle('hidden', Boolean(result));
+  ui.shot.classList.toggle('hidden', !result || result.kind !== 'photo');
+  ui.playback.classList.toggle('hidden', !result || result.kind !== 'video');
+  ui.idle.classList.toggle('hidden', live || Boolean(result));
+  ui.rec.classList.toggle('hidden', !camera.recording);
+  ui.retake.classList.toggle('hidden', !result);
+  /* «Фото / Видео» не прячем, а гасим: высота окна остаётся прежней, и после
+     «Переснять» всё стоит на своих местах. */
+  ui.videoMode.classList.toggle('hidden', !videoMode);
+  ui.deviceWrap.classList.toggle('hidden', Boolean(result) || camera.devices.length < 2);
+
+  ui.photoMode.classList.toggle('is-on', camera.mode === 'photo');
+  ui.photoMode.setAttribute('aria-pressed', String(camera.mode === 'photo'));
+  ui.videoMode.classList.toggle('is-on', camera.mode === 'video');
+  ui.videoMode.setAttribute('aria-pressed', String(camera.mode === 'video'));
+  ui.photoMode.disabled = camera.recording || Boolean(result);
+  ui.videoMode.disabled = camera.recording || Boolean(result);
+  ui.device.disabled = camera.recording;
+
+  if (result) {
+    ui.main.textContent = 'Прикрепить';
+    ui.hint.textContent =
+      result.kind === 'photo'
+        ? `Снимок готов, ${fmtSize(result.file.size)}. Прикрепится к сообщению.`
+        : `Видео готово, ${fmtSize(result.file.size)}. Прикрепится к сообщению файлом.`;
+  } else if (!live) {
+    ui.main.textContent = 'Включить камеру';
+  } else if (camera.recording) {
+    ui.main.textContent = 'Остановить запись';
+    ui.hint.textContent = `Идёт запись — до ${Math.round(CAMERA_MAX_SECONDS / 60)} минут. Нажмите «Остановить запись», когда закончите.`;
+  } else if (camera.mode === 'photo') {
+    ui.main.textContent = 'Снять фото';
+    ui.hint.textContent = 'Живой кадр с камеры ноутбука. Снимок прикрепится к сообщению.';
+  } else {
+    ui.main.textContent = 'Записать видео';
+    ui.hint.textContent = `Видео со звуком микрофона, до ${Math.round(CAMERA_MAX_SECONDS / 60)} минут. Прикрепится к сообщению файлом.`;
+  }
+  ui.main.disabled = false;
+}
+
+/* Плашка поверх кадра: «Включаю камеру…» с вертушкой или объяснение, почему
+   камера не открылась. Подсказка прямо в окне, а не только плашкой сверху:
+   человек смотрит в кадр, а не в правый верхний угол. */
+function cameraShowIdle({ title, text, busy = false, fallback = false }) {
+  const ui = camera.ui;
+  if (!ui) return;
+  ui.idle.classList.remove('hidden');
+  ui.idleTitle.textContent = title;
+  ui.idleText.textContent = text;
+  ui.idleSpin.classList.toggle('hidden', !busy);
+  ui.pickInstead.classList.toggle('hidden', !fallback);
+}
+
+async function startCameraPreview(token = camera.token) {
+  const ui = camera.ui;
+  if (!ui) return;
+  cameraShowIdle({
+    title: 'Включаю камеру…',
+    text: 'Если браузер спросит доступ к камере, разрешите — кадр появится сразу.',
+    busy: true,
+  });
+  cameraSyncUi();
+  ui.main.disabled = true;
+  try {
+    stopCameraStreams();
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: camera.deviceId
+        ? { deviceId: { exact: camera.deviceId }, width: { ideal: 1280 }, height: { ideal: 720 } }
+        : { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } },
+      audio: false,
+    });
+    if (token !== camera.token || !camera.ui) {
+      stream.getTracks().forEach((track) => track.stop());
+      return;
+    }
+    camera.stream = stream;
+    /* Встроенная камера ноутбука смотрит на человека, поэтому кадр зеркалим —
+       так он читается как зеркало. Внешняя камера сзади не зеркалится. */
+    camera.mirror = stream.getVideoTracks()[0]?.getSettings?.().facingMode !== 'environment';
+    ui.video.srcObject = stream;
+    ui.video.classList.toggle('is-flipped', !camera.mirror);
+    ui.video.play?.().catch(() => {});
+    await refreshCameraDevices(token);
+    cameraSyncUi();
+  } catch (error) {
+    if (token !== camera.token || !camera.ui) return;
+    cameraShowIdle({ title: 'Камера недоступна', text: cameraErrorText(error), fallback: true });
+    ui.main.textContent = 'Включить камеру';
+  } finally {
+    if (camera.ui) camera.ui.main.disabled = false;
+  }
+}
+
+/* Список камер показываем, только когда их больше одной: одна строка выбора
+   под кадром в остальных случаях — лишний шум. */
+async function refreshCameraDevices(token = camera.token) {
+  const ui = camera.ui;
+  if (!ui || !navigator.mediaDevices?.enumerateDevices) return;
+  let list = [];
+  try {
+    list = await navigator.mediaDevices.enumerateDevices();
+  } catch {
+    return;
+  }
+  if (token !== camera.token || !camera.ui) return;
+  camera.devices = list.filter((item) => item.kind === 'videoinput');
+  const activeId = camera.stream?.getVideoTracks()[0]?.getSettings?.().deviceId || camera.deviceId;
+  ui.device.innerHTML = '';
+  for (const item of camera.devices) {
+    const option = el('option', '', item.label || 'Камера');
+    option.value = item.deviceId;
+    if (item.deviceId === activeId) option.selected = true;
+    ui.device.appendChild(option);
+  }
+  cameraSyncUi();
+}
+
+async function captureCameraPhoto() {
+  const ui = camera.ui;
+  const video = ui?.video;
+  if (!ui || !video || !camera.stream) return;
+  const width = video.videoWidth || 1280;
+  const height = video.videoHeight || 720;
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext('2d');
+  if (!context) {
+    toast('Не удалось снять кадр');
+    return;
+  }
+  /* Зеркальный кадр сохраняем так, как его видит человек в окне: иначе снимок
+     оказывается «наоборот» относительно того, что было на экране. */
+  if (camera.mirror) {
+    context.translate(width, 0);
+    context.scale(-1, 1);
+  }
+  context.drawImage(video, 0, 0, width, height);
+  const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.92));
+  if (!blob) {
+    toast('Не удалось снять кадр');
+    return;
+  }
+  clearCameraResult();
+  camera.result = {
+    kind: 'photo',
+    file: new File([blob], cameraStamp('Снимок', 'jpg'), { type: 'image/jpeg' }),
+    url: URL.createObjectURL(blob),
+  };
+  ui.shot.src = camera.result.url;
+  /* Камеру на время просмотра снимка гасим: незачем держать её включённой,
+     пока человек решает, прикрепить снимок или переснять. */
+  stopCameraStreams();
+  cameraSyncUi();
+}
+
+function cameraRecorderMime() {
+  const candidates = ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm', 'video/mp4'];
+  for (const type of candidates) {
+    try {
+      if (window.MediaRecorder.isTypeSupported(type)) return type;
+    } catch {
+      /* браузер не умеет проверять типы — возьмём первый, что согласится */
+    }
+  }
+  return '';
+}
+
+function finishCameraRecording(token, mimeType) {
+  const recorder = camera.recorder;
+  camera.recorder = null;
+  camera.recording = false;
+  const type = mimeType || recorder?.mimeType || 'video/webm';
+  const blob = new Blob(camera.chunks, { type });
+  camera.chunks = [];
+  if (token !== camera.token || !camera.ui) return;
+  if (!blob.size) {
+    toast('Запись не получилась — попробуйте ещё раз');
+    cameraSyncUi();
+    return;
+  }
+  if (blob.size > CAMERA_MAX_BYTES) {
+    toast(`Видео больше ${Math.round(CAMERA_MAX_BYTES / 1024 / 1024)} МБ — запишите короче`);
+    cameraSyncUi();
+    return;
+  }
+  const ext = type.includes('mp4') ? 'mp4' : 'webm';
+  clearCameraResult();
+  camera.result = {
+    kind: 'video',
+    file: new File([blob], cameraStamp('Видео', ext), { type }),
+    url: URL.createObjectURL(blob),
+  };
+  camera.ui.playback.src = camera.result.url;
+  stopCameraStreams();
+  cameraSyncUi();
+}
+
+function stopCameraRecording() {
+  clearInterval(camera.timer);
+  camera.timer = 0;
+  const recorder = camera.recorder;
+  if (recorder && recorder.state !== 'inactive') {
+    try {
+      recorder.stop();
+    } catch {
+      /* запись уже остановлена */
+    }
+  }
+}
+
+async function startCameraRecording(token) {
+  const ui = camera.ui;
+  if (!ui || !camera.stream) return;
+  if (!window.MediaRecorder) {
+    toast('Этот браузер не умеет записывать видео');
+    return;
+  }
+  const tracks = [...camera.stream.getVideoTracks()];
+  /* Звук берём отдельным потоком: если микрофон запрещён или занят, видео всё
+     равно запишется — без звука, но запишется. */
+  try {
+    camera.audio = await navigator.mediaDevices.getUserMedia({ audio: true });
+    tracks.push(...camera.audio.getAudioTracks());
+  } catch {
+    camera.audio = null;
+  }
+  if (token !== camera.token || !camera.ui) {
+    stopCameraStreams();
+    return;
+  }
+  const mimeType = cameraRecorderMime();
+  let recorder;
+  try {
+    recorder = new MediaRecorder(new MediaStream(tracks), mimeType ? { mimeType } : undefined);
+  } catch {
+    toast('Не удалось начать запись видео');
+    return;
+  }
+  camera.chunks = [];
+  camera.recorder = recorder;
+  recorder.ondataavailable = (event) => {
+    if (event.data?.size) camera.chunks.push(event.data);
+  };
+  recorder.onstop = () => finishCameraRecording(token, recorder.mimeType || mimeType);
+  recorder.start(500);
+  camera.recording = true;
+  camera.startedAt = Date.now();
+  ui.recTime.textContent = '0:00';
+  clearInterval(camera.timer);
+  camera.timer = setInterval(() => {
+    const seconds = Math.floor((Date.now() - camera.startedAt) / 1000);
+    if (camera.ui) {
+      camera.ui.recTime.textContent = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+    }
+    if (seconds >= CAMERA_MAX_SECONDS) stopCameraRecording();
+  }, 250);
+  cameraSyncUi();
+}
+
+function cameraMainAction(token) {
+  if (!camera.ui) return;
+  if (camera.result) {
+    /* Файл забираем до закрытия окна: закрытие отзывает ссылку на снимок, но
+       сам файл от этого не портится — в нём лежат те же байты. */
+    const file = camera.result.file;
+    closeModal();
+    uploadFiles([file]);
+    return;
+  }
+  if (!camera.stream) {
+    startCameraPreview(token);
+    return;
+  }
+  if (camera.recording) {
+    stopCameraRecording();
+    return;
+  }
+  if (camera.mode === 'photo') captureCameraPhoto();
+  else startCameraRecording(token);
+}
+
+function openCameraDialog() {
+  camera.token += 1;
+  const token = camera.token;
+  Object.assign(camera, {
+    stream: null,
+    audio: null,
+    recorder: null,
+    chunks: [],
+    result: null,
+    mode: 'photo',
+    devices: [],
+    deviceId: '',
+    recording: false,
+    timer: 0,
+    startedAt: 0,
+    mirror: true,
+    ui: null,
+  });
+
+  const video = el('video', 'camera-video');
+  video.autoplay = true;
+  video.muted = true;
+  video.playsInline = true;
+  video.setAttribute('playsinline', '');
+  video.setAttribute('muted', '');
+  video.setAttribute('aria-label', 'Кадр с камеры');
+
+  const shot = el('img', 'camera-shot hidden');
+  shot.alt = 'Снимок с камеры';
+
+  const playback = el('video', 'camera-playback hidden');
+  playback.controls = true;
+  playback.playsInline = true;
+  playback.setAttribute('playsinline', '');
+  playback.setAttribute('aria-label', 'Записанное видео');
+
+  const idle = el('div', 'camera-idle');
+  const idleIcon = el('span', 'camera-idle-icon');
+  idleIcon.innerHTML = ICONS.camera;
+  const idleSpin = el('span', 'camera-idle-spin hidden');
+  idleSpin.innerHTML = '<span class="spin-lg"></span>';
+  const idleTitle = el('p', 'camera-idle-title', 'Включаю камеру…');
+  const idleText = el('p', 'camera-idle-text', 'Если браузер спросит доступ к камере, разрешите — кадр появится сразу.');
+  const pickInstead = el('button', 'btn btn-quiet hidden', 'Выбрать файл с диска');
+  pickInstead.type = 'button';
+  idle.append(idleIcon, idleSpin, idleTitle, idleText, pickInstead);
+
+  const rec = el('div', 'camera-rec hidden');
+  const recDot = el('span', 'camera-rec-dot');
+  const recTime = el('span', 'camera-rec-time', '0:00');
+  rec.append(recDot, recTime);
+
+  const stage = el('div', 'camera-stage');
+  stage.append(video, shot, playback, idle, rec);
+
+  const modes = el('div', 'camera-modes');
+  modes.setAttribute('role', 'group');
+  modes.setAttribute('aria-label', 'Что снять');
+  const photoMode = el('button', 'camera-mode is-on', 'Фото');
+  photoMode.type = 'button';
+  photoMode.setAttribute('aria-pressed', 'true');
+  const videoMode = el('button', 'camera-mode', 'Видео');
+  videoMode.type = 'button';
+  videoMode.setAttribute('aria-pressed', 'false');
+  modes.append(photoMode, videoMode);
+
+  const deviceWrap = el('label', 'camera-device-wrap hidden');
+  const deviceLabel = el('span', 'camera-device-label', 'Камера');
+  const device = el('select', 'camera-device');
+  deviceWrap.append(deviceLabel, device);
+
+  const bar = el('div', 'camera-bar');
+  bar.append(modes, deviceWrap);
+
+  const hint = el('p', 'camera-hint', 'Живой кадр с камеры ноутбука. Снимок прикрепится к сообщению.');
+
+  const body = el('div', 'camera');
+  body.append(stage, bar, hint);
+
+  openModal({
+    title: 'Камера',
+    subtitle: 'Сфотографировать или записать видео',
+    className: 'camera-modal',
+    body,
+    onMount: (bodyNode, modal) => {
+      /* Нижнюю полосу собираем сами: у главной кнопки три дела (включить
+         камеру, снять, прикрепить) и подпись меняется по состоянию, а
+         готовый набор кнопок openModal подписан раз и навсегда. */
+      const foot = el('div', 'modal-foot');
+      const cancel = el('button', 'btn btn-quiet', 'Отмена');
+      cancel.type = 'button';
+      cancel.addEventListener('click', () => closeModal());
+      const retake = el('button', 'btn btn-quiet hidden', 'Переснять');
+      retake.type = 'button';
+      const main = el('button', 'btn btn-primary', 'Включить камеру');
+      main.type = 'button';
+      foot.append(cancel, retake, main);
+      modal.appendChild(foot);
+
+      camera.ui = { video, shot, playback, idle, idleSpin, idleTitle, idleText, pickInstead, rec, recTime, modes, photoMode, videoMode, deviceWrap, device, hint, retake, main };
+
+      main.addEventListener('click', () => cameraMainAction(token));
+      retake.addEventListener('click', () => {
+        clearCameraResult();
+        startCameraPreview(token);
+      });
+      photoMode.addEventListener('click', () => {
+        if (camera.result) return;
+        camera.mode = 'photo';
+        cameraSyncUi();
+      });
+      videoMode.addEventListener('click', () => {
+        if (camera.result) return;
+        camera.mode = 'video';
+        cameraSyncUi();
+      });
+      device.addEventListener('change', () => {
+        camera.deviceId = device.value;
+        clearCameraResult();
+        startCameraPreview(token);
+      });
+      /* Без камеры окно не загоняет в тупик: снимок можно взять с диска тем же
+         путём, что и раньше, — кнопкой файла. */
+      pickInstead.addEventListener('click', () => {
+        closeModal();
+        pickFiles({ accept: 'image/*', multiple: false });
+      });
+      cameraSyncUi();
+      startCameraPreview(token);
+    },
+    onClose: () => {
+      /* Прошлый токен превращает все ждущие ответы камеры и записи в чужие:
+         они увидят несовпадение и выйдут, не трогая убранные элементы. */
+      camera.token += 1;
+      stopCameraStreams();
+      clearCameraResult();
+      camera.ui = null;
+      camera.devices = [];
+      camera.deviceId = '';
+    },
+  });
 }
 
 /* ------------------------------ files panel ------------------------------ */
@@ -6718,8 +7282,13 @@ window.addEventListener('resize', () => {
 loadAnswerModes();
 $('#stopBtn').addEventListener('click', stopGeneration);
 /* Прикрепление — три кнопки без меню: камера, галерея и файл стоят в одном
-   ряду с орфографией, микрофоном и отправкой, каждая срабатывает в один тап. */
-$('#photoBtn').addEventListener('click', () => pickFiles({ accept: 'image/*', capture: 'environment', multiple: false }));
+   ряду с орфографией, микрофоном и отправкой, каждая срабатывает в один тап.
+   На компьютере «Сфотографировать» открывает окно с живым кадром камеры
+   ноутбука, на телефоне — системную камеру через выбор файла с capture. */
+$('#photoBtn').addEventListener('click', () => {
+  if (cameraLivePreferred()) openCameraDialog();
+  else pickFiles({ accept: 'image/*', capture: 'environment', multiple: false });
+});
 $('#galleryBtn').addEventListener('click', () => pickFiles({ accept: 'image/*' }));
 $('#fileBtn').addEventListener('click', () => pickFiles());
 $('#fileInput').addEventListener('change', (event) => {
@@ -7884,6 +8453,11 @@ function compactMedia() {
 function applyComposerLayout() {
   const compact = compactMedia().matches || openedAsApp();
   document.documentElement.classList.toggle('compact-input', compact);
+  /* Подпись кнопки съёмки честно говорит, что за ней: на компьютере — камера
+     ноутбука, на телефоне — системная камера. Повод тот же, что у обработчика
+     #photoBtn, поэтому спрашиваем ту же функцию. */
+  const photo = $('#photoBtn');
+  if (photo) photo.title = cameraLivePreferred() ? 'Сфотографировать — включить камеру' : 'Сфотографировать';
   syncInputPlaceholder();
 }
 

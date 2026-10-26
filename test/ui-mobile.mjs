@@ -193,6 +193,11 @@ try {
   //     отправка, как только появился текст. Проверки орфографии здесь нет, на
   //     компьютере она остаётся.
   await cdp.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
+  /* Касания включаем по-настоящему: от этого зависит media-запрос (pointer:
+     coarse), по которому «Сфотографировать» на телефоне зовёт системную камеру,
+     а на компьютере открывает окно с камерой ноутбука. Без эмуляции касаний
+     Chrome отвечает как настольный браузер, и телефонная ветка не проверяется. */
+  await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 });
   await goto(BASE + '/');
   await waitFor(`!!document.getElementById('micBtn') && document.documentElement.classList.contains('compact-input')`);
   const composer = await evaluate(`(() => {
@@ -343,12 +348,16 @@ try {
     ? ok('«Файл» берёт любые файлы')
     : fail('файл', JSON.stringify(picked[2]));
 
-  // 2б. на компьютере всё прежнее: ряд кнопок, три кнопки прикрепления, своя подсказка.
+  // 2б. на компьютере ряд остаётся одной линией, но кнопки собраны справа от
+  //     поля: «Рассуждение», «Сфотографировать», «Файл», «Aa» и действие.
+  //     Альбома нет — он открывал тот же проводник, что и «Файл».
+  await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: false });
   await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false });
   await goto(BASE + '/');
   await waitFor(`!!document.getElementById('micBtn') && !document.documentElement.classList.contains('compact-input')`);
   const desktop = await evaluate(`(() => {
     const css = (selector) => getComputedStyle(document.querySelector(selector));
+    const x = (selector) => Math.round(document.querySelector(selector).getBoundingClientRect().x);
     return {
       grid: css('#composer').display,
       think: css('#thinkToggle').display,
@@ -356,14 +365,33 @@ try {
       gallery: css('#galleryBtn').display,
       file: css('#fileBtn').display,
       placeholder: document.querySelector('#input').placeholder,
+      inputX: x('#input'),
+      thinkX: x('#thinkToggle'),
+      photoX: x('#photoBtn'),
+      fileX: x('#fileBtn'),
     };
   })()`);
   desktop.grid !== 'grid' ? ok('на компьютере композер остался прежним') : fail('раскладка на компьютере', desktop.grid);
-  desktop.think === 'none' ? ok('на компьютере кнопки режима нет') : fail('кнопка режима на компьютере', desktop.think);
-  desktop.photo !== 'none' && desktop.gallery !== 'none' && desktop.file !== 'none'
-    ? ok('на компьютере три кнопки прикрепления на месте')
+  desktop.think !== 'none' ? ok('на компьютере кнопка режима на месте') : fail('кнопка режима на компьютере', desktop.think);
+  desktop.photo !== 'none' && desktop.gallery === 'none' && desktop.file !== 'none'
+    ? ok('на компьютере съёмка и файл на месте, дублирующего альбома нет')
     : fail('кнопки прикрепления на компьютере', JSON.stringify(desktop));
+  desktop.inputX < desktop.thinkX && desktop.thinkX < desktop.photoX && desktop.photoX < desktop.fileX
+    ? ok('поле ввода первое, кнопки ряда — справа от него')
+    : fail('порядок кнопок на компьютере', JSON.stringify(desktop));
   desktop.placeholder === 'Спросите или поставьте задачу…' ? ok('подсказка на компьютере прежняя') : fail('подсказка на компьютере', desktop.placeholder);
+  /* Кнопка режима на компьютере не украшение: нажатие включает режим и меняет
+     вид кнопки так же, как на телефоне. */
+  await evaluate(`document.getElementById('thinkToggle').click(); true`);
+  await sleep(250);
+  const thinkOn = await evaluate(`(() => {
+    const node = document.getElementById('thinkToggle');
+    return { pressed: node.getAttribute('aria-pressed'), bg: getComputedStyle(node).backgroundColor };
+  })()`);
+  thinkOn.pressed === 'true' && thinkOn.bg !== 'rgba(0, 0, 0, 0)'
+    ? ok('на компьютере «Рассуждение» включается нажатием')
+    : fail('режим на компьютере', JSON.stringify(thinkOn));
+  await evaluate(`document.getElementById('thinkToggle').click(); true`);
 
   // 2б. голос с удержанием: слой подсказки есть, спрятан и не перехватывает
   //     касания, микрофон слушается удержания, режим ответа — один.

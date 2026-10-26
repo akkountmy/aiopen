@@ -2266,10 +2266,11 @@ html.kb-open .scroll-jump {
   gap: 4px;
 }
 
-/* Режим ответа — один переключатель композера. На компьютере его нет: там
-   режим всегда максимальный, и лишняя кнопка только занимает место. На телефоне
-   и в ярлыке-приложении кнопка встаёт в нижний ряд — на место, где в приложении
-   DeepSeek стоит «＋» (раскладку задаёт html.compact-input ниже). */
+/* Режим ответа — единственный переключатель композера. На телефоне и в
+   ярлыке-приложении он круглой кнопкой встаёт в нижний ряд — на место, где в
+   приложении DeepSeek стоит «＋» (раскладку задаёт html.compact-input ниже).
+   На компьютере та же кнопка стоит подписанной плашкой в ряду вложений, перед
+   камерой и файлом: режим включают и там, поэтому кнопка не скрыта. */
 .mode-chip {
   display: none;
   align-items: center;
@@ -6756,6 +6757,249 @@ html.kb-open .scroll-jump {
 @media (prefers-reduced-motion: reduce) {
   .modal-root:not(.preview-open) > .modal:not(.file-preview-modal) {
     animation: none;
+  }
+}
+
+/* --------------- компьютер: кнопки ряда справа от поля --------------------
+   На широком экране (класс compact-input снят) ряд остаётся одной линией, но
+   кнопки собраны справа от поля ввода — как в окне DeepSeek: «Рассуждение»,
+   «Сфотографировать», «Файл», «Aa» и микрофон или отправка. Поле ввода при
+   этом первое: отрицательный order у самого поля сдвигает его перед всем, что
+   стоит в разметке раньше (плашка режима, строка диктовки), а кнопки
+   остаются в порядке разметки после него.
+   Альбома на компьютере нет: он открывал тот же проводник, что и «Файл», но
+   только с фильтром картинок — две кнопки делали одно дело. На телефоне
+   альбом остаётся: там за ним настоящая галерея. */
+html:not(.compact-input) #input {
+  order: -1;
+}
+
+html:not(.compact-input) #thinkToggle {
+  display: inline-flex;
+  /* Высота и нижний отступ — как у соседних .tool-btn: подпись стоит на одной
+     линии с иконками, а не на полпикселя выше. */
+  height: 30px;
+  margin-bottom: 1px;
+}
+
+html:not(.compact-input) #galleryBtn {
+  display: none;
+}
+
+/* ---------------------------- камера ноутбука ----------------------------
+   Окно «Сфотографировать» на компьютере: живой кадр камеры ноутбука на тёмном
+   поле 16:9, под ним «Фото / Видео» и выбор камеры, если их несколько. Кадр,
+   готовый снимок и запись занимают одно и то же место, поэтому окно не
+   прыгает по высоте между состояниями. */
+.modal.camera-modal {
+  width: min(720px, 100%);
+}
+
+.camera {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.camera-stage {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: #000;
+}
+
+.camera-video,
+.camera-shot,
+.camera-playback {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.camera-video {
+  object-fit: cover;
+  /* Встроенная камера ноутбука смотрит на человека — кадр зеркалим, как в
+     зеркале. Внешняя камера получает .is-flipped и остаётся прямой. */
+  transform: scaleX(-1);
+  background: #000;
+}
+
+.camera-video.is-flipped {
+  transform: none;
+}
+
+.camera-shot {
+  object-fit: contain;
+  background: #000;
+}
+
+.camera-playback {
+  object-fit: contain;
+  background: #000;
+}
+
+.camera-idle {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 18px;
+  text-align: center;
+  background: var(--layer-2);
+}
+
+.camera-idle-icon svg {
+  width: 30px;
+  height: 30px;
+  fill: none;
+  stroke: var(--text-3);
+}
+
+.camera-idle-title {
+  margin: 0;
+  font-size: var(--fs-14);
+  line-height: var(--lh-22);
+  color: var(--text);
+}
+
+.camera-idle-text {
+  margin: 0;
+  max-width: 46ch;
+  font-size: var(--fs-13);
+  line-height: var(--lh-20);
+  color: var(--text-3);
+}
+
+.camera-idle .btn {
+  margin-top: 2px;
+}
+
+/* Красная точка и время записи поверх кадра — единственный признак, что идёт
+   запись: кнопка внизу просто меняет подпись. */
+.camera-rec {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px 3px 7px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.62);
+  color: #fff;
+  font-size: var(--fs-12);
+  line-height: var(--lh-16);
+  font-variant-numeric: tabular-nums;
+}
+
+.camera-rec-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--danger);
+  animation: camera-rec-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes camera-rec-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.camera-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+/* «Фото / Видео» — та же форма, что у поля и кнопок: две клетки в общей
+   рамке, выбранная залита акцентом. */
+.camera-modes {
+  display: inline-flex;
+  padding: 2px;
+  gap: 2px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--layer-2);
+}
+
+.camera-mode {
+  height: 28px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-3);
+  font: inherit;
+  font-size: var(--fs-13);
+  line-height: 1;
+  cursor: pointer;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+
+.camera-mode.is-on {
+  background: var(--accent-fill);
+  color: #fff;
+}
+
+.camera-mode:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.camera-device-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: var(--fs-13);
+  color: var(--text-3);
+}
+
+.camera-device {
+  max-width: 260px;
+  height: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--layer-2);
+  color: var(--text-2);
+  font: inherit;
+  font-size: var(--fs-13);
+}
+
+.camera-hint {
+  margin: 0;
+  font-size: var(--fs-12);
+  line-height: var(--lh-18);
+  color: var(--text-3);
+}
+
+/* На телефоне лист и без того узкий: кадр 16:9 и полоса кнопок делят ширину
+   экрана, поэтому выбор камеры уходит под них, а не в ту же строку. */
+@media (max-width: 860px) {
+  .camera-bar {
+    justify-content: flex-start;
+  }
+
+  .camera-device {
+    max-width: 100%;
+    min-width: 0;
   }
 }
 
