@@ -20,6 +20,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { execFileSync } from 'node:child_process';
 import { assertPublicUrl } from './search.mjs';
 import { staticPageChecks, staticNotes, staticIssueCount, formatRow } from './pagecheck.mjs';
 
@@ -47,7 +48,7 @@ const MIN_FREE_MB = 400;
 
 const engineCache = { value: null };
 const candidates = { list: null, reason: '' };
-const state = { pending: null, lastError: '', failedAt: 0 };
+const state = { pending: null, lastError: '', failedAt: 0, diagnostics: '' };
 const gate = { busy: false, waiters: [] };
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -71,6 +72,29 @@ function bundledChromium(playwright) {
     return file && fs.existsSync(file) ? file : '';
   } catch {
     return '';
+  }
+}
+
+/**
+ * Почему бинарник не поднимается: ldd показывает недостающие библиотеки,
+ * этого в сообщении Puppeteer не видно, а именно они и решают дело в облаке.
+ */
+function probeLibs(executablePath) {
+  if (!executablePath || process.platform === 'win32' || !fs.existsSync(executablePath)) return '';
+  try {
+    const out = execFileSync('ldd', [executablePath], { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'pipe'] });
+    const bad = [...new Set(
+      out
+        .split('\n')
+        .map((line) => line.trim())
+        .filter((line) => /not found|GLIBC_\d/i.test(line))
+        .map((line) => line.replace(/\s+/g, ' ').slice(0, 120)),
+    )];
+    return bad.slice(0, 4).join(', ');
+  } catch (error) {
+    const text = String(error?.stdout || error?.message || '');
+    const bad = [...new Set(text.split('\n').map((l) => l.trim()).filter((l) => /not found|GLIBC_\d/i.test(l)))];
+    return bad.length ? bad.slice(0, 4).join(', ') : '';
   }
 }
 
@@ -220,6 +244,10 @@ async function engine() {
       }
       candidate.error = failure || 'сбой запуска';
       state.lastError = candidate.error;
+      /* В облаке «Code: 127» — это недостающая системная библиотека; ldd
+         называет её по имени, и тогда причина падения видна без сервера. */
+      const libs = probeLibs(candidate.executablePath);
+      if (libs) state.diagnostics = `${candidate.label}: ${libs}`;
       tried.push(`${candidate.label}: ${candidate.error}`);
     }
     return remember({ reason: `ни один браузер не запустился (${tried.join('; ')})` });
@@ -271,6 +299,7 @@ export async function browserAvailable() {
 export async function browserStatus({ probe: deep = false } = {}) {
   if (deep) {
     resetEngine();
+    state.diagnostics = '';
     const found = await engine();
     return {
       engine: found.label || null,
@@ -278,6 +307,7 @@ export async function browserStatus({ probe: deep = false } = {}) {
       available: Boolean(found.driver),
       reason: found.driver ? '' : found.reason || 'браузер не запускается',
       checked: 'запуском',
+      diagnostics: found.driver ? '' : state.diagnostics,
     };
   }
   const found = engineCache.value;
@@ -287,6 +317,7 @@ export async function browserStatus({ probe: deep = false } = {}) {
       executable: found.executablePath ? path.basename(found.executablePath) : '',
       available: Boolean(found.driver),
       reason: found.reason || state.lastError || '',
+      diagnostics: found.driver ? '' : state.diagnostics,
     };
   }
   const list = await buildCandidates();
