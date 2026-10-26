@@ -5582,12 +5582,45 @@ const dictation = {
   tick: null,
   cancelled: false,
   busy: false,
+  /* Отправлять ли распознанный текст сразу: включается, когда человек держит
+     микрофон и отпускает палец, — «отпустите, чтобы отправить». */
+  sendOnFinish: false,
+  /* Запись начата удержанием, а не нажатием-переключением. */
+  holdMode: false,
 };
+
+/* Удержание микрофона. Как в мобильном приложении: нажал — говоришь, отпустил —
+   сообщение уходит, сдвинул палец вверх — запись отменяется. Короткое касание
+   (меньше VOICE_HOLD_MIN_MS) не отправляет ничего: это промах, а не команда. */
+const VOICE_HOLD_MIN_MS = 350;
+const VOICE_CANCEL_SHIFT = 56;
+const voiceHold = {
+  active: false,
+  cancelled: false,
+  startY: 0,
+  at: 0,
+};
+
+function showVoiceOverlay(visible, state) {
+  const overlay = $('#voiceOverlay');
+  if (!overlay) return;
+  overlay.classList.toggle('hidden', !visible);
+  overlay.classList.toggle('cancel', visible && state === 'cancel');
+  overlay.setAttribute('aria-hidden', visible ? 'false' : 'true');
+  const hint = $('#voiceOverlayHint');
+  if (hint) {
+    hint.textContent = state === 'cancel'
+      ? 'Отпустите, чтобы отменить запись'
+      : 'Отпустите, чтобы отправить, сдвиньте вверх для отмены';
+  }
+}
 
 function setDictationBar(visible, text) {
   const bar = $('#dictationBar');
   if (!bar) return;
-  bar.classList.toggle('hidden', !visible);
+  /* Пока держат микрофон, рассказывает подсказка поверх диалога — строка
+     внутри поля ввода в этот момент лишняя. */
+  bar.classList.toggle('hidden', !visible || voiceHold.active);
   const composer = $('#composer');
   if (composer) composer.classList.toggle('dictating', visible);
   if (text) $('#dictationText').textContent = text;
@@ -5665,6 +5698,16 @@ async function startDictation() {
     mic.setAttribute('aria-pressed', 'true');
     setDictationBar(true, 'Слушаю…');
     updateDictationText();
+    /* Палец ещё на микрофоне — показываем подсказку удержания. Если человек
+       уже отпустил кнопку, пока браузер спрашивал разрешение, запись сразу
+       отменяем: без этого она осталась бы висеть. */
+    if (voiceHold.active) {
+      showVoiceOverlay(true, voiceHold.cancelled ? 'cancel' : 'record');
+    } else if (dictation.holdMode) {
+      dictation.holdMode = false;
+      stopDictation(true);
+      return;
+    }
     dictation.tick = setInterval(() => {
       updateDictationText();
       if (Date.now() - dictation.startedAt > 180000) stopDictation(false);
@@ -5678,6 +5721,7 @@ async function startDictation() {
 }
 
 function stopDictation(cancelled = false) {
+  showVoiceOverlay(false);
   if (!dictation.recorder) {
     if (cancelled) setDictationBar(false);
     return;
@@ -5808,12 +5852,21 @@ async function finalizeDictation() {
       toast('Речь не распознана — попробуйте говорить ближе к микрофону');
     } else {
       insertTranscript(text);
+      /* Голос с удержанием: отпустили палец — сообщение уходит сразу, без
+         второго нажатия на «Отправить». */
+      if (dictation.sendOnFinish && !cancelled) {
+        dictation.sendOnFinish = false;
+        setDictationBar(false);
+        sendMessage().catch(() => {});
+      }
     }
   } catch (error) {
     toast(error.message || 'Не удалось распознать речь');
   } finally {
     dictation.busy = false;
     dictation.chunks = [];
+    dictation.sendOnFinish = false;
+    dictation.holdMode = false;
     setDictationBar(false);
     $('#micBtn').disabled = false;
   }
@@ -5823,6 +5876,47 @@ function toggleDictation() {
   if (dictation.busy) return;
   if (dictation.recorder) stopDictation(false);
   else startDictation();
+}
+
+/* Держим микрофон — говорим, отпускаем — сообщение уходит. Сдвиг пальца вверх
+   больше VOICE_CANCEL_SHIFT отменяет запись, как в мобильном приложении. */
+function beginVoiceHold(event) {
+  if (dictation.busy || dictation.recorder) return;
+  if (event.pointerType === 'mouse' && event.button !== 0) return;
+  event.preventDefault();
+  voiceHold.active = true;
+  voiceHold.cancelled = false;
+  voiceHold.startY = event.clientY;
+  voiceHold.at = Date.now();
+  dictation.holdMode = true;
+  dictation.sendOnFinish = true;
+  startDictation();
+}
+
+function moveVoiceHold(event) {
+  if (!voiceHold.active) return;
+  const shift = voiceHold.startY - event.clientY;
+  const cancelled = shift > VOICE_CANCEL_SHIFT;
+  if (cancelled === voiceHold.cancelled) return;
+  voiceHold.cancelled = cancelled;
+  if (dictation.recorder) showVoiceOverlay(true, cancelled ? 'cancel' : 'record');
+}
+
+function endVoiceHold() {
+  if (!voiceHold.active) return;
+  voiceHold.active = false;
+  const tooShort = Date.now() - voiceHold.at < VOICE_HOLD_MIN_MS;
+  const cancelled = voiceHold.cancelled || tooShort;
+  dictation.sendOnFinish = !cancelled;
+  showVoiceOverlay(false);
+  if (tooShort) {
+    if (dictation.recorder) stopDictation(true);
+    return;
+  }
+  /* Микрофон ещё включается (браузер спросил разрешение) — startDictation
+     сам отменит такую запись, когда увидит, что палец уже подняли. */
+  if (!dictation.recorder) return;
+  stopDictation(cancelled);
 }
 
 /* ------------------------------ spellcheck ------------------------------ */
@@ -7009,7 +7103,16 @@ for (const toggle of document.querySelectorAll('.theme-toggle')) {
     applyTheme(currentTheme() === 'light' ? 'dark' : 'light');
   });
 }
-$('#micBtn').addEventListener('click', toggleDictation);
+/* Микрофон: удержание — запись с отправкой на отпускании, сдвиг вверх —
+   отмена. Клавиатура (Enter/Space по кнопке) оставляет прежнее поведение
+   «нажал — запись, нажал ещё раз — стоп»: для неё click приходит с detail 0. */
+$('#micBtn').addEventListener('pointerdown', beginVoiceHold);
+$('#micBtn').addEventListener('click', (event) => {
+  if (event.detail === 0) toggleDictation();
+});
+window.addEventListener('pointermove', moveVoiceHold);
+window.addEventListener('pointerup', endVoiceHold);
+window.addEventListener('pointercancel', endVoiceHold);
 $('#dictationCancel').addEventListener('click', () => stopDictation(true));
 $('#spellBtn').addEventListener('click', checkSpelling);
 applyTheme(currentTheme(), false);

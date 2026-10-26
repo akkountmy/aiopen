@@ -187,6 +187,42 @@ try {
 
   for (const [width, height] of [[390, 844], [360, 780], [320, 640]]) await checkWidth(width, height);
 
+  // 2б. голос с удержанием: слой подсказки есть, спрятан и не перехватывает
+  //     касания, микрофон слушается удержания, режим ответа — один.
+  await cdp.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
+  await goto(BASE + '/');
+  await waitFor(`!!document.getElementById('micBtn')`);
+  const voice = await evaluate(`(() => {
+    const overlay = document.getElementById('voiceOverlay');
+    const hint = document.getElementById('voiceOverlayHint');
+    const mic = document.getElementById('micBtn');
+    const chips = [...document.querySelectorAll('.composer-modes .mode-chip')].map((b) => b.textContent.trim());
+    return {
+      exists: !!overlay,
+      hidden: overlay ? overlay.classList.contains('hidden') : null,
+      ariaHidden: overlay ? overlay.getAttribute('aria-hidden') : null,
+      hint: hint ? hint.textContent.trim() : '',
+      pointerEvents: overlay ? getComputedStyle(overlay).pointerEvents : '',
+      touchAction: getComputedStyle(mic).touchAction,
+      chips,
+    };
+  })()`);
+  voice.exists && voice.hidden === true && voice.ariaHidden === 'true'
+    ? ok('подсказка удержания спрятана, пока микрофон не нажат')
+    : fail('слой подсказки удержания', JSON.stringify(voice));
+  voice.hint === 'Отпустите, чтобы отправить, сдвиньте вверх для отмены'
+    ? ok('подсказка удержания объясняет отправку и отмену')
+    : fail('текст подсказки удержания', voice.hint);
+  voice.pointerEvents === 'none'
+    ? ok('слой подсказки не перехватывает палец')
+    : fail('pointer-events слоя подсказки', voice.pointerEvents);
+  voice.touchAction === 'none'
+    ? ok('микрофон слушается удержания, а не прокрутки')
+    : fail('touch-action микрофона', voice.touchAction);
+  voice.chips.length === 1 && voice.chips[0] === 'Рассуждения'
+    ? ok('в композере один режим — «Рассуждения»')
+    : fail('режимы композера', JSON.stringify(voice.chips));
+
   // 3. выезжающие ящики: «Файлы проекта» выезжает так же, как «Проекты»,
   //    того же размера, и закрывается крестиком в своём заголовке.
   await cdp.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });

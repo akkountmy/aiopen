@@ -255,7 +255,15 @@
             </div>
             <input id="fileInput" type="file" multiple hidden />
           </form>
-          <p class="composer-hint">Enter — отправить · Shift+Enter — новая строка · микрофон — голосовой ввод</p>
+          <p class="composer-hint">Enter — отправить · Shift+Enter — новая строка · микрофон — удерживайте и говорите</p>
+          <!-- Голос с удержанием — как в мобильном приложении: пока палец на
+               микрофоне, поверх диалога видна подсказка «Отпустите, чтобы
+               отправить, сдвиньте вверх для отмены». Слой прозрачен для
+               событий: отпускание всегда доходит до самой кнопки. -->
+          <div id="voiceOverlay" class="voice-overlay hidden" aria-hidden="true">
+            <p id="voiceOverlayHint" class="voice-overlay-hint">Отпустите, чтобы отправить, сдвиньте вверх для отмены</p>
+            <div class="voice-overlay-track" aria-hidden="true"></div>
+          </div>
         </div>
         <!-- Подсказка одна на всю область ответа: файл можно отпустить где угодно
              в диалоге, не только над полем ввода. -->
