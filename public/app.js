@@ -8490,6 +8490,9 @@ function applyComposerLayout() {
      #photoBtn, поэтому спрашиваем ту же функцию. */
   const photo = $('#photoBtn');
   if (photo) photo.title = cameraLivePreferred() ? 'Сфотографировать — включить камеру' : 'Сфотографировать';
+  /* Живая камера — признак компьютера (в ярлыке-приложении на ноутбуке ширина
+     тоже узкая раскладка). Там альбом дублирует «Файл», поэтому скрыт. */
+  document.documentElement.classList.toggle('camera-live', cameraLivePreferred());
   syncInputPlaceholder();
 }
 

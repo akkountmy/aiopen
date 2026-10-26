@@ -244,6 +244,26 @@ try {
     `${JSON.stringify(deskAction.empty)} → ${JSON.stringify(deskTyped)}`);
   await deskPage.fill('#input', '');
 
+  /* Ответ идёт: setStreaming() прячет отправку классом hidden, показывает
+     «Остановить», а микрофон уступает через .composer.streaming — на компьютере
+     ровно так же, как в ярлыке. Повторяем эти действия вручную. */
+  const deskStreaming = await deskPage.evaluate(() => {
+    const composer = document.getElementById('composer');
+    const send = document.getElementById('sendBtn');
+    const stop = document.getElementById('stopBtn');
+    composer.classList.add('streaming');
+    send.classList.add('hidden');
+    stop.classList.remove('hidden');
+    const shown = (id) => document.getElementById(id).getBoundingClientRect().width > 0;
+    const result = { mic: shown('micBtn'), send: shown('sendBtn'), stop: shown('stopBtn') };
+    composer.classList.remove('streaming');
+    send.classList.remove('hidden');
+    stop.classList.add('hidden');
+    return result;
+  });
+  ok('пока идёт ответ, на компьютере виден только «Остановить»',
+    !deskStreaming.mic && !deskStreaming.send && deskStreaming.stop, JSON.stringify(deskStreaming));
+
   /* Ярлык-приложение: та же раскладка compact-input, только на широком экране.
      Кнопки там круги 34 px с теми же значками 19 px — размеры и стиль совпадают
      с телефоном и компьютером. */
@@ -261,13 +281,15 @@ try {
       mic: rect('micBtn').width > 0,
       send: rect('sendBtn').width > 0,
       round: getComputedStyle(document.getElementById('photoBtn')).borderRadius,
+      gallery: getComputedStyle(document.getElementById('galleryBtn')).display,
       icons: ['thinkToggle', 'photoBtn', 'fileBtn', 'micBtn', 'sendBtn'].map((id) => ({ id, ...icon(id) })),
     };
     html.classList.remove('compact-input');
     return result;
   });
-  ok('в ярлыке-приложении та же одна кнопка действия и те же значки',
+  ok('в ярлыке-приложении та же одна кнопка действия, те же значки и без альбома',
     appShot.grid === 'grid' && appShot.mic && !appShot.send && appShot.round === '50%'
+      && appShot.gallery === 'none'
       && appShot.icons.every((item) => item.width === '19px' && item.stroke === '1.6px'),
     JSON.stringify(appShot));
 
