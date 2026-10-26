@@ -349,7 +349,8 @@ try {
   const stoppedRun = (await api(`/api/runs/${fourth.runId}`, { cookie: laptop })).data.run;
   check(stoppedRun?.status === 'stopped', 'задача помечена остановленной', stoppedRun?.status);
 
-  /* 5. Повторная отправка в занятый диалог: 429 с идентификатором задачи. */
+  /* 5. Повторная отправка в занятый диалог: второй ответ не запускается
+     параллельно, а встаёт в очередь и подхватится сервером сам. */
   const fifth = await startRun(laptop, 'Ещё одна задача');
   await sleep(300);
   fourth.controller.abort();
@@ -359,8 +360,13 @@ try {
     method: 'POST',
     body: { text: 'Вторая попытка', attachmentIds: [] },
   });
-  check(busy.status === 429, 'второй ответ в занятом диалоге не запускается', `HTTP ${busy.status}`);
+  check(busy.status === 202, 'второй ответ в занятом диалоге встаёт в очередь', `HTTP ${busy.status}`);
   check(busy.data.run?.id === fifth.runId, 'клиенту отдан идентификатор идущей задачи');
+  const queued = (busy.data.queue || []).find((item) => item.text === 'Вторая попытка');
+  check(Boolean(queued), 'текст второго ответа сохранён в очереди', String(queued?.text || ''));
+  /* Очередь проверяется отдельно (test/queue.mjs); здесь убираем её, чтобы
+     следующая задача начиналась с чистого диалога. */
+  if (queued) await api(`/api/chats/${chatId}/queue/${queued.id}`, { cookie: laptop, method: 'DELETE' });
   await waitFinished(laptop);
 
   /* 6. Перезапуск сервиса посреди задачи: работа продолжается сама. */
