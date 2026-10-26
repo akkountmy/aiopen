@@ -273,12 +273,19 @@ try {
   check(!/предел шагов/i.test(longText), 'в ответе нет фразы про предел шагов', longText.slice(-80));
   check(!/уточните, что продолжить/i.test(longText), 'человека не просят уточнять продолжение');
   check(sawContinue, 'агент получил «продолжай» и работал дальше');
-  const progress = longRead.events.filter((e) => e.type === 'progress');
+  /* Событие «продолжение» и предупреждение «осталось N шагов» — оба типа progress,
+     но означают разное. Считаем только продолжения: предупреждение приходит на
+     последнем шаге и к числу отрезков отношения не имеет (иначе тест падал на 3
+     событиях вместо 2 — так было с тех пор, как появилось предупреждение). */
+  const progress = longRead.events.filter((e) => e.type === 'progress' && !e.note);
   check(
     progress.length === SEGMENTS - 1,
     'отрезков ровно столько, сколько задано настройками',
     `событий продолжения ${progress.length}`,
   );
+  const warnings = longRead.events.filter((e) => e.type === 'progress' && e.note);
+  check(warnings.length === 1, 'перед пределом показано одно предупреждение о шагах',
+    warnings.map((e) => e.note).join(', ') || 'предупреждений нет');
   /* На каждый вызов сервис присылает два события (старт и итог) — считаем
      вызовы по идентификатору, а не по числу событий. */
   const longTools = new Set(longRead.events.filter((e) => e.type === 'tool').map((e) => e.id));
