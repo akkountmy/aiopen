@@ -325,7 +325,18 @@ test('стандарты подключаются к просьбе: финан�
   assert.doesNotMatch(plain, /ФИНАНСОВЫЙ АНАЛИЗ/);
   const finance = systemPrompt({ projectName: 'П', memory: '', userName: '', question: 'посчитай юнит-экономику' });
   assert.match(finance, /ЛИСТ «Допущения»|лист «Допущения»/i);
-  assert.ok(finance.length < 12000, `промпт слишком большой: ${finance.length}`);
+  /* Бюджет подсказки: влезаем в предел и оставляем запас под новые правила.
+     Раньше проверялось только «меньше 12 000», и промпт подошёл к пределу
+     вплотную — любая правка роняла тест. */
+  const { PROMPT_BUDGET } = await import('../src/config.mjs');
+  assert.ok(
+    finance.length < PROMPT_BUDGET.limitChars,
+    `промпт слишком большой: ${finance.length} при пределе ${PROMPT_BUDGET.limitChars}`,
+  );
+  assert.ok(
+    PROMPT_BUDGET.limitChars - finance.length >= PROMPT_BUDGET.reserveChars,
+    `запас промпта кончился: свободно ${PROMPT_BUDGET.limitChars - finance.length}, нужно ${PROMPT_BUDGET.reserveChars}`,
+  );
   assert.ok(finance.length > plain.length);
 });
 

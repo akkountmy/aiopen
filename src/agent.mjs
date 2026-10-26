@@ -2,6 +2,7 @@ import { CONTEXT, ESCALATION, MODEL, REVIEW, costUsd } from './config.mjs';
 import { documentExcerpt, documentKind } from './doccheck.mjs';
 import { getDeepSeekKey } from './keys.mjs';
 import { chooseProfile } from './model.mjs';
+import { createNarrationGate } from './narration.mjs';
 import { summaryPrompt, systemPrompt } from './prompt.mjs';
 import { describeReview, reviewAnswer } from './review.mjs';
 import { skillsPromptText } from './skills.mjs';
@@ -547,6 +548,9 @@ export async function runTurn({
     const system = systemPrompt({ projectName, projectContext, memory: chat.memory, userName, question: userText, facts, skillsText, filesBrief, task: chat.task, modes: { thinking, search } });
     const messages = [{ role: 'system', content: system }, ...chat.history];
 
+    /* У каждого шага свой буфер начала реплики — см. src/narration.mjs. */
+    const narration = createNarrationGate({ emit: (text) => emit({ type: 'delta', text }) });
+
     const result = await callModel(
       {
         model: route.model,
@@ -558,7 +562,9 @@ export async function runTurn({
       },
       {
         signal,
-        onDelta: (text) => emit({ type: 'delta', text }),
+        /* Начало реплики шага держим в буфере: если шаг вызовет инструменты,
+           это был ход мысли («I'll start by…»), и в ленту он не пойдёт. */
+        onDelta: (text) => narration.push(text),
         onReasoning: (text) => {
           if (thinking) emit({ type: 'reasoning', text });
         },
@@ -568,12 +574,16 @@ export async function runTurn({
 
     if (thinking && result.reasoning) reasoningText = (reasoningText + result.reasoning).slice(-24000);
 
+    /* Проверяем, был ли шаг ответом; при вызове инструментов реплика шага
+       выбрасывается целиком — ни в поток, ни в итоговый текст ответа. */
+    const stepAnswer = narration.finish(result.toolCalls.length > 0);
+
     if (result.usage) {
       usage.tokensIn += result.usage.prompt_tokens || 0;
       usage.tokensOut += result.usage.completion_tokens || 0;
     }
 
-    finalText += result.text || '';
+    finalText += stepAnswer;
 
     /* Стоимость именно этой задачи превысила порог: останавливаемся, чтобы не
        жечь деньги пользователя. Накопленный расход проекта здесь не участвует —
