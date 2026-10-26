@@ -2059,6 +2059,8 @@ export async function executeTool(name, args, ctx) {
         text: describePage(result),
         meta: {
           mode: result.mode,
+          engine: result.engine || null,
+          reason: result.reason || '',
           widths: result.widths,
           screenshots: variants.map((variant) => variant.screenshot),
           failedWidths: failed,

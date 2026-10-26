@@ -76,6 +76,7 @@ import { pipeZip } from './src/zip.mjs';
 import { nowIso, safeName, uid, uniqueFileName } from './src/util.mjs';
 import { describeImage } from './src/vision.mjs';
 import { webSearch } from './src/search.mjs';
+import { browserStatus } from './src/browser.mjs';
 import { describeTrim } from './src/trim.mjs';
 import { describeProfile } from './src/model.mjs';
 import { describeReview } from './src/review.mjs';
@@ -2091,13 +2092,17 @@ async function route(req, res) {
     if (pathname === '/api/health' && method === 'GET') {
       /* Сколько устройств аккаунт держит одновременно: сейчас без ограничений —
          ноутбук, телефон, ярлык и вкладки работают параллельно, не выбивая
-         друг друга. */
+         друг друга.
+         browser: чем открывается живая проверка страницы (check_page). Без
+         параметра значение только из уже сделанной проверки и не запускает
+         Chromium; ?browser=1 — честный запуск, чтобы видеть состояние в облаке. */
       return sendJson(res, 200, {
         ok: true,
         time: nowIso(),
         sessions: sessionSeats(),
         docs: await docEngines(),
         skills: listSkills().length,
+        browser: await browserStatus({ probe: url.searchParams.get('browser') === '1' }),
       });
     }
 

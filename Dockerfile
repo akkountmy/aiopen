@@ -6,8 +6,9 @@
 #
 # Зачем Chromium: инструмент check_page проверяет собранную страницу живьём —
 # скриншот, ошибки консоли, горизонтальная прокрутка на 390/768/1440 px.
-# Playwright стоит в optionalDependencies: без браузера сервис работает как
-# раньше, инструмент просто не появляется в наборе.
+# Драйвер playwright-core лежит в dependencies, браузеры ему ставим отдельным
+# слоем. В node-сборке облака (без Docker) браузер берётся из
+# @sparticuz/chromium — там системных библиотек под Chromium нет.
 #
 # Сборка и запуск:
 #   docker build -t dsh-open-web .
@@ -55,9 +56,10 @@ RUN if [ -f package-lock.json ]; then npm ci --omit=dev; else npm install --omit
  && npm cache clean --force
 
 # Chromium ставим отдельным слоем: системные библиотеки под него тянет
-# --with-deps. Браузеры лежат в /ms-playwright и должны быть читаемы
+# --with-deps. Ставит их CLI playwright-core (он в dependencies, поэтому есть и
+# при npm ci --omit=dev). Браузеры лежат в /ms-playwright и должны быть читаемы
 # пользователю node, под которым работает сервис.
-RUN npx playwright install --with-deps chromium \
+RUN npx playwright-core install --with-deps chromium \
  && chmod -R a+rX /ms-playwright \
  && rm -rf /var/lib/apt/lists/* /tmp/*
 
