@@ -14,6 +14,8 @@
     "test:docs": "node test/docs.mjs",
     "test:docpreview": "node --test test/docpreview.mjs",
     "test:runs": "node test/runs.mjs",
+    "test:queue": "node test/queue.mjs",
+    "test:ui-queue": "node test/ui-queue.mjs",
     "test:ui-runs": "node test/ui-runs.mjs",
     "test:ui-scroll": "node test/ui-scroll.mjs",
     "test:ui-sheet": "node test/ui-modal-sheet.mjs",

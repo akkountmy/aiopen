@@ -182,6 +182,89 @@ function createRun({ user, project, chat, attempts = 0 }) {
   return run;
 }
 
+/* ------------------------- очередь задач диалога -------------------------
+   Пока в диалоге идёт ответ, следующая просьба не запускается и не теряется:
+   она встаёт в очередь и ждёт своей минуты. Очередь живёт в файле диалога,
+   поэтому видна на любом устройстве и переживает перезагрузку страницы.
+   Правило простое: один диалог — один ответ, но задач в него можно поставить
+   сколько угодно (до разумного предела). */
+const CHAT_QUEUE_LIMIT = 10;
+
+function queueAttachmentBrief(ids, chat) {
+  return (ids || [])
+    .map((id) => store.getAttachment(id))
+    .filter((att) => att && att.ownerId === chat.ownerId && att.projectId === chat.projectId)
+    .map((att) => ({ id: att.id, name: att.name || 'Файл', kind: att.kind || '', size: att.size || 0 }));
+}
+
+function publicQueueItem(item) {
+  return {
+    id: item.id,
+    text: item.text || '',
+    modes: item.modes || { thinking: false },
+    attachments: Array.isArray(item.attachments) ? item.attachments : [],
+    at: item.at || '',
+  };
+}
+
+function publicQueue(chat) {
+  return (Array.isArray(chat?.queue) ? chat.queue : []).map(publicQueueItem);
+}
+
+function enqueueChatTask(chat, job) {
+  if (!Array.isArray(chat.queue)) chat.queue = [];
+  if (chat.queue.length >= CHAT_QUEUE_LIMIT) return null;
+  const item = {
+    id: uid('q_'),
+    text: job.text,
+    attachmentIds: job.attachmentIds || [],
+    attachments: queueAttachmentBrief(job.attachmentIds, chat),
+    modes: job.modes,
+    at: nowIso(),
+  };
+  chat.queue.push(item);
+  store.saveChat(chat.id, chatFilePayload(chat));
+  return item;
+}
+
+function startQueuedRun(chat, user, project, item) {
+  const run = createRun({ user, project, chat });
+  void executeRun(run, {
+    text: item.text,
+    attachmentIds: item.attachmentIds || [],
+    modes: item.modes || { thinking: false, search: true },
+    isFirstMessage: chat.messages.length === 0,
+  });
+  return run;
+}
+
+/* Следующая задача из очереди стартует сама, когда предыдущая закончилась
+   нормально или с ошибкой. После «Стоп» очередь стоит на паузе: человек
+   остановил работу сознательно, и молча запускать следующую нельзя. */
+function startNextQueuedRun(previous, status) {
+  if (!previous || status === 'stopped' || previous.queueStarted) return;
+  previous.queueStarted = true;
+  const timer = setTimeout(() => {
+    try {
+      if (liveRunForChat(previous.userId, previous.chatId)) return;
+      const chat = store.getChat(previous.chatId, previous.userId);
+      if (!chat || !Array.isArray(chat.queue) || !chat.queue.length) return;
+      const project = store.getProject(chat.projectId, previous.userId);
+      const user = store.getUser(previous.userId);
+      if (!project || !user) return;
+      /* Нет средств или висит запрос на подтверждение — очередь ждёт человека:
+         молча тратить деньги или обходить подтверждение нельзя. */
+      if (user.role !== 'admin' && (Number(user.creditUsd || 0) <= 0 || store.pendingApprovalFor(project.id))) return;
+      const item = chat.queue.shift();
+      store.saveChat(chat.id, chatFilePayload(chat));
+      startQueuedRun(chat, user, project, item);
+    } catch (error) {
+      console.error('[queue]', error?.message || error);
+    }
+  }, 150);
+  timer.unref?.();
+}
+
 /* Одно событие задачи: обновляет состояние и уходит всем подключённым вкладкам —
    их может быть несколько: ноутбук, телефон, ярлык. */
 function publishRun(run, data) {
@@ -299,12 +382,34 @@ function chatFilePayload(chat) {
     history: chat.history,
     memory: chat.memory,
     task: chat.task || null,
+    queue: Array.isArray(chat.queue) ? chat.queue : [],
   };
+}
+
+/* Очередь живёт в том же файле, что и переписка, но приходит из других
+   запросов: пока задача шла, вкладка могла поставить в очередь ещё несколько.
+   У долгой задачи свой снимок диалога, и без этой подтяжки финальное
+   сохранение затирало бы чужую очередь. */
+function adoptStoredQueue(chat) {
+  try {
+    const fresh = store.getChat(chat.id);
+    if (fresh) chat.queue = fresh.queue;
+  } catch {
+    /* файл занят или удалён — сохраняем то, что есть */
+  }
+  return chat;
 }
 
 /* Тихое сохранение только файла диалога: без переписывания общего индекса. */
 function saveChatState(chat) {
+  adoptStoredQueue(chat);
   store.writeChat(chat.id, chatFilePayload(chat));
+}
+
+/* Итоговое сохранение задачи: обновляет и метаданные диалога. */
+function saveRunChat(chat) {
+  adoptStoredQueue(chat);
+  store.saveChat(chat.id, chatFilePayload(chat));
 }
 
 function persistRunProgress(run) {
@@ -1568,7 +1673,7 @@ function openStream(res, extraHeaders = {}) {
 }
 
 async function handleMessageStream(req, res, user, chatId) {
-  const chat = store.getChat(chatId, user.id);
+  let chat = store.getChat(chatId, user.id);
   if (!chat) return sendError(res, 404, 'Диалог не найден');
   const project = store.getProject(chat.projectId, user.id);
   if (!project) return sendError(res, 404, 'Проект не найден');
@@ -1611,6 +1716,12 @@ async function handleMessageStream(req, res, user, chatId) {
   };
   if (!text && !attachmentIds.length) return sendError(res, 400, 'Пустое сообщение');
 
+  /* Пока читали тело, прошлая задача могла закончиться и дописать ответ.
+     Берём свежий снимок, иначе постановка в очередь сохранила бы старую
+     переписку и потеряла только что полученный ответ. */
+  const freshChat = store.getChat(chatId, user.id);
+  if (freshChat) chat = freshChat;
+
   /* Занятость проверяем после чтения тела: иначе две одновременные отправки
      успевают проскочить проверку до того, как первая займёт диалог.
      Один диалог — один ответ (иначе сообщения перепутаются), но разные диалоги
@@ -1618,10 +1729,16 @@ async function handleMessageStream(req, res, user, chatId) {
   const active = liveRunForChat(user.id, chat.id);
   if (active) {
     /* Ответ уже идёт — возможно, начатый с другого устройства или переживший
-       перезагрузку этой страницы. Второй не запускаем: отдаём клиенту
-       идентификатор запуска, и вкладка подключается к нему. */
-    return sendJson(res, 429, {
-      error: 'Ответ в этом диалоге уже идёт — подключаюсь к нему.',
+       перезагрузку этой страницы. Второй не запускаем, но и не теряем просьбу:
+       ставим её в очередь. Клиент покажет её над полем ввода, где текст можно
+       поправить или удалить, а сервер запустит её сам, когда придёт время. */
+    const item = enqueueChatTask(chat, { text, attachmentIds, modes });
+    if (!item) {
+      return sendError(res, 429, `В очереди уже ${CHAT_QUEUE_LIMIT} задач — дождитесь, пока освободится место.`);
+    }
+    return sendJson(res, 202, {
+      queued: publicQueueItem(item),
+      queue: publicQueue(chat),
       run: publicRun(active),
     });
   }
@@ -1694,7 +1811,7 @@ async function executeRun(run, job) {
         at: nowIso(),
       };
       chat.messages.push(userMessage);
-      store.saveChat(chat.id, chatFilePayload(chat));
+      saveRunChat(chat);
 
       attachments = await waitForAttachments(attachmentIds, user, chat, stream.emit);
       /* Пока ждали вложения, человек мог нажать «Стоп» — тогда работу не начинаем. */
@@ -1711,7 +1828,7 @@ async function executeRun(run, job) {
           size: att.size,
           relPath: att.relPath,
         }));
-        store.saveChat(chat.id, chatFilePayload(chat));
+        saveRunChat(chat);
       }
     }
     /* Что уже лежит в проекте: свежие файлы пересказаны коротко, чтобы задача
@@ -1857,7 +1974,7 @@ async function executeRun(run, job) {
       ...(modes.thinking ? { modes: { thinking: true } } : {}),
       ...(outcome.reasoning ? { reasoning: outcome.reasoning } : {}),
     });
-    store.saveChat(chat.id, { messages: chat.messages, history: chat.history, memory: chat.memory, task: chat.task || null });
+    saveRunChat(chat);
 
     if (isFirstMessage && (!chat.title || chat.title === 'Новый диалог')) {
       const title = await generateTitle(text || assistantText, { signal: controller.signal }).catch(() => '');
@@ -1868,6 +1985,7 @@ async function executeRun(run, job) {
     }
     stream.emit({ type: 'done', usage: outcome.usage, tools: outcome.tools.length, balanceUsd });
     finishRun(run, 'done');
+    startNextQueuedRun(run, 'done');
     /* Работа закончилась, а приложение может быть закрыто или свёрнуто —
        отправляем уведомление на все устройства пользователя. */
     notifyRunPush({ user, project, chat, run, status: 'done', text: assistantText, approval: budgetInfo, outcome });
@@ -1880,9 +1998,10 @@ async function executeRun(run, job) {
     } else {
       chat.messages.push({ role: 'assistant', content: '', error: message, at: nowIso() });
     }
-    store.saveChat(chat.id, { messages: chat.messages, history: chat.history, memory: chat.memory, task: chat.task || null });
+    saveRunChat(chat);
     stream.emit({ type: 'error', message, aborted });
     finishRun(run, aborted ? 'stopped' : 'error');
+    startNextQueuedRun(run, aborted ? 'stopped' : 'error');
     notifyRunPush({
       user,
       project,
@@ -2764,6 +2883,7 @@ async function route(req, res) {
             title: chat.title,
             messages: chat.messages,
             attachments,
+            queue: publicQueue(chat),
             /* Если в диалоге идёт работа, вкладка сразу подключится к ней. */
             run: liveRunForChat(user.id, chat.id) ? publicRun(liveRunForChat(user.id, chat.id)) : null,
           },
@@ -2776,6 +2896,67 @@ async function route(req, res) {
       if (parts.length === 3 && method === 'DELETE') {
         store.deleteChat(chat.id);
         return sendJson(res, 200, { ok: true });
+      }
+      /* Очередь: поправить текст, убрать задачу или запустить её вручную.
+         Автоматически следующая стартует сама после окончания предыдущей;
+         кнопка «Запустить» нужна после «Стоп» и при пустом диалоге. */
+      if (parts[3] === 'queue' && parts[4]) {
+        if (!Array.isArray(chat.queue)) chat.queue = [];
+        const index = chat.queue.findIndex((item) => item.id === parts[4]);
+        if (index < 0) return sendError(res, 404, 'Задача в очереди не найдена');
+        const item = chat.queue[index];
+        if (method === 'PATCH') {
+          const body = await readJsonBody(req, LIMITS.jsonBody);
+          const text = String(body.text || '').trim();
+          if (!text && !(item.attachmentIds || []).length) {
+            return sendError(res, 400, 'Текст задачи не может быть пустым');
+          }
+          /* Пока читали тело, ответ мог закончиться и дописать переписку:
+             правим задачу в свежем снимке, а не в устаревшем. */
+          const fresh = store.getChat(chat.id, user.id) || chat;
+          if (!Array.isArray(fresh.queue)) fresh.queue = [];
+          const freshItem = fresh.queue.find((entry) => entry.id === parts[4]);
+          if (!freshItem) return sendError(res, 404, 'Задача в очереди не найдена');
+          freshItem.text = text;
+          store.saveChat(fresh.id, chatFilePayload(fresh));
+          return sendJson(res, 200, { queue: publicQueue(fresh) });
+        }
+        if (method === 'DELETE') {
+          chat.queue.splice(index, 1);
+          store.saveChat(chat.id, chatFilePayload(chat));
+          return sendJson(res, 200, { queue: publicQueue(chat) });
+        }
+        if (parts[5] === 'run' && method === 'POST') {
+          const active = liveRunForChat(user.id, chat.id);
+          if (active) {
+            return sendJson(res, 429, {
+              error: 'Ответ в этом диалоге уже идёт — эта задача подождёт.',
+              run: publicRun(active),
+              queue: publicQueue(chat),
+            });
+          }
+          const project = store.getProject(chat.projectId, user.id);
+          if (!project) return sendError(res, 404, 'Проект не найден');
+          if (user.role !== 'admin') {
+            if (store.pendingApprovalFor(project.id)) {
+              return sendError(res, 402, 'Предыдущая тяжёлая задача ждёт подтверждения администратора.');
+            }
+            if (Number(user.creditUsd || 0) <= 0) {
+              return sendError(res, 402, 'На балансе закончились средства. Напишите администратору.');
+            }
+          }
+          chat.queue.splice(index, 1);
+          store.saveChat(chat.id, chatFilePayload(chat));
+          const run = createRun({ user, project, chat });
+          attachRun(res, run);
+          void executeRun(run, {
+            text: item.text,
+            attachmentIds: item.attachmentIds || [],
+            modes: item.modes || { thinking: false, search: true },
+            isFirstMessage: chat.messages.length === 0,
+          });
+          return;
+        }
       }
       if (parts[3] === 'messages' && method === 'POST') {
         return await handleMessageStream(req, res, user, chat.id);

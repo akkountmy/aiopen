@@ -216,6 +216,9 @@
         </div>
 
         <div class="composer-wrap">
+          <!-- Очередь задач: пока один ответ идёт, следующие ждут здесь. Каждую
+               можно поправить или убрать, а после «Стоп» — запустить вручную. -->
+          <div id="queuePanel" class="queue-panel hidden" aria-live="polite"></div>
           <form id="composer" class="composer" autocomplete="off">
             <div id="attachStrip" class="attach-strip hidden"></div>
             <div class="composer-row">

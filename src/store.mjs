@@ -1269,6 +1269,10 @@ class Store {
       /* Карточка длинной задачи: что сделано, что осталось, какие файлы готовы.
          Переживает перезапуск процесса и подставляется в следующий ход. */
       task: data?.task || null,
+      /* Очередь задач диалога: пока один ответ идёт, следующие ждут здесь.
+         Хранится вместе с диалогом, поэтому переживает перезагрузку страницы
+         и перезапуск сервиса. */
+      queue: Array.isArray(data?.queue) ? data.queue : [],
     };
   }
 
@@ -1284,7 +1288,7 @@ class Store {
     };
     this.state.chats.push(chat);
     this.save();
-    this.writeChat(chat.id, { messages: [], history: [], memory: '', task: null });
+    this.writeChat(chat.id, { messages: [], history: [], memory: '', task: null, queue: [] });
     const project = this.getProject(projectId);
     if (project) {
       project.updatedAt = nowIso();

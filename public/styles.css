@@ -2239,6 +2239,222 @@ html.kb-open .scroll-jump {
   padding: 6px 24px 14px;
 }
 
+/* Очередь задач над полем ввода. Пока идёт ответ, следующие просьбы видны
+   здесь: их можно поправить, убрать или запустить вручную после «Стоп». */
+.queue-panel {
+  width: min(1240px, 100%);
+  margin: 0 auto 6px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--layer-1);
+  overflow: hidden;
+}
+
+.queue-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px 6px;
+  font-size: var(--fs-12);
+}
+
+.queue-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--text-2);
+  font-weight: 600;
+}
+
+.queue-dot {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.queue-hint {
+  margin-left: auto;
+  color: var(--text-4);
+  font-size: var(--fs-11);
+  white-space: nowrap;
+}
+
+.queue-list {
+  max-height: 176px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.queue-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 10px;
+  border-top: 1px solid var(--line);
+}
+
+.queue-num {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  margin-top: 1px;
+  border-radius: 50%;
+  background: var(--layer-2);
+  color: var(--text-3);
+  font-size: var(--fs-11);
+  line-height: 18px;
+  text-align: center;
+}
+
+.queue-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.queue-text {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--text);
+  font-size: var(--fs-13);
+  line-height: var(--lh-18);
+  overflow-wrap: anywhere;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.queue-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 3px;
+}
+
+.queue-file {
+  max-width: 180px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--layer-2);
+  color: var(--text-3);
+  font-size: var(--fs-11);
+  line-height: var(--lh-16);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.queue-actions {
+  display: flex;
+  flex: none;
+  gap: 2px;
+  margin-top: -2px;
+}
+
+.queue-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-4);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.queue-btn svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.queue-btn.queue-run {
+  color: var(--accent);
+}
+
+@media (hover: hover) {
+  .queue-btn:hover {
+    background: var(--layer-hover);
+    color: var(--text);
+  }
+
+  .queue-btn.queue-run:hover {
+    color: var(--accent-strong);
+    background: var(--accent-soft);
+  }
+
+  .queue-btn.queue-del:hover {
+    color: var(--danger);
+    background: color-mix(in srgb, var(--danger) 10%, transparent);
+  }
+}
+
+.queue-edit-form {
+  display: block;
+}
+
+.queue-edit-textarea {
+  width: 100%;
+  min-height: 96px;
+  resize: vertical;
+  padding: 8px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--layer-2);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--fs-14);
+  line-height: var(--lh-22);
+  outline: none;
+}
+
+.queue-edit-textarea:focus {
+  border-color: rgba(86, 134, 254, 0.55);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+/* На телефоне очередь занимает те же поля, что и композер, но подсказку
+   прячем: место дороже, а кнопка ▶ и так подписана. */
+@media (max-width: 640px) {
+  .queue-panel {
+    margin-bottom: 4px;
+  }
+
+  .queue-head {
+    padding: 6px 8px 5px;
+  }
+
+  .queue-hint {
+    display: none;
+  }
+
+  .queue-item {
+    gap: 6px;
+    padding: 7px 8px;
+  }
+
+  .queue-list {
+    max-height: 132px;
+  }
+
+  .queue-btn {
+    width: 26px;
+    height: 26px;
+  }
+
+  .queue-file {
+    max-width: 120px;
+  }
+}
+
 .composer {
   width: min(1240px, 100%);
   margin: 0 auto;

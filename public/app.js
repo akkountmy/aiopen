@@ -1201,6 +1201,7 @@ async function openChat(chatId) {
     if (data.chat.run?.id) trackRun(data.chat.run.id, chatId);
     renderSidebar();
     renderThread();
+    renderQueue();
     updateCrumbs();
     if (state.filesOpen) loadFiles();
     if (!restoreFilesUi()) closeSidebar();
@@ -1231,7 +1232,7 @@ async function ensureChat() {
   }
   const project = activeProject();
   const created = await api(`/api/projects/${state.activeProjectId}/chats`, { method: 'POST', body: {} });
-  const chat = { id: created.chat.id, projectId: state.activeProjectId, title: 'Новый диалог', messages: [] };
+  const chat = { id: created.chat.id, projectId: state.activeProjectId, title: 'Новый диалог', messages: [], queue: [] };
   if (project) {
     project.chats = project.chats || [];
     /* Новый диалог встаёт в конец: список идёт по времени создания, а не по
@@ -1245,6 +1246,7 @@ async function ensureChat() {
      иначе после перезагрузки открывался предыдущий разговор. */
   rememberChat(chat.id);
   renderSidebar();
+  renderQueue();
   updateCrumbs();
   return state.chat;
 }
@@ -1661,15 +1663,16 @@ function closeRunView(run, status) {
   if (viewing) {
     renderThread();
     /* Окончательный вид ответа берём с сервера: там уже сохранённые пометки
-       инструментов, расход и заголовок диалога. */
-    reloadChatInPlace(run.chatId);
+       инструментов, расход и заголовок диалога. Если в очереди была следующая
+       задача, сервер запустит её сам — опрос подхватит новый запуск. */
+    reloadChatInPlace(run.chatId, { pollQueue: status !== 'stopped' });
   } else if (status === 'done') {
     toast('Задача в другом диалоге завершена');
   }
   if (state.filesOpen) loadFiles();
 }
 
-async function reloadChatInPlace(chatId) {
+async function reloadChatInPlace(chatId, { pollQueue = true } = {}) {
   try {
     const data = await api(`/api/chats/${chatId}`);
     const project = state.projects.find((item) => item.id === data.chat.projectId);
@@ -1677,17 +1680,60 @@ async function reloadChatInPlace(chatId) {
     if (meta) {
       meta.title = data.chat.title;
       meta.messageCount = data.chat.messages.length;
-      meta.running = false;
+      meta.running = Boolean(data.chat.run);
     }
     if (state.chat && state.chat.id === chatId) {
       state.chat = data.chat;
       renderThread();
+      renderQueue();
       updateCrumbs();
+      if (data.chat.run?.id) {
+        const run = trackRun(data.chat.run.id, chatId);
+        paintRun(run);
+        if (!state.liveStreams.has(run.id)) watchRun(run.id, chatId);
+        setStreaming(true);
+      } else if (pollQueue && chatQueue().length) {
+        pollQueueStart(chatId);
+      }
     }
     renderSidebar();
   } catch {
     /* нет связи — остаётся то, что уже нарисовано */
   }
+}
+
+/* Следующая задача из очереди стартует на сервере через мгновение после
+   предыдущей. Клиент не получает об этом события, поэтому коротко опрашивает
+   диалог и подключается к новому запуску. */
+let queuePollTimer = 0;
+let queuePollChat = '';
+
+function pollQueueStart(chatId, attempt = 0) {
+  if (queuePollChat !== chatId) clearTimeout(queuePollTimer);
+  queuePollChat = chatId;
+  clearTimeout(queuePollTimer);
+  if (attempt > 20) return;
+  queuePollTimer = setTimeout(async () => {
+    if (!state.chat || state.chat.id !== chatId) return;
+    try {
+      const data = await api(`/api/chats/${chatId}`);
+      if (!state.chat || state.chat.id !== chatId) return;
+      state.chat = data.chat;
+      renderThread();
+      renderQueue();
+      updateCrumbs();
+      if (data.chat.run?.id) {
+        const run = trackRun(data.chat.run.id, chatId);
+        paintRun(run);
+        if (!state.liveStreams.has(run.id)) watchRun(run.id, chatId);
+        setStreaming(true);
+        return;
+      }
+      if (chatQueue().length) pollQueueStart(chatId, attempt + 1);
+    } catch {
+      pollQueueStart(chatId, attempt + 1);
+    }
+  }, attempt === 0 ? 220 : 700);
 }
 
 function applyRunEvent(run, event) {
@@ -2203,6 +2249,17 @@ async function streamMessage(text, attachmentIds, modes) {
       ...(modes.thinking || modes.search ? { modes } : {}),
     }),
   });
+  if (response.status === 202) {
+    /* Ответ уже идёт, поэтому просьба встала в очередь. Сервер вернул её
+       вместе со всей очередью — клиенту остаётся нарисовать панель. */
+    let data = {};
+    try {
+      data = await response.json();
+    } catch {
+      data = {};
+    }
+    return { queued: true, ...data };
+  }
   if (response.status === 429) {
     let data = {};
     try {
@@ -2242,13 +2299,6 @@ async function streamMessage(text, attachmentIds, modes) {
 async function sendMessage(event) {
   if (event) event.preventDefault();
   const input = $('#input');
-  /* Занят именно этот диалог: в другом проекте задача может идти спокойно.
-     Раньше Enter просто ничего не делал — человек решал, что приложение
-     зависло. Теперь объясняем, почему сообщение не ушло. */
-  if (currentLiveRun()) {
-    if (input.value.trim()) toast('Идёт ответ. Дождитесь его или нажмите «Стоп».', 'warn');
-    return;
-  }
   const text = input.value.trim();
   const ready = state.attachments.filter((att) => att.id && att.status !== 'error');
   const uploading = state.attachments.filter((att) => att.status === 'uploading' || att.status === 'processing');
@@ -2281,6 +2331,25 @@ async function sendMessage(event) {
     label: att.label,
     size: att.size,
   }));
+  const modes = activeAnswerModes();
+
+  /* Диалог занят ответом — не отказываем и не теряем просьбу: ставим её в
+     очередь. Очередь живёт на сервере, поэтому видна и на другом устройстве. */
+  if (currentLiveRun()) {
+    try {
+      const data = await queueMessage(text, ids, modes);
+      state.chat.queue = Array.isArray(data.queue) ? data.queue : state.chat.queue;
+      input.value = '';
+      autoResize();
+      state.attachments = [];
+      renderAttachStrip();
+      renderQueue();
+      toast(text ? 'Задача в очереди — начнётся после текущей' : 'Файл в очереди — отправится после текущей задачи');
+    } catch (error) {
+      if (!error.unauthorized) toast(error.message || 'Не удалось поставить задачу в очередь');
+    }
+    return;
+  }
 
   input.value = '';
   autoResize();
@@ -2289,7 +2358,6 @@ async function sendMessage(event) {
 
   const userMessage = { role: 'user', content: text, attachments: attachedMeta, at: new Date().toISOString() };
   state.chat.messages.push(userMessage);
-  const modes = activeAnswerModes();
   const assistant = {
     role: 'assistant',
     content: '',
@@ -2304,7 +2372,17 @@ async function sendMessage(event) {
   scrollToBottom(true);
 
   try {
-    await streamMessage(text, ids, modes);
+    const result = await streamMessage(text, ids, modes);
+    if (result?.queued) {
+      /* Пока вкладка думала, что диалог свободен, на другом устройстве уже
+         начался ответ. Убираем нарисованные пузыри и показываем очередь. */
+      state.chat.messages.splice(-2, 2);
+      state.chat.queue = Array.isArray(result.queue) ? result.queue : [];
+      renderThread();
+      renderQueue();
+      setStreaming(Boolean(currentLiveRun()));
+      toast('Задача в очереди — начнётся после текущей');
+    }
   } catch (error) {
     if (error.name !== 'AbortError' && !error.unauthorized) toast(error.message || 'Ошибка отправки');
     const message = getStreamingMessage();
@@ -2314,6 +2392,251 @@ async function sendMessage(event) {
     }
     setStreaming(Boolean(currentLiveRun()));
     renderThread();
+  }
+}
+
+/* Постановка задачи в очередь, когда ответ уже идёт. Возвращает очередь с
+   сервера, чтобы панель сразу показала новую строку. */
+async function queueMessage(text, attachmentIds, modes) {
+  const response = await fetch(`/api/chats/${state.chat.id}/messages`, {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      text,
+      attachmentIds,
+      ...(modes.thinking || modes.search ? { modes } : {}),
+    }),
+  });
+  let data = {};
+  try {
+    data = await response.json();
+  } catch {
+    data = {};
+  }
+  if (response.status === 202) return data;
+  throw new Error(data.error || 'Не удалось поставить задачу в очередь');
+}
+
+/* ------------------------------ очередь задач ------------------------------ */
+
+function chatQueue() {
+  return Array.isArray(state.chat?.queue) ? state.chat.queue : [];
+}
+
+function applyQueue(queue) {
+  if (!state.chat) return;
+  state.chat.queue = Array.isArray(queue) ? queue : [];
+  renderQueue();
+}
+
+function queueActionButton(icon, label, className, onClick) {
+  const button = el('button', `queue-btn ${className}`);
+  button.type = 'button';
+  button.title = label;
+  button.setAttribute('aria-label', label);
+  button.innerHTML = icon;
+  button.addEventListener('click', onClick);
+  return button;
+}
+
+function renderQueue() {
+  const panel = $('#queuePanel');
+  if (!panel) return;
+  panel.innerHTML = '';
+  const items = chatQueue();
+  if (!items.length) {
+    panel.classList.add('hidden');
+    return;
+  }
+  panel.classList.remove('hidden');
+
+  const live = currentLiveRun();
+  const head = el('div', 'queue-head');
+  const title = el('div', 'queue-title');
+  title.innerHTML = `<span class="queue-dot" aria-hidden="true"></span>В очереди · ${items.length}`;
+  head.appendChild(title);
+  head.appendChild(el('span', 'queue-hint', live ? 'начнётся после текущей' : 'нажмите ▶, чтобы запустить'));
+  panel.appendChild(head);
+
+  const list = el('div', 'queue-list');
+  items.forEach((item, index) => {
+    const row = el('div', 'queue-item');
+    row.dataset.queueId = item.id;
+    row.appendChild(el('span', 'queue-num', String(index + 1)));
+
+    const body = el('div', 'queue-body');
+    const text = el('div', 'queue-text', item.text || 'Вложение без текста');
+    text.title = item.text || 'Вложение';
+    body.appendChild(text);
+    if (Array.isArray(item.attachments) && item.attachments.length) {
+      const files = el('div', 'queue-files');
+      for (const att of item.attachments.slice(0, 3)) {
+        const chip = el('span', 'queue-file', att.name || 'Файл');
+        chip.title = att.name || 'Файл';
+        files.appendChild(chip);
+      }
+      if (item.attachments.length > 3) files.appendChild(el('span', 'queue-file', `+${item.attachments.length - 3}`));
+      body.appendChild(files);
+    }
+    row.appendChild(body);
+
+    const actions = el('div', 'queue-actions');
+    if (!live) {
+      actions.appendChild(
+        queueActionButton(ICONS.play, 'Запустить сейчас', 'queue-run', () => startQueueItem(item.id)),
+      );
+    }
+    actions.appendChild(queueActionButton(ICONS.pen, 'Изменить задачу', 'queue-edit', () => editQueueItem(item)));
+    actions.appendChild(queueActionButton(ICONS.trash, 'Убрать из очереди', 'queue-del', () => deleteQueueItem(item)));
+    row.appendChild(actions);
+    list.appendChild(row);
+  });
+  panel.appendChild(list);
+}
+
+function queueEditDialog(item) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+    const form = el('form', 'queue-edit-form');
+    const field = el('label', 'field');
+    field.appendChild(el('span', 'field-label', 'Текст задачи'));
+    const area = el('textarea', 'queue-edit-textarea');
+    area.value = item.text || '';
+    area.rows = 4;
+    area.placeholder = 'Что нужно сделать?';
+    field.appendChild(area);
+    form.appendChild(field);
+    /* У задачи с файлом текст может быть пустым: файл сам по себе — задание. */
+    const hasFiles = Array.isArray(item.attachments) && item.attachments.length > 0;
+    form.addEventListener('submit', (event) => {
+      event.preventDefault();
+      const value = area.value.trim();
+      if (!value && !hasFiles) {
+        area.focus();
+        return;
+      }
+      finish(value);
+      closeModal();
+    });
+    openModal({
+      title: 'Изменить задачу',
+      body: form,
+      onClose: () => finish(null),
+      actions: [
+        { label: 'Отмена', kind: 'quiet', onClick: () => finish(null) },
+        {
+          label: 'Сохранить',
+          kind: 'primary',
+          onClick: () => {
+            const value = area.value.trim();
+            if (!value && !hasFiles) {
+              area.focus();
+              return false;
+            }
+            finish(value);
+          },
+        },
+      ],
+      onMount: () => {
+        setTimeout(() => {
+          area.focus();
+          area.setSelectionRange(area.value.length, area.value.length);
+        }, 40);
+      },
+    });
+  });
+}
+
+async function editQueueItem(item) {
+  const text = await queueEditDialog(item);
+  if (text === null || text === item.text) return;
+  try {
+    const data = await api(`/api/chats/${state.chat.id}/queue/${item.id}`, {
+      method: 'PATCH',
+      body: { text },
+    });
+    applyQueue(data.queue);
+    toast('Задача в очереди изменена');
+  } catch (error) {
+    if (!error.unauthorized) toast(error.message || 'Не удалось изменить задачу');
+  }
+}
+
+async function deleteQueueItem(item) {
+  const ok = await confirmDialog(
+    'Убрать задачу из очереди?',
+    item.text || 'Задача с вложением будет удалена из очереди.',
+    'Убрать',
+    true,
+  );
+  if (!ok) return;
+  try {
+    const data = await api(`/api/chats/${state.chat.id}/queue/${item.id}`, { method: 'DELETE' });
+    applyQueue(data.queue);
+    toast('Задача убрана из очереди');
+  } catch (error) {
+    if (!error.unauthorized) toast(error.message || 'Не удалось убрать задачу');
+  }
+}
+
+async function startQueueItem(id) {
+  if (!state.chat || currentLiveRun()) return;
+  const chatId = state.chat.id;
+  const item = chatQueue().find((entry) => entry.id === id);
+  if (!item) return;
+  /* Убираем строку сразу и показываем вопрос в ленте: сервер начнёт работу
+     через мгновение, а человек не должен смотреть на пустоту. */
+  state.chat.queue = chatQueue().filter((entry) => entry.id !== id);
+  const attachments = (item.attachments || []).map((att) => ({
+    id: att.id,
+    name: att.name,
+    kind: att.kind,
+    label: att.kind === 'image' ? 'Изображение' : 'Файл',
+    size: att.size,
+  }));
+  state.chat.messages.push({
+    role: 'user',
+    content: item.text || '',
+    attachments,
+    at: new Date().toISOString(),
+  });
+  renderQueue();
+  renderThread();
+  setStreaming(true);
+  scrollToBottom(true);
+
+  try {
+    const response = await fetch(`/api/chats/${chatId}/queue/${id}/run`, {
+      method: 'POST',
+      credentials: 'same-origin',
+    });
+    if (!response.ok) {
+      let data = {};
+      try {
+        data = await response.json();
+      } catch {
+        data = {};
+      }
+      throw new Error(data.error || 'Не удалось запустить задачу');
+    }
+    const runId = response.headers.get('X-DShow-Run');
+    if (!runId || !response.body) throw new Error('Сервер не начал задачу');
+    const run = trackRun(runId, chatId);
+    const streamState = { controller: new AbortController(), run };
+    state.liveStreams.set(runId, streamState);
+    const ended = await readRunStream(response, streamState);
+    if (state.liveStreams.get(runId) === streamState) state.liveStreams.delete(runId);
+    if (!ended && state.liveRuns.has(runId)) await watchRun(runId, chatId);
+  } catch (error) {
+    if (error.name !== 'AbortError' && !error.unauthorized) toast(error.message || 'Не удалось запустить задачу');
+    setStreaming(Boolean(currentLiveRun()));
+    await reloadChatInPlace(chatId, { pollQueue: false });
   }
 }
 
