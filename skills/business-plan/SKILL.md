@@ -5,7 +5,7 @@ description: Как собрать бизнес-план и финмодель �
 
 # Бизнес-план и финмодель
 
-Итог — согласованный пакет: план (.docx или .pdf), модель (.xlsx с живыми формулами) и, если просят, презентация (.pptx). Числа в трёх файлах совпадают, каждое либо формула, либо источник.
+Итог — один основной файл, а модель — только если нужны живые расчёты: план текстом (.docx; .pdf — вместо него, когда просили для отправки) плюс финмодель (.xlsx с формулами). Не дублируй план в docx и pdf, презентация — только по просьбе. Числа в файлах совпадают, каждое либо формула, либо источник.
 
 ## Когда открывать
 
@@ -97,7 +97,7 @@ description: Как собрать бизнес-план и финмодель �
 
 ## Документы и инструменты
 
-- План: `create_word({ path, title, subtitle, cover: true, toc: true, sections: [{ heading, paragraphs, bullets, kpi, table, chart }] })`, 12–20 страниц, KPI-строка на первой. PDF — `create_pdf({ layout: 'document', sections })`.
+- План: `create_word({ path, title, subtitle, cover: true, toc: true, sections: [{ heading, paragraphs, bullets, kpi, table, chart }] })`, 12–20 страниц, KPI-строка на первой. PDF (`create_pdf({ layout: 'document', sections })`) — только если просили PDF, вместо Word, а не вместе с ним.
 - Модель: `create_excel({ path, sheets })` — один вызов на книгу, формулы строкой с «=», `numFmt` для денег и процентов, `freezeColumns`, `totalRow`, `conditional` (цветовая шкала), `chart` по строкам листа.
 - Презентация: `create_pptx({ path, title, slides })`, 10–14 слайдов, `layout`: cover / section / content / visual. Порядок: проблема → решение → рынок → продукт → бизнес-модель → traction → команда → финмодель → ask. Один слайд — одна мысль, заголовок-утверждение.
 - One-pager: `create_pdf({ layout: 'document', sections })` на страницу.

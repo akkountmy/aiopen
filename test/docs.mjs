@@ -322,6 +322,8 @@ test('стандарты подключаются к просьбе: финан�
 
   const plain = systemPrompt({ projectName: 'П', memory: '', userName: '', question: 'привет' });
   assert.match(plain, /Стандарты деловых документов/);
+  assert.match(plain, /Один результат — один файл/, 'один результат — один файл, без дублей форматов');
+  assert.match(plain, /Формат не назван/, 'формат не назван — выбрать редактируемый и предложить другой');
   assert.doesNotMatch(plain, /ФИНАНСОВЫЙ АНАЛИЗ/);
   const finance = systemPrompt({ projectName: 'П', memory: '', userName: '', question: 'посчитай юнит-экономику' });
   assert.match(finance, /ЛИСТ «Допущения»|лист «Допущения»/i);
