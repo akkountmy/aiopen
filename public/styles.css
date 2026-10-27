@@ -1029,10 +1029,22 @@ body.resizing {
   animation: live-pulse 1.6s ease-in-out infinite;
 }
 
+/* Кому движение мешает, точка всё равно должна показывать, что задача идёт:
+   вместо масштаба оставляем только прозрачность — она ничего не двигает. */
 @media (prefers-reduced-motion: reduce) {
   .chat-row .c-live,
   .project.live > .project-row .p-name::after {
-    animation: none;
+    animation: live-fade 1.8s ease-in-out infinite !important;
+  }
+}
+
+@keyframes live-fade {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 1;
   }
 }
 
@@ -1825,6 +1837,36 @@ html.kb-open .scroll-jump {
   flex-wrap: wrap;
   gap: 5px;
   margin: 4px 0 1px;
+}
+
+/* «Отвечаю на …»: короткая цитата запроса в шапке идущего ответа. Нужна,
+   когда задача считается долго: по ней видно, что работа идёт по последнему
+   сообщению, а не по прошлому. */
+.msg-ask {
+  margin: 2px 0 4px;
+  padding-left: 9px;
+  border-left: 2px solid rgba(86, 134, 254, 0.35);
+  color: var(--text-4);
+  font-size: var(--fs-12);
+  line-height: var(--lh-16);
+  overflow-wrap: anywhere;
+}
+
+/* Просьба в очереди — призрачный пузырь в ленте: то же место, что у обычного
+   сообщения человека, но пунктирная рамка и подпись, что она ещё ждёт. */
+.msg-queued .bubble {
+  border-style: dashed;
+  border-color: rgba(86, 134, 254, 0.45);
+  background: color-mix(in srgb, var(--layer-2) 70%, transparent);
+  color: var(--text-2);
+}
+
+.queued-note {
+  max-width: min(760px, 88%);
+  color: var(--text-4);
+  font-size: var(--fs-11);
+  line-height: var(--lh-16);
+  text-align: right;
 }
 
 .msg-mode {
@@ -4728,6 +4770,19 @@ html.kb-open .scroll-jump {
   * {
     animation-duration: 0.001ms !important;
     transition-duration: 0.001ms !important;
+  }
+}
+
+/* Windows умеет выключать эффекты анимации целиком — тогда общее правило выше
+   гасит и индикатор «работаю…»: на экране неподвижная точка, хотя задача идёт.
+   Для индикаторов оставляем самое мягкое движение — только прозрачность: оно
+   не крутится и не меняет размер, поэтому не мешает и тем, кому движение
+   неприятно, но по нему видно, что ассистент ещё работает. */
+@media (prefers-reduced-motion: reduce) {
+  .msg.streaming .msg-head .dot,
+  .spinner,
+  .spin-lg {
+    animation: live-fade 1.4s ease-in-out infinite !important;
   }
 }
 
