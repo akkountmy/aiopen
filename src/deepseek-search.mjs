@@ -66,8 +66,9 @@ function cleanUrl(raw) {
   if (!/^https?:/i.test(value)) return '';
   try {
     const url = new URL(value);
-    // Выдача DeepSeek иногда добавляет служебный якорь #1 к адресу.
-    if (/^#\d+$/.test(url.hash)) url.hash = '';
+    // Выдача DeepSeek иногда добавляет служебный якорь #1 к адресу — в том
+    // числе к ссылке, у которой уже есть свой #section. Снимаем только хвост.
+    if (url.hash) url.hash = url.hash.replace(/#\d+$/, '');
     return url.toString();
   } catch {
     return '';
