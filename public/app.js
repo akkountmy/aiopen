@@ -8229,6 +8229,18 @@ function isEditableElement(element) {
   );
 }
 
+/* Снять «клавиатурную» вёрстку: окно снова занимает всю видимую область.
+   Нужна и при штатном закрытии клавиатуры, и когда телефон вернулся из
+   другого приложения уже без неё, а события visualViewport не пришли. */
+function dropKeyboardLayout() {
+  const root = document.documentElement;
+  root.classList.remove('kb-open');
+  root.style.removeProperty('--app-h');
+  root.style.removeProperty('--kb-pan');
+  KB_VIEW.open = false;
+  KB_VIEW.h = KB_VIEW.pan = -1;
+}
+
 function syncKeyboardViewport() {
   const vv = window.visualViewport;
   if (!vv) return;
@@ -8265,7 +8277,10 @@ function syncKeyboardViewport() {
      не замечало, поле оказывалось под ней, а потом всё прыгало вверх на
      высоту порога. Следим с первого же пикселя. */
   const shrunk = viewH < KB_VIEW.base - 1;
-  const shouldOpen = shrunk || compactAuth;
+  /* Клавиатура бывает только там, где что-то редактируется. Если фокуса в поле
+     нет, а видимая область меньше окна — это застрявшие после возврата из
+     другого приложения размеры; по ним окно не урезаем. */
+  const shouldOpen = (shrunk && (editing || KB_VIEW.open)) || compactAuth;
   if (shouldOpen) {
     if (!KB_VIEW.open) {
       root.classList.add('kb-open');
@@ -8283,11 +8298,7 @@ function syncKeyboardViewport() {
       KB_VIEW.pan = pan;
     }
   } else if (KB_VIEW.open) {
-    root.classList.remove('kb-open');
-    root.style.removeProperty('--app-h');
-    root.style.removeProperty('--kb-pan');
-    KB_VIEW.open = false;
-    KB_VIEW.h = KB_VIEW.pan = -1;
+    dropKeyboardLayout();
   }
   /* Карточка в панели проектов/файлов не должна прятаться за клавиатурой:
      пересчитываем её положение по новой видимой высоте. */
@@ -8317,6 +8328,43 @@ function syncKeyboardViewport() {
     }, 250),
   );
 })();
+
+/* Возврат в приложение: экран разбудили, переключились из другого приложения,
+   снова открыли ярлык. События visualViewport в этот момент приходят не
+   всегда, и окно оставалось в «клавиатурной» вёрстке: подвал висел над пустым
+   низом экрана, а касание диалога ничего не меняло — пересчёт случался только
+   после касания поля ввода. Клавиатуры без фокуса в поле не бывает, поэтому
+   при возврате сразу снимаем такую вёрстку и пересчитываем экран. */
+function resyncAfterReturn() {
+  if (document.hidden) return;
+  const authVisible = !document.getElementById('auth')?.classList.contains('hidden');
+  if (!authVisible && !isEditableElement(document.activeElement)) dropKeyboardLayout();
+  settleKeyboardViewport();
+}
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) resyncAfterReturn();
+});
+window.addEventListener('pageshow', resyncAfterReturn);
+window.addEventListener('focus', resyncAfterReturn);
+
+/* Касание любой области диалога: если клавиатурная вёрстка осталась, а поле
+   ввода уже не в фокусе (телефон убрал клавиатуру сам), возвращаем окно на
+   место по касанию. Поле ввода, подвал и карточки не трогаем — там клавиатура
+   нужна и вёрстку считает focusin/visualViewport. */
+document.addEventListener(
+  'pointerdown',
+  (event) => {
+    if (!KB_VIEW.open) return;
+    if (isEditableElement(event.target)) return;
+    if (event.target.closest?.('.composer-wrap, .popover, .modal, #auth')) return;
+    setTimeout(() => {
+      if (!KB_VIEW.open || document.hidden) return;
+      if (isEditableElement(document.activeElement)) return;
+      dropKeyboardLayout();
+    }, 200);
+  },
+  true,
+);
 
 /* Клавиатура выезжает с анимацией 250–350 мс, на медленных телефонах дольше.
    События visualViewport приходят не на каждом кадре, поэтому дополнительно
