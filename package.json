@@ -22,6 +22,7 @@
     "test:ui-sheet": "node test/ui-modal-sheet.mjs",
     "test:ui-swipe": "node test/ui-swipe.mjs",
     "test:ui-version": "node test/ui-version.mjs",
+    "test:reasoning": "node --test test/reasoning.mjs",
     "test:browser": "node test/browser.mjs",
     "test:browser-engines": "node test/browser-engines.mjs"
   },

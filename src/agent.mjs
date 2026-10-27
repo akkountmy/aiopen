@@ -3,6 +3,7 @@ import { documentExcerpt, documentKind } from './doccheck.mjs';
 import { getDeepSeekKey } from './keys.mjs';
 import { chooseProfile } from './model.mjs';
 import { createNarrationGate } from './narration.mjs';
+import { createReasoningGate, looksRussian } from './reasoning.mjs';
 import { summaryPrompt, systemPrompt, titlePrompt } from './prompt.mjs';
 import { describeReview, reviewAnswer } from './review.mjs';
 import { skillsPromptText } from './skills.mjs';
@@ -200,6 +201,57 @@ export async function simpleCompletion(messages, { maxTokens = 500, signal, effo
     onUsage(Number(json.usage.prompt_tokens || 0), Number(json.usage.completion_tokens || 0));
   }
   return String(json?.choices?.[0]?.message?.content || '').trim();
+}
+
+
+/* Переводчик хода рассуждений: модель думает по-английски, а человек просил
+   видеть только русский. Сохраняем структуру, числа, имена и код. */
+const REASONING_TRANSLATOR =
+  'Ты переводишь ход рассуждений ИИ на русский язык. Сохрани структуру, абзацы, ' +
+  'числа, имена, пути и код без изменений. Верни только перевод — без пояснений, ' +
+  'вступлений и кавычек вокруг текста.';
+
+/** Режем длинные рассуждения по границам предложений, чтобы перевод не обрезался. */
+function splitReasoning(text, limit = 3500) {
+  const parts = [];
+  let rest = String(text || '');
+  while (rest.length > limit) {
+    let cut = rest.lastIndexOf('\n\n', limit);
+    if (cut < limit * 0.4) cut = rest.lastIndexOf('. ', limit);
+    if (cut < limit * 0.4) cut = rest.lastIndexOf(' ', limit);
+    if (cut <= 0) cut = limit;
+    parts.push(rest.slice(0, cut + 1));
+    rest = rest.slice(cut + 1);
+  }
+  if (rest.trim()) parts.push(rest);
+  return parts;
+}
+
+async function translateReasoning(text, { signal, onUsage } = {}) {
+  const source = String(text || '').trim();
+  if (!source || looksRussian(source)) return source;
+  const out = [];
+  for (const part of splitReasoning(source)) {
+    try {
+      const translated = await simpleCompletion(
+        [
+          { role: 'system', content: REASONING_TRANSLATOR },
+          { role: 'user', content: part },
+        ],
+        {
+          maxTokens: Math.min(3000, Math.max(600, Math.ceil(part.length / 1.5))),
+          signal,
+          effort: 'low',
+          onUsage,
+        },
+      );
+      if (translated) out.push(translated);
+    } catch {
+      if (signal?.aborted) break;
+      /* Часть не перевелась — остальное всё равно пробуем. */
+    }
+  }
+  return out.join('\n\n').trim();
 }
 
 
@@ -552,6 +604,22 @@ export async function runTurn({
     /* У каждого шага свой буфер начала реплики — см. src/narration.mjs. */
     const narration = createNarrationGate({ emit: (text) => emit({ type: 'delta', text }) });
 
+    /* Рассуждения показываем только по-русски: английский оригинал копим и
+       переводим к концу шага — см. src/reasoning.mjs. */
+    const reasoningGate = thinking
+      ? createReasoningGate({
+          emit: (text) => emit({ type: 'reasoning', text }),
+          translate: (text) =>
+            translateReasoning(text, {
+              signal,
+              onUsage: (tokensIn, tokensOut) => {
+                usage.tokensIn += tokensIn;
+                usage.tokensOut += tokensOut;
+              },
+            }),
+        })
+      : null;
+
     const result = await callModel(
       {
         model: route.model,
@@ -567,13 +635,16 @@ export async function runTurn({
            это был ход мысли («I'll start by…»), и в ленту он не пойдёт. */
         onDelta: (text) => narration.push(text),
         onReasoning: (text) => {
-          if (thinking) emit({ type: 'reasoning', text });
+          reasoningGate?.push(text);
         },
       },
       { fallbackModel: ESCALATION.flashModel },
     );
 
-    if (thinking && result.reasoning) reasoningText = (reasoningText + result.reasoning).slice(-24000);
+    if (reasoningGate) {
+      const shownReasoning = await reasoningGate.finish();
+      if (shownReasoning) reasoningText = (reasoningText + shownReasoning).slice(-24000);
+    }
 
     /* Проверяем, был ли шаг ответом; при вызове инструментов реплика шага
        выбрасывается целиком — ни в поток, ни в итоговый текст ответа. */
@@ -759,6 +830,19 @@ export async function runTurn({
       /* Карточка задачи в финальном сообщении помогает итогу быть по делу:
          модель называет готовые файлы, а не пересказывает процесс. */
       const card = taskSummaryLine(chat.task);
+      const wrapGate = thinking
+        ? createReasoningGate({
+            emit: (text) => emit({ type: 'reasoning', text }),
+            translate: (text) =>
+              translateReasoning(text, {
+                signal,
+                onUsage: (tokensIn, tokensOut) => {
+                  usage.tokensIn += tokensIn;
+                  usage.tokensOut += tokensOut;
+                },
+              }),
+          })
+        : null;
       const result = await callModel(
         {
           model: route.model,
@@ -774,7 +858,7 @@ export async function runTurn({
           signal,
           onDelta: (text) => emit({ type: 'delta', text }),
           onReasoning: (text) => {
-            if (thinking) emit({ type: 'reasoning', text });
+            wrapGate?.push(text);
           },
         },
         { fallbackModel: ESCALATION.flashModel },
@@ -783,7 +867,10 @@ export async function runTurn({
         usage.tokensIn += result.usage.prompt_tokens || 0;
         usage.tokensOut += result.usage.completion_tokens || 0;
       }
-      if (thinking && result.reasoning) reasoningText = (reasoningText + result.reasoning).slice(-24000);
+      if (wrapGate) {
+        const shownReasoning = await wrapGate.finish();
+        if (shownReasoning) reasoningText = (reasoningText + shownReasoning).slice(-24000);
+      }
       finalText += result.text || '';
       chat.history.push({ role: 'assistant', content: result.text || '' });
       finished = true;
