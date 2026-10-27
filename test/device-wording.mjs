@@ -10,12 +10,14 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { deleteTestFile, skipOnLive } from './safe-live.mjs';
 
 const BASE = process.env.DSHOW_BASE || 'http://127.0.0.1:3131';
 const USER = process.env.DSHOW_USER || 'admin';
 const PASS = process.env.DSHOW_PASS || 'Test-pass-2026';
 const STAMP = Date.now().toString().slice(-6);
 const FILE_NAME = `hint-${STAMP}.docx`;
+skipOnLive(BASE, 'проверка подсказок');
 
 const DESKTOP_UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36';
@@ -121,6 +123,8 @@ function connect(wsUrl) {
   };
 }
 
+let uploadedProjectId = '';
+
 try {
   await browserWs();
   const cdp = connect(await pageWs());
@@ -191,7 +195,7 @@ try {
   );
   loginStatus === 200 ? ok('вход в сервис') : fail('вход', loginStatus);
 
-  await evaluate(
+  uploadedProjectId = await evaluate(
     `(async () => {
        const boot = await (await fetch('/api/bootstrap')).json();
        let project = (boot.projects || [])[0];
@@ -261,6 +265,7 @@ try {
 
   await cdp.send('Emulation.clearDeviceMetricsOverride');
 } finally {
+  if (uploadedProjectId) await deleteTestFile(BASE, USER, PASS, uploadedProjectId, FILE_NAME).catch(() => {});
   chrome.kill();
   try {
     fs.rmSync(profileDir, { recursive: true, force: true });

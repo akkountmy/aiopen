@@ -14,12 +14,20 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { deleteTestFile, skipOnLive } from './safe-live.mjs';
 
 const BASE = process.env.DSHOW_BASE || 'http://127.0.0.1:3131';
 const USER = process.env.DSHOW_USER || 'admin';
 const PASS = process.env.DSHOW_PASS || 'Test-pass-2026';
-const FILE_NAME = `panels-${Date.now().toString().slice(-6)}.txt`;
+/* Имя не должно попадать под TEST_ARTIFACT в src/tools.mjs: такие файлы сервис
+   намеренно прячет из панели, и проверка искала бы невидимую строку. */
+const FILE_NAME = `panel-check-${Date.now().toString().slice(-6)}.txt`;
 const STAMP = Date.now().toString().slice(-6);
+skipOnLive(BASE, 'проверка панелей');
+
+let testProjectId = '';
+let pickerProjectId = '';
+let pickerFile = '';
 
 const CHROME_CANDIDATES = [
   path.join(process.env['ProgramFiles'] || 'C:\\Program Files', 'Google', 'Chrome', 'Application', 'chrome.exe'),
@@ -192,28 +200,50 @@ try {
   loginStatus === 200 ? ok('вход в сервис') : fail('вход', loginStatus);
 
   // 2. проект, диалог и файл — чтобы обе панели были наполнены
-  const project = await evaluate(
+  const testProject = await evaluate(
     `(async () => {
        const boot = await (await fetch('/api/bootstrap')).json();
        let project = (boot.projects || [])[0];
        if (!project) project = (await (await fetch('/api/projects', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({name:'Проверка панелей'})})).json()).project;
        const chats = project.chats || [];
        if (!chats.length) await fetch('/api/projects/' + project.id + '/chats', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({title:'Проверка панелей'})});
-       await fetch('/api/projects/' + project.id + '/upload?path=' + encodeURIComponent(${JSON.stringify(FILE_NAME)}), {
+       const up = await fetch('/api/projects/' + project.id + '/upload?path=' + encodeURIComponent(${JSON.stringify(FILE_NAME)}), {
          method: 'POST',
          headers: { 'x-filename': encodeURIComponent(${JSON.stringify(FILE_NAME)}) },
          body: 'проверка',
        });
-       return project.id;
+       if (up.status !== 200) throw new Error('upload ' + up.status);
+       return { id: project.id, name: project.name };
      })()`,
   );
+  testProjectId = testProject.id;
   await goto(BASE + '/');
   const appReady = await waitFor(`!!document.getElementById('app') && !document.getElementById('app').classList.contains('hidden')`);
   appReady ? ok('рабочее окно загрузилось') : fail('окно', 'приложение не показалось');
   /* Свежий запуск показывает стартовый экран без открытого диалога — чтобы
-     проверить шапку и панели, сначала открываем диалог, как это сделал бы человек. */
-  await evaluate(`document.querySelector('.chat-row')?.click()`);
+     проверить шапку и панели, сначала открываем диалог, как это сделал бы человек.
+     Диалог открываем именно в том проекте, куда положили файл: на сервере могут
+     остаться другие проекты от прошлых проверок, и «первая строка списка» была бы
+     чужим диалогом — панель файлов справедливо показала бы чужой проект. */
+  const openTestChat = `(() => {
+    const block = [...document.querySelectorAll('.project')].find(
+      (p) => (p.querySelector('.p-name') || {}).textContent.trim() === ${JSON.stringify(testProject.name)},
+    );
+    if (!block) return false;
+    const chat = block.querySelector('.chat-row .row-main');
+    if (chat) { chat.click(); return true; }
+    block.querySelector('.project-row .row-main').click();
+    return false;
+  })()`;
+  const chatOpened = await evaluate(openTestChat);
+  if (!chatOpened) {
+    await sleep(300);
+    await evaluate(openTestChat);
+  }
   await waitFor(`(document.querySelector('#crumbChat')?.textContent || '').trim().length > 0`);
+  await waitFor(
+    `[...document.querySelectorAll('#filesList .file-row')].some((row) => row.textContent.includes(${JSON.stringify(FILE_NAME)}))`,
+  );
 
   // 3. панели одинаковой ширины
   const panels = await evaluate(`(() => { ${MEASURE}
@@ -554,7 +584,8 @@ try {
      Раньше ручной выбор в заголовке расходился с активным проектом, и фоновая
      сверка подменяла список — файлы «пропадали» через несколько секунд.
      Крестика закрытия в шапке панели нет. */
-  const PICK_FILE = `picker-${STAMP}.txt`;
+  const PICK_FILE = `picker-check-${STAMP}.txt`;
+  pickerFile = PICK_FILE;
   const pickerSetup = await evaluate(`(async () => {
     const boot = await (await fetch('/api/bootstrap')).json();
     const activeNode = document.querySelector('.project.active .p-name');
@@ -566,11 +597,12 @@ try {
       headers: { 'x-filename': encodeURIComponent(${JSON.stringify(PICK_FILE)}) },
       body: 'файл другого проекта',
     });
-    return { other: other.name, current };
+    return { other: other.name, otherId: other.id, current };
   })()`);
   if (pickerSetup.missing) {
     fail('заголовок панели файлов', 'нет второго проекта');
   } else {
+    pickerProjectId = pickerSetup.otherId;
     const noClose = await evaluate(`!document.getElementById('filesClose')`);
     noClose
       ? ok('крестика закрытия в шапке панели файлов нет')
@@ -631,7 +663,10 @@ try {
       ));
     switched
       ? ok('проект, открытый слева, показывает в панели свои файлы', pickerSetup.other)
-      : fail('переключение проекта в панели', await text('#filesList'));
+      : fail(
+          'переключение проекта в панели',
+          await evaluate(`(document.getElementById('filesList') || {}).innerText || ''`),
+        );
 
     /* Фоновая сверка с сервером (раз в 20 секунд) не должна подменять список
        файлами другого проекта — это и был баг «файлы пропадают». */
@@ -816,6 +851,8 @@ try {
 } catch (error) {
   fail('ход проверки', error.message);
 } finally {
+  await deleteTestFile(BASE, USER, PASS, testProjectId, FILE_NAME).catch(() => {});
+  await deleteTestFile(BASE, USER, PASS, pickerProjectId, pickerFile).catch(() => {});
   chrome.kill();
   await sleep(400);
   fs.rmSync(profileDir, { recursive: true, force: true });

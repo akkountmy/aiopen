@@ -92,15 +92,24 @@ test('инструмент extract_archive отказывает на rar пон�
   await assert.rejects(() => executeTool('extract_archive', { path: rel }, { workspace: project }), /только \.zip/);
 });
 
-test('инструмент extract_archive распаковывает и называет файлы для чтения', async () => {
+test('инструмент extract_archive распаковывает в скрытую папку и называет файлы для чтения', async () => {
   const buf = await makeZip({ 'текст.md': '# заголовок' });
   fs.writeFileSync(path.join(project, 'Пакет.zip'), buf);
   const result = await executeTool('extract_archive', { path: 'Пакет.zip' }, { workspace: project });
   assert.match(result.text, /Распаковано 1 файл/);
   /* Подсказка обязана давать путь от корня проекта: иначе модель зовёт
-     read_document без папки и получает «файла нет». */
-  assert.match(result.text, /Пакет\/текст\.md/);
-  assert.ok(fs.existsSync(path.join(project, 'Пакет', 'текст.md')));
+     read_document без папки и получает «файла нет». По умолчанию архив
+     распаковывается в скрытую рабочую папку, чтобы не засорять панель. */
+  assert.match(result.text, /\.dshow\/work\/unpacked\/Пакет\/текст\.md/);
+  assert.ok(fs.existsSync(path.join(project, '.dshow', 'work', 'unpacked', 'Пакет', 'текст.md')));
+});
+
+test('явная папка extract_archive остаётся видимой пользователю', async () => {
+  const buf = await makeZip({ 'итог.txt': 'готово' });
+  fs.writeFileSync(path.join(project, 'Видимый.zip'), buf);
+  const result = await executeTool('extract_archive', { path: 'Видимый.zip', to: 'Материалы' }, { workspace: project });
+  assert.match(result.text, /Материалы\/итог\.txt/);
+  assert.ok(fs.existsSync(path.join(project, 'Материалы', 'итог.txt')));
 });
 
 test('битый zip объясняется по-русски, а не стеком jszip', async () => {
@@ -108,13 +117,13 @@ test('битый zip объясняется по-русски, а не стек�
   await assert.rejects(() => executeTool('extract_archive', { path: 'сломанный.zip' }, { workspace: project }), /не открывается/);
 });
 
-test('одиночный .gz разворачивается в свою папку', async () => {
+test('одиночный .gz разворачивается в скрытую папку', async () => {
   const url = path.join(project, 'заметки.txt.gz');
   fs.writeFileSync(url, zlib.gzipSync(Buffer.from('текст из gz', 'utf8')));
   const result = await executeTool('extract_archive', { path: 'заметки.txt.gz' }, { workspace: project });
   assert.match(result.text, /Распаковано 1 файл/);
-  assert.match(result.text, /заметки\/заметки\.txt/);
-  assert.equal(fs.readFileSync(path.join(project, 'заметки', 'заметки.txt'), 'utf8'), 'текст из gz');
+  assert.match(result.text, /\.dshow\/work\/unpacked\/заметки\/заметки\.txt/);
+  assert.equal(fs.readFileSync(path.join(project, '.dshow', 'work', 'unpacked', 'заметки', 'заметки.txt'), 'utf8'), 'текст из gz');
 });
 
 test('испорченный .gz не роняет инструмент', async () => {
@@ -134,7 +143,7 @@ test('папка распаковки не может быть файлом пр
   const buf = await makeZip({ 'а.txt': 'а' });
   fs.writeFileSync(path.join(project, 'занято.zip'), buf);
   fs.writeFileSync(path.join(project, 'занято'), 'это файл', 'utf8');
-  await assert.rejects(() => executeTool('extract_archive', { path: 'занято.zip' }, { workspace: project }), /это файл проекта/);
+  await assert.rejects(() => executeTool('extract_archive', { path: 'занято.zip', to: 'занято' }, { workspace: project }), /это файл проекта/);
 });
 
 /* ---------- ссылки ---------- */

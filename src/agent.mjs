@@ -3,7 +3,7 @@ import { documentExcerpt, documentKind } from './doccheck.mjs';
 import { getDeepSeekKey } from './keys.mjs';
 import { chooseProfile } from './model.mjs';
 import { createNarrationGate } from './narration.mjs';
-import { summaryPrompt, systemPrompt } from './prompt.mjs';
+import { summaryPrompt, systemPrompt, titlePrompt } from './prompt.mjs';
 import { describeReview, reviewAnswer } from './review.mjs';
 import { skillsPromptText } from './skills.mjs';
 import { continuePrompt, taskSummaryLine, updateTaskState } from './taskstate.mjs';
@@ -254,9 +254,10 @@ function buildUserContent(text, images) {
  * @param {AbortSignal} params.signal
  */
 /* Что доступно субагенту: чтение, анализ, веб, расчёты и запись — но только в
-   свою папку `parts/<слаг>/`. Так четыре воркера могут готовить четыре части
-   одного отчёта параллельно и не затирать файлы друг друга: основная задача
-   потом читает готовые части и сводит их. */
+   свою папку `.dshow/work/parts/<слаг>/`. Так четыре воркера могут готовить
+   четыре части одного отчёта параллельно и не затирать файлы друг друга:
+   основная задача потом читает готовые части и сводит их. Скрытая папка не
+   засоряет пользователю блок «Файлы проекта». */
 const SUBAGENT_TOOLS = [
   'list_files',
   'read_file',
@@ -290,7 +291,7 @@ const SUBAGENT_BRIEF =
   'Ты субагент внутри большой задачи. Работай самостоятельно и экономно: ' +
   'проверь факты инструментами, не пересказывай задание, не задавай вопросов. ' +
   'Верни сжатый отчёт: что проверил, что получил (числа с источником), где сомнения. ' +
-  'Если для твоей части нужен файл — создай его в своей папке parts/ и укажи путь в отчёте; ' +
+  'Если для твоей части нужен файл — создай его в своей папке .dshow/work/parts/ и укажи путь в отчёте; ' +
   'файлы вне своей папки писать нельзя, их сведёт основная задача.';
 
 /** Оставляет в списке инструментов только разрешённые имена. */
@@ -465,7 +466,7 @@ export async function runTurn({
       const nested = { history: [], memory: null };
       /* Своя папка на воркера: части одного отчёта не конфликтуют, а основная
          задача видит, чей файл чей. */
-      const folder = `parts/${String(index + 1).padStart(2, '0')}-${slugify(task.name)}`;
+      const folder = `.dshow/work/parts/${String(index + 1).padStart(2, '0')}-${slugify(task.name)}`;
       try {
         const outcome = await runTurn({
           workspace,
@@ -842,15 +843,91 @@ export async function runTurn({
   return { text: finalText, usage, tools: toolsUsed, steps, memory: chat.memory, trim: trimStats, route, review, reasoning: reasoningText };
 }
 
-export async function generateTitle(text, { signal } = {}) {
+/* Название диалога не должно зависеть от модели: если её ответ пустой,
+   запоздал или не разобрался, диалог всё равно получает рабочее имя по
+   первой реплике. Это запасной путь, а не замена названию от модели. */
+const TITLE_LEAD = /^(привет|здравствуй(?:те)?|добрый (?:день|вечер)|доброе утро|хай|ку|приветствую)(?![а-яёa-z])[\s!,.-]*/i;
+const TITLE_VERB = /^(сделай(?:те)?|сделать|собери(?:те)?|собрать|подготовь(?:те)?|подготовить|составь(?:те)?|составить|напиши(?:те)?|написать|создай(?:те)?|создать|проверь(?:те)?|проверить|покажи(?:те)?|показать|расскажи(?:те)?|рассказать|помоги(?:те)?|помочь|нужно|надо|необходимо)(?![а-яёa-z])[\s,:—–-]*/i;
+const TITLE_STOP = /^(чтобы|что|как|почему|зачем|когда|где|кто|ли|можно|не|в|во|на|по|для|с|со|у|о|об|это|мне|нам|пожалуйста)(?![а-яёa-z])/i;
+const TITLE_PLEASE = /^(пожалуйста|плиз)(?![а-яёa-z])[\s,]+/i;
+const TITLE_GENERIC = /^(новый диалог|диалог|беседа|чат|без названия|название|тема|заголовок)$/i;
+
+/** Короткое название из текста: первая мысль без приветствия и «сделай». */
+export function titleFromText(value) {
+  const original = String(value || '').replace(/\s+/g, ' ').trim();
+  if (!original) return '';
+  let text = original.replace(TITLE_LEAD, '').replace(TITLE_PLEASE, '').trim();
+  if (!text) text = original;
+  /* «Собери отчёт» → «Отчёт», но «Проверь, чтобы…» оставляем: иначе от
+     названия останется одно «чтобы». */
+  for (let step = 0; step < 2; step += 1) {
+    text = text.replace(TITLE_PLEASE, '').trim();
+    const match = text.match(TITLE_VERB);
+    if (!match) break;
+    const rest = text.slice(match[0].length).replace(TITLE_PLEASE, '').trim();
+    if (!rest || TITLE_STOP.test(rest)) break;
+    text = rest;
+  }
+  text = text.split(/(?<=[.!?])\s+|\n+/)[0] || text;
+  text = text.replace(/\.(pdf|docx?|xlsx?|pptx?|csv|txt|md|png|jpe?g|webp|zip)$/i, '');
+  const words = text.split(/\s+/).filter(Boolean);
+  if (words.length > 8) text = words.slice(0, 8).join(' ');
+  if (text.length > 80) {
+    const cut = text.slice(0, 80).lastIndexOf(' ');
+    text = cut > 24 ? text.slice(0, cut) : text.slice(0, 80);
+  }
+  text = text.replace(/[\s,;:—–-]+$/, '').replace(/[.!?]+$/, '').trim();
+  if (!text) return '';
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+/** Ответ модели приводим к одному названию: без «Название:», кавычек и точки. */
+export function normalizeTitle(value) {
+  const lines = String(value || '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  let text = lines[0] || '';
+  /* Модель иногда пишет «Вот название:» отдельной строкой, а само название —
+     следующей. Пустую пометку за название не принимаем. */
+  const first = text.replace(/^[#*\-\s]+/, '');
+  if (
+    lines[1] &&
+    /^(?:.*[.!?]\s*)?(?:вот\s+)?(?:название|тема|заголовок)\s*[*]*\s*[:\-—][*]*\s*$/i.test(first)
+  ) {
+    text = lines[1];
+  }
+  text = text.replace(/^[#*\-\s]+/, '');
+  const labelled = text.match(/(?:название|тема|заголовок)\s*[*]*\s*[:\-—][*]*\s*(.+)$/i);
+  if (labelled) text = labelled[1];
+  text = text
+    .replace(/^(название|тема|заголовок)\s*[*]*\s*[:\-—][*]*\s*/i, '')
+    .replace(/\s+/g, ' ')
+    .replace(/[.;:,!?]+$/, '')
+    .trim()
+    .replace(/^["'«»„“”`*]+|["'«»„“”`*]+$/g, '')
+    .trim();
+  if (text.length > 80) {
+    const cut = text.slice(0, 80).lastIndexOf(' ');
+    text = (cut > 24 ? text.slice(0, cut) : text.slice(0, 80)).trim();
+  }
+  text = text.replace(/[.;:,!?]+$/, '').trim();
+  return TITLE_GENERIC.test(text) ? '' : text;
+}
+
+/**
+ * Название диалога по первой реплике. Пустая строка — сигнал «взять запасное
+ * имя»: сервис не должен оставлять диалог безымянным из-за сбоя модели.
+ */
+export async function generateTitle(text, { signal, files = [] } = {}) {
   const clean = String(text || '').trim();
   if (!clean) return '';
   try {
     const raw = await simpleCompletion(
-      [{ role: 'user', content: `Придумай короткое название (2–5 слов) для диалога по первой реплике. Только название, без кавычек и точки.\n\nРеплика: ${clean.slice(0, 500)}` }],
+      [{ role: 'user', content: titlePrompt(clean, files) }],
       { maxTokens: 400, signal, effort: 'low' },
     );
-    return raw.replace(/^["В«В»'`]+|["В«В»'`]+$/g, '').replace(/\s+/g, ' ').slice(0, 80);
+    return normalizeTitle(raw);
   } catch {
     return '';
   }

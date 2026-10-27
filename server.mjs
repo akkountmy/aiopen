@@ -22,7 +22,7 @@ import {
   sessionLimit,
   taskLimitUsd,
 } from './src/config.mjs';
-import { describeFailure, generateTitle, runTurn } from './src/agent.mjs';
+import { describeFailure, generateTitle, titleFromText, runTurn } from './src/agent.mjs';
 import {
   DASHBOARD_FILES_SUBDIR,
   DASHBOARD_LIMITS,
@@ -367,10 +367,11 @@ function finishRun(run, status) {
    Предел попыток нужен, чтобы задача, которая сама роняет процесс, не
    перезапускалась бесконечно. После исчерпания попыток в диалоге остаётся
    честное сообщение — и только тогда человека просят продолжить вручную. */
-const RESUME_MAX_ATTEMPTS = 3;
+const RESUME_MAX_ATTEMPTS = 10;
 /* Старые пометки о перезапуске не воскрешаем бесконечно: задача недельной
-   давности уже не та, что была, и тратить на неё деньги без спроса нельзя. */
-const RESUME_MAX_AGE_MS = 72 * 60 * 60 * 1000;
+   давности уже не та, что была, и тратить на неё деньги без спроса нельзя.
+   Но и суток мало: выкладка или длинный сбой не должны терять работу. */
+const RESUME_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 /* Как часто сохранять историю идущей задачи. Компромисс: потерять при сбое
    успевают несколько секунд работы, а диск не переписывается на каждый токен. */
 const PROGRESS_SAVE_MS = 8000;
@@ -1767,6 +1768,46 @@ async function handleMessageStream(req, res, user, chatId) {
   });
 }
 
+/* Диалог без имени: интерфейс создаёт его как «Новый диалог», и только
+   первый вопрос может дать ему настоящее название. */
+function isUntitledChat(chat) {
+  const title = String(chat?.title || '').trim();
+  return !title || title === 'Новый диалог';
+}
+
+/* Имя ставим только пустому диалогу. `expect` защищает от гонки: пока модель
+   придумывала название, человек мог переименовать диалог сам — такое имя не
+   перезаписываем. */
+function assignChatTitle(chat, title, stream, { expect = null } = {}) {
+  const value = String(title || '').trim().slice(0, 120);
+  if (!value) return false;
+  const allowed = expect === null ? isUntitledChat(chat) : chat.title === expect;
+  if (!allowed) return false;
+  const meta = store.renameChat(chat.id, value);
+  if (!meta) return false;
+  /* Метаданные и объект в памяти должны совпадать: иначе уведомление и
+     следующий ход увидят старое «Новый диалог». */
+  chat.title = meta.title;
+  stream.emit({ type: 'title', title: meta.title });
+  return true;
+}
+
+/* Сразу даём диалогу запасное имя по реплике, а модель параллельно уточняет
+   его. Даже если название от модели не придёт, диалог не останется безымянным. */
+function startChatTitle({ chat, seed, files, stream, signal }) {
+  const fallback = titleFromText(seed);
+  if (fallback) assignChatTitle(chat, fallback, stream);
+  const expected = fallback || chat.title;
+  return generateTitle(seed, { signal, files })
+    .then((title) => {
+      if (!title || title === expected) return;
+      assignChatTitle(chat, title, stream, { expect: expected });
+    })
+    .catch(() => {
+      /* запасное имя уже стоит */
+    });
+}
+
 /* Сама работа. Живёт своей жизнью: её не останавливает закрытие вкладки, а все
    события складываются в запуск — подключиться и догнать можно в любой момент. */
 async function executeRun(run, job) {
@@ -1783,6 +1824,7 @@ async function executeRun(run, job) {
   const stream = { emit: (data) => publishRun(run, data) };
 
   let assistantText = '';
+  let titleWork = null;
   try {
     let attachments = [];
     let ctx = { text: '', images: [] };
@@ -1847,6 +1889,15 @@ async function executeRun(run, job) {
       ? resumeTaskText(chat, text, resumeUser)
       : [text, ctx.text].filter(Boolean).join('\n\n');
     stream.emit({ type: 'start' });
+
+    /* Первый вопрос сразу даёт диалогу рабочее имя: человек видит тему в
+       списке, пока задача ещё идёт. Модель уточняет название параллельно,
+       запасное имя остаётся, даже если она не ответит. */
+    if (isFirstMessage && isUntitledChat(chat)) {
+      const files = attachments.map((att) => att.name).filter(Boolean);
+      const seed = [text, ...files].filter(Boolean).join('\n');
+      if (seed) titleWork = startChatTitle({ chat, seed, files, stream, signal: controller.signal });
+    }
 
     /* Прошлые диалоги этого же проекта: короткая выжимка, чтобы новый разговор
        продолжал работу, а не начинался с чистого листа. Сбой здесь не должен
@@ -1976,12 +2027,19 @@ async function executeRun(run, job) {
     });
     saveRunChat(chat);
 
-    if (isFirstMessage && (!chat.title || chat.title === 'Новый диалог')) {
-      const title = await generateTitle(text || assistantText, { signal: controller.signal }).catch(() => '');
-      if (title) {
-        store.renameChat(chat.id, title);
-        stream.emit({ type: 'title', title });
-      }
+    if (titleWork) {
+      /* Ждём не дольше четырёх секунд: имя уже стоит запасное, а ответ
+         пользователю не должен задерживаться из-за названия. */
+      await Promise.race([
+        titleWork,
+        new Promise((resolve) => {
+          const timer = setTimeout(resolve, 4000);
+          timer.unref?.();
+        }),
+      ]);
+    }
+    if (isFirstMessage && isUntitledChat(chat)) {
+      assignChatTitle(chat, titleFromText(assistantText) || 'Диалог', stream);
     }
     stream.emit({ type: 'done', usage: outcome.usage, tools: outcome.tools.length, balanceUsd });
     finishRun(run, 'done');

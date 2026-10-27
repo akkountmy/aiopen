@@ -171,7 +171,7 @@ async function api(path, { cookie, method = 'GET', body } = {}) {
 }
 
 /* Поток событий задачи: собираем всё до конца или до обрыва. */
-async function readRunStream(response, { abortAfterEvents = 0 } = {}) {
+async function readRunStream(response, { abortAfterEvents = 0, abortAfterType = '' } = {}) {
   const events = [];
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
@@ -202,6 +202,14 @@ async function readRunStream(response, { abortAfterEvents = 0 } = {}) {
         if (event.type === 'end') ended = true;
         if (abortAfterEvents && events.length >= abortAfterEvents) {
           /* Чтение не ждём: соединение всё равно сейчас оборвём. */
+          try {
+            reader.cancel();
+          } catch {
+            /* ignore */
+          }
+          return { events, ended: false };
+        }
+        if (abortAfterType && event.type === abortAfterType) {
           try {
             reader.cancel();
           } catch {
@@ -279,7 +287,7 @@ try {
   /* 1. Обрыв соединения посреди ответа — задача продолжается. */
   const first = await startRun(laptop, 'Расскажи про Делимобиль');
   check(Boolean(first.runId), 'сервис вернул идентификатор задачи');
-  const firstRead = await readRunStream(first.response, { abortAfterEvents: 4 });
+  const firstRead = await readRunStream(first.response, { abortAfterType: 'delta' });
   first.controller.abort();
   check(firstRead.events.some((e) => e.type === 'delta'), 'вкладка получила первые куски ответа');
 

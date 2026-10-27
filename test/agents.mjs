@@ -204,15 +204,15 @@ test('субагент пишет только в свою папку и не з
   assert.ok(mainTools.includes('spawn_agent') && mainTools.includes('write_file'), 'основная задача потеряла инструменты');
 
   /* Границы папки воркера: снаружи — отказ, внутри — обычная запись. */
-  const scope = { workspace, writeRoot: 'parts/01-chast-otcheta', signal: new AbortController().signal };
+  const scope = { workspace, writeRoot: '.dshow/work/parts/01-chast-otcheta', signal: new AbortController().signal };
   await assert.rejects(
     executeTool('write_file', { path: 'report.md', content: 'чужое' }, scope),
     /свою папку|нельзя/i,
     'субагент записал файл мимо своей папки',
   );
-  const ok = await executeTool('write_file', { path: 'parts/01-chast-otcheta/report.md', content: 'своё' }, scope);
-  assert.equal(ok.meta.path, 'parts/01-chast-otcheta/report.md');
-  assert.ok(fs.existsSync(path.join(workspace, 'parts/01-chast-otcheta/report.md')), 'файл своей части не появился');
+  const ok = await executeTool('write_file', { path: '.dshow/work/parts/01-chast-otcheta/report.md', content: 'своё' }, scope);
+  assert.equal(ok.meta.path, '.dshow/work/parts/01-chast-otcheta/report.md');
+  assert.ok(fs.existsSync(path.join(workspace, '.dshow/work/parts/01-chast-otcheta/report.md')), 'файл своей части не появился');
   await assert.rejects(
     executeTool('run_js', { code: "write('leak.txt', 'x')" }, scope),
     /свою папку|только в свою/i,

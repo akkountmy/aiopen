@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 const REGION = process.env.AMVERA_REGION || 'msk1';
-const ENDPOINT = `https://openmcp.${REGION}.amvera.ru/mcp`;
+const ENDPOINT = process.env.AMVERA_MCP_URL || `https://openmcp.${REGION}.amvera.ru/mcp`;
 const TOKEN = JSON.parse(fs.readFileSync(path.join(os.tmpdir(), 'amvera-token.json'), 'utf8').replace(/^\uFEFF/, '')).access_token;
 
 let sessionId = null;

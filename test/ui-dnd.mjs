@@ -12,11 +12,15 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { deleteTestFile, skipOnLive } from './safe-live.mjs';
 
 const BASE = process.env.DSHOW_BASE || 'http://127.0.0.1:3131';
 const USER = process.env.DSHOW_USER || 'admin';
 const PASS = process.env.DSHOW_PASS || 'Test-pass-2026';
 const FILE_NAME = `drag-drop-${Date.now().toString().slice(-6)}.txt`;
+skipOnLive(BASE, 'проверка перетаскивания');
+
+let testProjectId = '';
 
 const CHROME_CANDIDATES = [
   path.join(process.env['ProgramFiles'] || 'C:\\Program Files', 'Google', 'Chrome', 'Application', 'chrome.exe'),
@@ -168,7 +172,7 @@ try {
   loginStatus === 200 ? ok('вход в сервис') : fail('вход', loginStatus);
 
   // 2. проект и диалог, чтобы панель файлов была активна
-  await evaluate(
+  testProjectId = await evaluate(
     `(async () => {
        const boot = await (await fetch('/api/bootstrap')).json();
        let project = (boot.projects || [])[0];
@@ -355,6 +359,7 @@ try {
   );
   cleaned === 200 ? ok('тестовый файл удалён') : fail('уборка', JSON.stringify(cleaned));
 } finally {
+  await deleteTestFile(BASE, USER, PASS, testProjectId, FILE_NAME).catch(() => {});
   chrome.kill();
   await sleep(400);
   fs.rmSync(profileDir, { recursive: true, force: true });
