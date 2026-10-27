@@ -3,6 +3,7 @@ import net from 'node:net';
 import { extractDocumentText } from './docparse.mjs';
 import { extractReadable, extractFields } from './extract.mjs';
 import { truncate } from './util.mjs';
+import { deepseekEnabled, deepseekSearch, deepseekFetch } from './deepseek-search.mjs';
 
 const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
@@ -404,6 +405,28 @@ async function requestPage(rawUrl, { method = 'GET', headers = {}, body = null, 
 
 /** Загружает страницу и приводит её к тексту. `markdown: true` — с разметкой. */
 export async function fetchUrl(url, { maxChars = 24000, method = 'GET', headers = {}, body = null, markdown = false } = {}) {
+  /* Fetch API отдаёт уже очищенный Markdown и не зависит от вёрстки. Берём его
+     для обычного GET без своих заголовков; POST/API и приватные адреса идут
+     прежним путём, где нужны тело запроса и точный контроль. */
+  if (deepseekEnabled() && method === 'GET' && !body && !Object.keys(headers || {}).length) {
+    try {
+      assertPublicUrl(url);
+      const page = await deepseekFetch(url);
+      const content = truncate(page.content, maxChars);
+      return {
+        url: page.url || url,
+        kind: 'text',
+        status: 200,
+        contentType: 'text/markdown',
+        title: page.title || String(content.match(/^#{1,3}\s+(.+)$/m)?.[1] || '').trim(),
+        text: content,
+        markdown: markdown ? content : undefined,
+        bytes: Buffer.byteLength(page.content),
+      };
+    } catch {
+      // Сайт не отдался через DeepSeek — ниже обычная загрузка с браузерным fallback.
+    }
+  }
   const page = await requestPage(url, { method, headers, body });
   let text = page.text;
   let title = (text.match(/^.{0,120}/) || [''])[0].trim();
@@ -762,6 +785,16 @@ async function newsSearch(query, limit = 6) {
 }
 
 export async function webSearch(query, limit = 6) {
+  let deepseekError = null;
+  if (deepseekEnabled()) {
+    try {
+      const found = await deepseekSearch(query, { count: Math.max(1, Math.min(10, Number(limit) || 6)) });
+      if (found.length) return found;
+      deepseekError = new Error('DeepSeek Search вернул пустую выдачу');
+    } catch (error) {
+      deepseekError = error;
+    }
+  }
   const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}&kl=ru-ru`;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), SEARCH_TIMEOUT_MS);
@@ -795,7 +828,7 @@ export async function webSearch(query, limit = 6) {
     clearTimeout(timer);
   }
 
-  const errors = [ddgError?.message].filter(Boolean);
+  const errors = [deepseekError?.message, ddgError?.message].filter(Boolean);
   try {
     const results = await bingSearch(query, limit);
     if (results.length) return results;

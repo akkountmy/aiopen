@@ -21,6 +21,15 @@ import { ARCHIVE_LIMITS, archiveKind, extractArchiveTo, formatExtraction, gunzip
 import { checkLinks, formatLinks, linksFromText } from './linkcheck.mjs';
 import { compareDocuments, formatCompare } from './comparedocs.mjs';
 
+/** Дата и авторитет источника — одной строкой, если DeepSeek их отдал. */
+function searchBadge(result) {
+  const facts = [];
+  const date = String(result?.date || '').slice(0, 10);
+  if (date) facts.push(date);
+  if (Number.isFinite(result?.authority)) facts.push(`авторитет ${result.authority}/4`);
+  return facts.length ? `${facts.join(' · ')}\n` : '';
+}
+
 /** Не даём инструментам заполнить диск до отказа: сервис должен оставаться рабочим. */
 function ensureFreeSpace(extraBytes = 0) {
   try {
@@ -35,6 +44,10 @@ function ensureFreeSpace(extraBytes = 0) {
 }
 
 const HIDDEN = new Set(['.dshow']);
+/* Следы автопроверок не должны попадать в «Файлы проекта» пользователя даже
+   если проверка упала до уборки. Шаблон намеренно узкий: только имена, которые
+   генерируют сами тесты (hint-123456.docx, picker-123456.txt и т. п.). */
+const TEST_ARTIFACT = /^(?:hint|picker|panels|drag-drop|flows)-\d{6}\.(?:docx|txt|xlsx|html|pdf)$/i;
 
 
 export function resolveSafe(root, rel = '.') {
@@ -71,6 +84,7 @@ export function listTree(root, rel = '.', { depth = 3, maxEntries = 500 } = {}) 
     for (const entry of entries) {
       if (out.length >= maxEntries) return;
       if (entry.name.startsWith('.') || HIDDEN.has(entry.name)) continue;
+      if (TEST_ARTIFACT.test(entry.name)) continue;
       if (entry.name === 'node_modules') continue;
       const full = path.join(dir, entry.name);
       const relName = relPath ? `${relPath}/${entry.name}` : entry.name;
@@ -881,7 +895,7 @@ export const TOOL_DEFS = [
     function: {
       name: 'web_search',
       description:
-        'Найти актуальную информацию в интернете. Возвращает заголовки, ссылки и сниппеты. Можно передать несколько запросов сразу (queries) — они объединятся в одну выдачу без повторов. Для качества давай 2–4 разные формулировки и открывай первоисточники read_page: сниппет годится для выбора страницы, но не для цифр и цитат.',
+        'Найти актуальную информацию в интернете через DeepSeek Search: заголовки, ссылки, сниппеты, дата и авторитет источника. Можно передать несколько запросов сразу (queries) — они объединятся в одну выдачу без повторов. Для качества давай 2–4 разные формулировки и открывай первоисточники read_page/fetch_url: сниппет годится для выбора страницы, но не для цифр и цитат.',
       parameters: {
         type: 'object',
         properties: {
@@ -901,7 +915,7 @@ export const TOOL_DEFS = [
     function: {
       name: 'fetch_url',
       description:
-        'Загрузить веб-страницу, PDF или API по ссылке и получить текст. Поддерживает POST с телом запроса и своими заголовками — годится для обращений к открытым API.',
+        'Загрузить веб-страницу, PDF или API по ссылке и получить текст. Обычный GET идёт через DeepSeek Fetch (чистый Markdown, без браузера), POST и свои заголовки — напрямую, с запасной загрузкой.',
       parameters: {
         type: 'object',
         properties: {
@@ -1447,12 +1461,12 @@ export const TOOL_DEFS = [
     function: {
       name: 'extract_archive',
       description:
-        'Распаковать архив .zip (или одиночный .gz) из проекта в папку проекта. Возвращает список файлов и пропущенных записей. Используй, когда приложили архив с документами, выгрузкой или проектом: распакуй, затем читай файлы read_document/analyze_data. .rar, .7z и .tar не поддерживаются — скажи об этом прямо.',
+        'Распаковать архив .zip (или одиночный .gz) из проекта. По умолчанию распаковывает в скрытую рабочую папку `.dshow/work/unpacked/…`, чтобы служебные файлы не засоряли «Файлы проекта». Если пользователь просил распаковать архив для себя — укажи to с видимой папкой. Возвращает список файлов и пропущенных записей. Используй, когда приложили архив с документами, выгрузкой или проектом: распакуй, затем читай файлы read_document/analyze_data. .rar, .7z и .tar не поддерживаются — скажи об этом прямо.',
       parameters: {
         type: 'object',
         properties: {
           path: { type: 'string', description: 'Путь к архиву внутри проекта, например «Материалы.zip».' },
-          to: { type: 'string', description: 'Папка, куда распаковать. По умолчанию — папка с именем архива без расширения.' },
+          to: { type: 'string', description: 'Папка, куда распаковать. По умолчанию — скрытая `.dshow/work/unpacked/<имя архива>`. Укажи видимую папку, только если пользователь просил распаковать архив для себя.' },
           overwrite: { type: 'boolean', description: 'Перезаписывать существующие файлы. По умолчанию нет.' },
         },
         required: ['path'],
@@ -1929,7 +1943,7 @@ export async function executeTool(name, args, ctx) {
           return { text: `Поиск не дал результатов.${found.failures.length ? `\nОшибки: ${found.failures.join('; ')}` : ''}` };
         }
         const body = found.results
-          .map((r, i) => `${i + 1}. ${r.title}\n${r.url}\n${r.snippet}\n(запрос: ${r.query})`)
+          .map((r, i) => `${i + 1}. ${r.title}\n${r.url}\n${searchBadge(r)}${r.snippet}\n(запрос: ${r.query})`)
           .join('\n\n');
         return {
           text: `Запросы: ${found.queries.join(' | ')}\n\n${body}`,
@@ -1939,7 +1953,7 @@ export async function executeTool(name, args, ctx) {
       const results = await webSearch(queries[0], limit);
       if (!results.length) return { text: 'Поиск не дал результатов.' };
       return {
-        text: results.map((r, i) => `${i + 1}. ${r.title}\n${r.url}\n${r.snippet}`).join('\n\n'),
+        text: results.map((r, i) => `${i + 1}. ${r.title}\n${r.url}\n${searchBadge(r)}${r.snippet}`).join('\n\n'),
         meta: { count: results.length },
       };
     }
@@ -1950,7 +1964,7 @@ export async function executeTool(name, args, ctx) {
         headers: args.headers && typeof args.headers === 'object' ? args.headers : {},
         body: typeof args.body === 'string' ? args.body : null,
       });
-      const head = `Страница ${page.url} (${page.status || 200}${page.kind !== 'text' ? `, ${page.kind}` : ''})`;
+      const head = `Страница ${page.url} (${page.status || 200}${page.kind !== 'text' ? `, ${page.kind}` : ''})${page.title ? ` — ${page.title}` : ''}`;
       return { text: `${head}\n\n${page.text}`, meta: { url: page.url, bytes: page.bytes } };
     }
     case 'read_page': {
@@ -2266,10 +2280,11 @@ export async function executeTool(name, args, ctx) {
         throw new Error(`Архив больше ${Math.round(LIMITS.maxAttachmentBytes / 1024 / 1024)} МБ — такой не разворачиваю. Попроси прислать частями.`);
       }
       const base = path.basename(rel);
-      const folder =
-        String(args.to || '').trim() ||
+      const requestedFolder = String(args.to || '').trim();
+      const defaultFolder =
         (kind === 'gz' ? base.replace(/\.gz$/i, '').replace(/\.[^.]+$/, '') : base.replace(/\.zip$/i, '')) ||
         'архив';
+      const folder = requestedFolder || `.dshow/work/unpacked/${defaultFolder}`;
       const target = assertInside(root, resolveSafe(root, folder));
       /* Запас на диске: распаковка может дать в разы больше, чем сам архив. */
       ensureFreeSpace(Math.min(size * 4, ARCHIVE_LIMITS.maxTotalBytes));
