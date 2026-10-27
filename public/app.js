@@ -1557,6 +1557,20 @@ function watchWideBlocks() {
    пустой комментарий раз в 15 секунд, так что молчание дольше — обрыв. */
 const RUN_IDLE_MS = 25000;
 
+/* Сколько связь должна отсутствовать на глазах человека, прежде чем сказать об
+   этом плашкой. Короткий обрыв — свернули ярлык, телефон уснул, моргнула сеть —
+   клиент переподключает сам, и пугать человека нечем: задача всё равно идёт на
+   сервере. */
+const RUN_LINK_NOTICE_MS = 60000;
+
+/* Когда страница последний раз стала видимой. Отсчёт «связь пропала» всегда
+   начинается заново после возвращения из сна или из другого приложения: иначе
+   плашка выскакивала бы сразу, хотя поток ещё не успел переподключиться. */
+let pageShownAt = Date.now();
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) pageShownAt = Date.now();
+});
+
 function liveRunFor(chatId) {
   for (const run of state.liveRuns.values()) if (run.chatId === chatId) return run;
   return null;
@@ -1836,14 +1850,18 @@ async function readRunStream(response, streamState) {
 }
 
 /* Подключение к задаче на сервере. Снимок даёт всё, что уже готово, дальше идёт
-   живой поток; если связь оборвалась, а задача жива — повторяем подключение. */
+   живой поток; если связь оборвалась, а задача жива — повторяем подключение.
+   Плашку о потере связи показываем только тогда, когда поток не вернулся за
+   минуту при открытой вкладке: короткие обрывы человек замечать не должен. */
 async function watchRun(runId, chatId) {
   const run = trackRun(runId, chatId);
   if (state.liveStreams.has(runId)) return;
   const streamState = { controller: new AbortController(), run, lastEventAt: Date.now() };
   state.liveStreams.set(runId, streamState);
   let attempt = 0;
-  while (attempt < 10) {
+  let noticeAt = 0;
+  let noticed = false;
+  while (state.liveStreams.get(runId) === streamState && state.liveRuns.has(runId)) {
     attempt += 1;
     try {
       const response = await fetch(`/api/runs/${runId}/stream`, {
@@ -1856,38 +1874,42 @@ async function watchRun(runId, chatId) {
       }
       if (response.status === 404) {
         /* Задачу уже убрали из памяти — показываем то, что сохранено. */
-        state.liveStreams.delete(runId);
+        if (state.liveStreams.get(runId) === streamState) state.liveStreams.delete(runId);
         closeRunView(run, 'done');
         return;
       }
       if (!response.ok || !response.body) throw new Error(`HTTP ${response.status}`);
+      /* Поток поднялся — начинаем отсчёт терпения и счётчик попыток заново. */
+      attempt = 0;
+      noticeAt = 0;
+      noticed = false;
       const ended = await readRunStream(response, streamState);
-      if (ended || !state.liveRuns.has(runId)) break;
-      await sleep(Math.min(4000, 500 * attempt));
+      if (ended) break;
     } catch (error) {
       if (error.name === 'AbortError') break;
-      if (!state.liveRuns.has(runId)) break;
-      await sleep(Math.min(4000, 500 * attempt));
     }
+    /* Пока мы спали или переподключались, поток мог сменить хозяина (например,
+       возвращение на страницу запустило новый watchRun). Тогда молчим: плашку
+       покажет только тот, кто действительно остался без связи. */
+    if (state.liveStreams.get(runId) !== streamState || !state.liveRuns.has(runId)) break;
+    if (document.hidden) {
+      /* Человек не смотрит на экран — плашку не готовим. После возвращения
+         отсчёт начнётся заново, и быстрый перехват задачи пройдёт незаметно. */
+      noticeAt = 0;
+    } else if (Date.now() - pageShownAt < RUN_LINK_NOTICE_MS) {
+      /* Только что вернулись на страницу: даже если связь рвалась до этого,
+         даём ей минуту, чтобы новый поток подхватил задачу. */
+      noticeAt = pageShownAt + RUN_LINK_NOTICE_MS;
+    } else if (!noticeAt) {
+      noticeAt = Date.now() + RUN_LINK_NOTICE_MS;
+    } else if (!noticed && Date.now() >= noticeAt) {
+      noticed = true;
+      paintRun(run);
+      toast('Связь с задачей прервалась — она продолжается на сервере. Откройте диалог заново.', 'warn');
+    }
+    await sleep(Math.min(15000, 500 * attempt));
   }
   if (state.liveStreams.get(runId) === streamState) state.liveStreams.delete(runId);
-  if (!state.liveRuns.has(runId)) return;
-  /* Связь пропала, а «конца» не было. Спрашиваем сервис прямо: если задачи уже
-     нет, показываем сохранённый ответ, иначе оставляем пометку «идёт». */
-  try {
-    const data = await api(`/api/runs/${runId}`);
-    if (data.run && data.run.status !== 'running') {
-      closeRunView(run, data.run.status);
-      return;
-    }
-  } catch (error) {
-    if (error.status === 404) {
-      closeRunView(run, 'done');
-      return;
-    }
-  }
-  paintRun(run);
-  toast('Связь с задачей прервалась — она продолжается на сервере. Откройте диалог заново.', 'warn');
 }
 
 /* Возвращение на страницу: телефон вышел из сна, вкладку открыли снова,

@@ -17,6 +17,7 @@
     "test:queue": "node test/queue.mjs",
     "test:ui-queue": "node test/ui-queue.mjs",
     "test:ui-runs": "node test/ui-runs.mjs",
+    "test:run-link": "node test/run-link.mjs",
     "test:ui-scroll": "node test/ui-scroll.mjs",
     "test:ui-sheet": "node test/ui-modal-sheet.mjs",
     "test:ui-swipe": "node test/ui-swipe.mjs",
