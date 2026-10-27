@@ -254,8 +254,7 @@ try {
   !current.projects && !current.files ? ok('оба ящика закрыты на старте') : fail('стартовое состояние', JSON.stringify(current));
 
   // Подсказка про свайпы — одноразовая, только на телефоне: плашка называет
-  // обе стороны, ушки у краёв на время подсказки убираются, а «Понятно»
-  // оставляет их постоянным входом в шторку.
+  // обе стороны, а «Понятно» закрывает её и запоминает показ.
   const hintShown = await waitFor(
     `(() => { const h = document.getElementById('swipeHint'); return !!h && !h.classList.contains('hidden'); })()`,
     6000,
@@ -263,48 +262,32 @@ try {
   const hintState = await evaluate(`(() => {
     const h = document.getElementById('swipeHint');
     const copy = h && h.querySelector('.swipe-hint-copy');
-    const left = document.getElementById('drawerPeekProjects');
-    const right = document.getElementById('drawerPeekFiles');
     return {
       text: copy ? copy.textContent.replace(/\\s+/g, ' ').trim() : '',
-      leftPeek: left ? getComputedStyle(left).opacity : '',
-      rightPeek: right ? getComputedStyle(right).opacity : '',
     };
   })()`);
   hintShown && /вправо/.test(hintState.text) && /влево/.test(hintState.text) &&
   /Проекты/.test(hintState.text) && /файлы/.test(hintState.text)
     ? ok('подсказка про свайпы показана', hintState.text)
     : fail('подсказка про свайпы', JSON.stringify(hintState));
-  hintState.leftPeek === '0' && hintState.rightPeek === '0'
-    ? ok('пока подсказка на экране, ушки спрятаны')
-    : fail('ушки под подсказкой', JSON.stringify(hintState));
 
   await evaluate(`document.getElementById('swipeHintClose').click()`);
   await sleep(450);
   const afterHint = await evaluate(`(() => {
     const h = document.getElementById('swipeHint');
-    const left = document.getElementById('drawerPeekProjects');
     return {
       hidden: h.classList.contains('hidden'),
-      display: getComputedStyle(left).display,
-      opacity: getComputedStyle(left).opacity,
       seen: !!localStorage.getItem('dshow:swipe-hint-v1'),
     };
   })()`);
-  afterHint.hidden && afterHint.display === 'flex' && Number(afterHint.opacity) > 0.3 && afterHint.seen
-    ? ok('«Понятно» убрало подсказку, ушки остались')
+  afterHint.hidden && afterHint.seen
+    ? ok('«Понятно» убрало подсказку и запомнило показ')
     : fail('закрытие подсказки', JSON.stringify(afterHint));
 
-  await evaluate(`document.getElementById('drawerPeekProjects').click()`);
-  await sleep(400);
-  current = await state();
-  current.projects && !current.files
-    ? ok('ушко у левого края открыло «Проекты»')
-    : fail('ушко «Проекты»', JSON.stringify(current));
-  await evaluate(`document.getElementById('backdrop').click()`);
-  await sleep(400);
-  current = await state();
-  !current.projects && !current.files ? ok('затемнение закрыло ящик из ушка') : fail('закрытие ушка', JSON.stringify(current));
+  const peeks = await evaluate(
+    `!!document.getElementById('drawerPeekProjects') || !!document.getElementById('drawerPeekFiles')`,
+  );
+  !peeks ? ok('кнопок-ушек у краёв экрана нет') : fail('ушки у краёв остались', 'в DOM есть drawerPeek*');
 
   // 1. Свайп вправо — «Проекты» слева.
   await swipe(120, 420, 300, 420);
