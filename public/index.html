@@ -329,6 +329,47 @@
         <div id="filesList" class="files-list"></div>
         <div id="filesDropHint" class="files-drop-hint" aria-hidden="true">Отпустите, чтобы добавить в проект</div>
       </aside>
+      <!-- Ушки у краёв экрана: видно, что боковые шторки вообще есть, и по ним
+           можно попасть пальцем, не вспоминая про свайп. Это обычные кнопки —
+           на телефоне они открывают ящик и одним касанием. Показываются только
+           там, где ящик действительно выезжает (см. styles.css). -->
+      <button id="drawerPeekProjects" class="drawer-peek drawer-peek-projects" type="button" title="Смахните вправо — откроются проекты" aria-label="Открыть проекты" aria-controls="sidebar">
+        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M7.5 5l5 5-5 5" /></svg>
+      </button>
+      <button id="drawerPeekFiles" class="drawer-peek drawer-peek-files" type="button" title="Смахните влево — откроются файлы проекта" aria-label="Открыть файлы проекта" aria-controls="filesPanel">
+        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M12.5 5l-5 5 5 5" /></svg>
+      </button>
+
+      <!-- Одноразовая подсказка про свайпы: две шторки выглядывают из краёв и
+           плашка сверху объясняет жест. Слой прозрачен для касаний — смахнуть
+           можно прямо через него, а «Понятно» ловит нажатие только у себя. -->
+      <div id="swipeHint" class="swipe-hint hidden" role="status" aria-live="polite">
+        <div class="swipe-hint-rail swipe-hint-rail-left" aria-hidden="true">
+          <span class="swipe-hint-rail-ico">
+            <svg viewBox="0 0 24 24" aria-hidden="true" style="stroke-width:1.9"><path d="m6 14 1.45-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.55 6a2 2 0 0 1-1.94 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.93a2 2 0 0 1 1.66.9l.82 1.2a2 2 0 0 0 1.66.9H18a2 2 0 0 1 2 2v2" /></svg>
+          </span>
+          <span class="swipe-hint-rail-name">Проекты</span>
+          <svg class="swipe-hint-rail-arrow" viewBox="0 0 20 20" aria-hidden="true"><path d="M7.5 5l5 5-5 5" /></svg>
+        </div>
+        <div class="swipe-hint-rail swipe-hint-rail-right" aria-hidden="true">
+          <svg class="swipe-hint-rail-arrow" viewBox="0 0 20 20" aria-hidden="true"><path d="M12.5 5l-5 5 5 5" /></svg>
+          <span class="swipe-hint-rail-ico">
+            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 3.5A1.5 1.5 0 016.5 2h4L15 6.5v10A1.5 1.5 0 0113.5 18h-7A1.5 1.5 0 015 16.5v-13z" /><path d="M10.5 2v4.5H15" /></svg>
+          </span>
+          <span class="swipe-hint-rail-name">Файлы проекта</span>
+        </div>
+        <div class="swipe-hint-bar">
+          <span class="swipe-hint-arrows" aria-hidden="true">
+            <svg viewBox="0 0 20 20"><path d="M17 10H4M8 6l-4 4 4 4" /></svg>
+            <svg viewBox="0 0 20 20"><path d="M3 10h13M12 6l4 4-4 4" /></svg>
+          </span>
+          <span class="swipe-hint-copy">
+            <b>Смахните вправо или влево</b>
+            <span>Проекты слева, файлы справа</span>
+          </span>
+          <button id="swipeHintClose" class="swipe-hint-close" type="button">Понятно</button>
+        </div>
+      </div>
       <div id="backdrop" class="backdrop" aria-hidden="true"></div>
     </div>
 

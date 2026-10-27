@@ -835,6 +835,9 @@ async function startApp(payload) {
   /* На телефоне не забираем фокус сами: при открытии ярлыка клавиатура
      выезжала поверх ещё не отрисованного диалога. Фокус — только по тапу. */
   focusComposerOnOpen();
+  /* Подсказка про боковые шторки — после того, как экран уже нарисован:
+     иначе она мелькает над пустой страницей. */
+  setTimeout(maybeShowSwipeHint, 2200);
 }
 
 function activeProject() {
@@ -3386,6 +3389,7 @@ function openSidebarDrawer() {
   closePopover();
   if (state.filesDrawerOpen) closeFilesDrawer();
   $('#app').classList.add('sidebar-open');
+  hideSwipeHint();
 }
 
 function toggleSidebarDrawer() {
@@ -3471,6 +3475,7 @@ function openFilesDrawer({ reload = true } = {}) {
   if (!filesNarrow() || state.filesDrawerOpen) return;
   state.filesDrawerOpen = true;
   syncFilesPanel({ reload });
+  hideSwipeHint();
 }
 
 function toggleFilesDrawer() {
@@ -4724,6 +4729,7 @@ function openContextMenu(anchor, items, head = null) {
 
 function openModal({ title, subtitle, headLead, body, actions = [], wide = false, className = '', rootClass = '', onMount, onClose }) {
   const root = $('#modalRoot');
+  hideSwipeHint();
   root.innerHTML = '';
   root.className = `modal-root${rootClass ? ` ${rootClass}` : ''}`;
   const modal = el('div', `modal${wide ? ' wide' : ''}${className ? ` ${className}` : ''}`);
@@ -7913,6 +7919,77 @@ function initDrawerSwipes() {
   });
 }
 initDrawerSwipes();
+
+/* --------------------- подсказка про свайпы-шторки ---------------------
+   Жест «смахнул вправо — проекты, влево — файлы» не виден на спокойном
+   экране. Один раз за жизнь устройства показываем, как он работает: две
+   шторки выглядывают из краёв, плашка сверху называет стороны. У краёв
+   остаются ушки-кнопки — постоянная подсказка для тех, кто забыл или не
+   любит жесты.
+
+   Подсказка одноразовая, отмечаем её сразу при показе: после перезапуска
+   ярлыка она не должна возвращаться. Хранилище может быть запрещено — тогда
+   молчим, иначе подсказка стала бы вечной. */
+const SWIPE_HINT_KEY = 'dshow:swipe-hint-v1';
+const SWIPE_HINT_LIFE_MS = 13000;
+let swipeHintTimer = 0;
+
+/* Оба жеста работают только до 860 px: выше проекты стоят на экране
+   постоянно, и «смахните вправо» было бы неправдой. На низком экране
+   (телефон боком) плашка накрыла бы заголовок, поэтому там остаются
+   только ушки. */
+function swipeHintAvailable() {
+  return window.matchMedia('(max-width: 860px) and (min-height: 560px)').matches;
+}
+
+function swipeHintSeen() {
+  try {
+    return Boolean(localStorage.getItem(SWIPE_HINT_KEY));
+  } catch {
+    return true;
+  }
+}
+
+/* На компьютере с мышью свайпа нет — подсказка там только путает. Телефон и
+   планшет узнаём по касанию, как и раскладку композера. */
+function swipeHintTouchFirst() {
+  return navigator.maxTouchPoints > 0 || window.matchMedia('(pointer: coarse)').matches;
+}
+
+function hideSwipeHint() {
+  const hint = $('#swipeHint');
+  if (!hint) return;
+  clearTimeout(swipeHintTimer);
+  hint.classList.add('hidden');
+  document.documentElement.classList.remove('swipe-hint-on');
+}
+
+function maybeShowSwipeHint() {
+  if (swipeHintSeen() || !swipeHintAvailable() || !swipeHintTouchFirst()) return;
+  const app = $('#app');
+  const hint = $('#swipeHint');
+  if (!app || !hint || app.classList.contains('hidden')) return;
+  /* Шторка уже открыта или поверх висит установочный совет — два объяснения
+     подряд человек не прочтёт. Показ при этом не отмечаем: подсказка
+     вернётся в следующий запуск. */
+  if (app.classList.contains('sidebar-open') || app.classList.contains('files-open')) return;
+  const modal = $('#modalRoot');
+  if (modal && !modal.classList.contains('hidden')) return;
+  try {
+    localStorage.setItem(SWIPE_HINT_KEY, String(Date.now()));
+  } catch {
+    return;
+  }
+  hint.classList.remove('hidden');
+  document.documentElement.classList.add('swipe-hint-on');
+  clearTimeout(swipeHintTimer);
+  swipeHintTimer = setTimeout(hideSwipeHint, SWIPE_HINT_LIFE_MS);
+}
+
+$('#swipeHintClose')?.addEventListener('click', hideSwipeHint);
+/* Ушко — такой же вход в шторку, как кнопка в шапке: одно касание, без жеста. */
+$('#drawerPeekProjects')?.addEventListener('click', () => openSidebarDrawer());
+$('#drawerPeekFiles')?.addEventListener('click', () => openFilesDrawer());
 /* Заголовок панели «Файлы проекта» — подпись, а не кнопка: проект выбирается
    слева, и файлы всегда принадлежат ему. */
 /* ------------------------------ panel resize ------------------------------ */

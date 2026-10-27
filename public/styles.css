@@ -4772,6 +4772,353 @@ html.kb-open .scroll-jump {
   }
 }
 
+/* ------------- подсказка про свайпы боковых шторок -------------
+   «Проекты» и «Файлы проекта» на узком экране выезжают свайпом, но по
+   спокойному экрану этого не видно. Поэтому у краёв живут два ушка-кнопки:
+   они показывают, что там что-то есть, и открывают шторку одним касанием.
+   При первом запуске к ним добавляется одноразовая подсказка: шторки
+   выглядывают из краёв, а плашка сверху называет жест и стороны. */
+
+.drawer-peek {
+  position: fixed;
+  top: 50%;
+  z-index: 30;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 96px;
+  margin-top: -48px;
+  padding: 0;
+  border: 1px solid var(--line-strong);
+  background: var(--layer-1);
+  color: var(--text-3);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
+  opacity: 0.58;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: opacity 0.18s ease, color 0.18s ease;
+}
+
+/* Ушко — запасной вход, а не украшение: при наведении и фокусе оно
+   становится обычной кнопкой, чтобы им было не страшно пользоваться. */
+.drawer-peek:hover,
+.drawer-peek:focus-visible {
+  opacity: 1;
+  color: var(--text);
+}
+
+.drawer-peek svg {
+  width: 15px;
+  height: 15px;
+  stroke-width: 2;
+}
+
+.drawer-peek-projects {
+  left: 0;
+  border-left: 0;
+  border-radius: 0 var(--radius) var(--radius) 0;
+}
+
+.drawer-peek-files {
+  right: 0;
+  border-right: 0;
+  border-radius: var(--radius) 0 0 var(--radius);
+}
+
+/* Прыжок по сообщениям висит у правого края по центру. Когда он виден,
+   ушко файлов уступает ему место, иначе перекрывало бы кнопки. */
+.app:has(.scroll-jump.on) .drawer-peek-files {
+  top: calc(50% + 80px);
+}
+
+/* Открытая шторка закрывает своё ушко: два входа в один ящик на экране не
+   нужны, а под затемнением ушко всё равно не видно. */
+.app.sidebar-open .drawer-peek-projects,
+.app.files-open .drawer-peek-files {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* Файлы выезжают до 1100 px, проекты — только на телефоне (до 860 px). */
+@media (max-width: 1100px) {
+  .drawer-peek-files {
+    display: inline-flex;
+  }
+}
+
+@media (max-width: 860px) {
+  .drawer-peek-projects {
+    display: inline-flex;
+  }
+}
+
+/* Сама подсказка. Слой прозрачен для касаний: свайп проходит сквозь него,
+   поэтому подсказка не мешает тому, чему учит. Нажимается только «Понятно». */
+.swipe-hint {
+  position: fixed;
+  inset: 0;
+  z-index: 42;
+  display: none;
+  pointer-events: none;
+}
+
+@media (max-width: 860px) {
+  .swipe-hint {
+    display: block;
+  }
+}
+
+.swipe-hint-rail {
+  position: fixed;
+  /* На низком экране (телефон боком) процент уводил бы шторки под плашку,
+     поэтому держим их ниже шапки и плашки, но не выше 27% высоты. */
+  --swipe-hint-top: max(27%, calc(var(--head-h) + 96px + env(safe-area-inset-top, 0px)));
+  top: var(--swipe-hint-top);
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  height: 58px;
+  padding: 0 12px;
+  border: 1px solid var(--line-strong);
+  background: var(--layer-2);
+  box-shadow: var(--shadow);
+  color: var(--text);
+  font-size: var(--fs-13);
+  opacity: 0;
+  will-change: transform;
+  animation-duration: 5.6s;
+  animation-timing-function: cubic-bezier(0.22, 0.61, 0.36, 1);
+  animation-iteration-count: 2;
+  animation-fill-mode: both;
+}
+
+.swipe-hint-rail-left {
+  left: 0;
+  width: 168px;
+  border-left: 0;
+  border-radius: 0 var(--radius-lg) var(--radius-lg) 0;
+  transform: translateX(-102%);
+  animation-name: swipe-rail-left;
+}
+
+.swipe-hint-rail-right {
+  right: 0;
+  width: 186px;
+  border-right: 0;
+  border-radius: var(--radius-lg) 0 0 var(--radius-lg);
+  transform: translateX(102%);
+  animation-name: swipe-rail-right;
+}
+
+/* Значок в акцентной подложке: тот же приём, что у иконки ярлыка, — сразу
+   видно, что это раздел, а не случайная плашка. */
+.swipe-hint-rail-ico {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.swipe-hint-rail-ico svg {
+  width: 18px;
+  height: 18px;
+}
+
+.swipe-hint-rail-name {
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.swipe-hint-rail-arrow {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin-left: auto;
+  color: var(--text-3);
+}
+
+.swipe-hint-rail-right .swipe-hint-rail-arrow {
+  margin-left: 0;
+  margin-right: 0;
+}
+
+/* Шторки выглядывают по очереди: сначала левая, потом правая — так видно,
+   что жест работает в обе стороны. В конце обе уезжают за край. Выезжают
+   целиком: обрезанное «Файлы проек…» читалось бы как ошибка вёрстки. */
+@keyframes swipe-rail-left {
+  0%,
+  4% {
+    opacity: 0;
+    transform: translateX(-102%);
+  }
+  10%,
+  36% {
+    opacity: 1;
+    transform: translateX(0);
+  }
+  46%,
+  100% {
+    opacity: 0;
+    transform: translateX(-102%);
+  }
+}
+
+@keyframes swipe-rail-right {
+  0%,
+  44% {
+    opacity: 0;
+    transform: translateX(102%);
+  }
+  52%,
+  78% {
+    opacity: 1;
+    transform: translateX(0);
+  }
+  88%,
+  100% {
+    opacity: 0;
+    transform: translateX(102%);
+  }
+}
+
+/* Плашка сверху: под шапкой, чтобы не закрывать поле ввода и не спорить с
+   клавиатурой. Ширину держим по экрану, на 320 px текст переносится. */
+.swipe-hint-bar {
+  position: fixed;
+  top: calc(var(--head-h) + 10px + env(safe-area-inset-top, 0px));
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  width: min(430px, calc(100vw - 20px));
+  padding: 10px 10px 10px 13px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--layer-2);
+  box-shadow: var(--shadow);
+  animation: swipe-hint-in 0.3s ease-out both;
+}
+
+@keyframes swipe-hint-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -6px);
+  }
+}
+
+.swipe-hint-arrows {
+  flex: none;
+  display: flex;
+  gap: 1px;
+  color: var(--accent);
+}
+
+.swipe-hint-arrows svg {
+  width: 17px;
+  height: 17px;
+  stroke-width: 1.8;
+}
+
+.swipe-hint-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  line-height: var(--lh-18);
+}
+
+.swipe-hint-copy b {
+  font-size: var(--fs-13);
+  font-weight: 600;
+}
+
+.swipe-hint-copy span {
+  font-size: var(--fs-12);
+  color: var(--text-2);
+}
+
+.swipe-hint-close {
+  flex: none;
+  min-height: 32px;
+  padding: 0 11px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--layer-3);
+  color: var(--text);
+  font-size: var(--fs-12);
+  cursor: pointer;
+  pointer-events: auto;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.swipe-hint-close:hover {
+  background: var(--layer-hover);
+}
+
+/* На 320 px стрелки отнимали у текста строку и заголовок рвался надвое:
+   жертвуем декором, смысл несут слова. */
+@media (max-width: 360px) {
+  .swipe-hint-arrows {
+    display: none;
+  }
+
+  .swipe-hint-bar {
+    gap: 8px;
+    padding-left: 11px;
+  }
+}
+
+/* Пока подсказка на экране, ушки не нужны: она сама показывает шторки у
+   краёв, а два подсказчика сразу спорят друг с другом. После «Понятно»
+   ушки возвращаются и остаются постоянным входом. */
+html.swipe-hint-on .drawer-peek {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* Кому движение мешает, тому показываем обе шторки сразу и без выезда:
+   смысл подсказки — «по краям есть разделы», а не сама анимация. Глобальное
+   правило для reduce обнуляет длительность, поэтому здесь анимация выключена
+   целиком, иначе кадры закончились бы за кадром. */
+@media (prefers-reduced-motion: reduce) {
+  .swipe-hint-rail {
+    opacity: 1;
+    animation: none;
+  }
+
+  .swipe-hint-rail-left {
+    transform: translateX(0);
+  }
+
+  .swipe-hint-rail-right {
+    transform: translateX(0);
+  }
+}
+
+/* На 320 px две карточки в сумме шире экрана: без анимации они бы наехали
+   друг на друга. Ставим их столбиком сразу под плашкой и чуть ниже ростом,
+   чтобы не закрыть заголовок «Чем помочь?». */
+@media (prefers-reduced-motion: reduce) and (max-width: 359px) {
+  .swipe-hint-rail {
+    top: calc(var(--head-h) + 76px + env(safe-area-inset-top, 0px));
+    height: 48px;
+  }
+
+  .swipe-hint-rail-right {
+    top: calc(var(--head-h) + 136px + env(safe-area-inset-top, 0px));
+  }
+
+  .swipe-hint-rail-ico {
+    width: 26px;
+    height: 26px;
+  }
+}
+
 /* --------------------------- уведомления --------------------------- */
 
 .push-panel {
