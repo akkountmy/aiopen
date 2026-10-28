@@ -51,6 +51,7 @@ import {
   notifyOfferState,
   postponeNotifyOffer,
 } from './src/notifyoffer.mjs';
+import { notifyScheduleView, saveNotifySchedule } from './src/notifyschedule.mjs';
 import { classifyCompletion } from './src/pushpolicy.mjs';
 import {
   forgetUser as pushForgetUser,
@@ -3324,6 +3325,31 @@ async function route(req, res) {
         text: formatQuality(summary),
         checkedAt: summary.checkedAt,
       });
+    }
+    /* --- время напоминания о включении уведомлений ---
+       Администратор задаёт, когда новому пользователю показывать окно: сразу,
+       через N минут или в определённый час по Минску. Настройка общая и
+       применяется к новым регистрациям и будущим повторным напоминаниям. */
+    if (pathname === '/api/admin/notify-schedule' && method === 'GET') {
+      const admin = requireAdmin(req, res);
+      if (!admin) return;
+      return sendJson(res, 200, notifyScheduleView(), { 'Cache-Control': 'no-store' });
+    }
+    if (pathname === '/api/admin/notify-schedule' && method === 'POST') {
+      const admin = requireAdmin(req, res);
+      if (!admin) return;
+      const body = await readJsonBody(req);
+      try {
+        const saved = saveNotifySchedule(body, { updatedBy: admin.username });
+        console.log(
+          `[notify-offer] расписание от ${admin.username}: ${saved.mode}` +
+            (saved.mode === 'time' ? `, ${saved.time}` : '') +
+            (saved.mode === 'delay' ? `, через ${saved.delayMinutes} мин` : ''),
+        );
+        return sendJson(res, 200, saved);
+      } catch (error) {
+        return sendError(res, 400, error?.message || 'Не удалось сохранить расписание');
+      }
     }
     /* --- рассылка уведомлений от администратора ---
        Объявление о новой функции уходит всем или выбранным пользователям —

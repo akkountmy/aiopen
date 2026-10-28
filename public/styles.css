@@ -3624,6 +3624,24 @@ html.kb-open .scroll-jump {
   text-decoration: none;
 }
 
+/* Время напоминания об уведомлениях: режим и его поле стоят в одной строке,
+   подсказка занимает всю ширину под ними. */
+.notify-schedule-form .field-time,
+.notify-schedule-form .field-delay {
+  flex: 0 0 150px;
+  min-width: 132px;
+}
+
+.notify-schedule-form .notify-schedule-preview {
+  flex-basis: 100%;
+  margin: 2px 0 0;
+}
+
+.notify-schedule-form .field-error {
+  flex-basis: 100%;
+  margin: 0;
+}
+
 /* Запросы на тяжёлые задачи в панели администратора */
 .admin-section-title {
   margin: 18px 0 8px;

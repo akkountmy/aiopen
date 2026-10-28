@@ -834,6 +834,8 @@ async function startApp(payload) {
   notifyOfferShown = false;
   notifyOfferActionDone = false;
   clearTimeout(notifyOfferTimer);
+  clearTimeout(notifyOfferDueTimer);
+  notifyOfferDueTimer = 0;
   notifyOfferTimer = setTimeout(() => {
     notifyOfferTimer = 0;
     void maybeShowNotifyOffer();
@@ -5878,6 +5880,8 @@ function resetClientState() {
   notifyOfferShown = false;
   notifyOfferActionDone = false;
   clearTimeout(notifyOfferTimer);
+  clearTimeout(notifyOfferDueTimer);
+  notifyOfferDueTimer = 0;
   notifyOfferTimer = 0;
 }
 
@@ -6439,6 +6443,124 @@ function renderPushBroadcast(body, users) {
   });
 }
 
+/* --- время напоминания о включении уведомлений ---
+   Администратор решает, когда новому человеку показать окно «Узнай о новых
+   возможностях DSH Open»: сразу, через N минут или в определённый час. Раньше
+   это было жёстко «сразу», и регистрация в три часа ночи будила вопросом. */
+const NOTIFY_SCHEDULE_MODES = {
+  immediate: 'Сразу после регистрации',
+  delay: 'Через заданное число минут',
+  time: 'В заданное время (Минск)',
+};
+
+function renderNotifySchedule(body) {
+  const wrap = el('div', 'notify-schedule-block');
+  wrap.appendChild(el('div', 'admin-section-title', 'Время напоминания об уведомлениях'));
+  wrap.appendChild(
+    el(
+      'p',
+      'push-broadcast-hint',
+      'Окно «Узнай о новых возможностях DSH Open» после регистрации. Время — по Минску; настройка применяется к новым регистрациям и будущим повторным напоминаниям.',
+    ),
+  );
+
+  const form = el('form', 'inline-form notify-schedule-form');
+  const modeField = el('label', 'field');
+  modeField.appendChild(el('span', 'field-label', 'Когда отправлять'));
+  const modeSelect = el('select');
+  for (const [value, label] of Object.entries(NOTIFY_SCHEDULE_MODES)) {
+    const option = el('option', '', label);
+    option.value = value;
+    modeSelect.appendChild(option);
+  }
+  modeField.appendChild(modeSelect);
+  form.appendChild(modeField);
+
+  const timeField = el('label', 'field field-time');
+  timeField.appendChild(el('span', 'field-label', 'Время'));
+  const timeInput = el('input');
+  timeInput.type = 'time';
+  timeInput.step = '60';
+  timeInput.value = '10:00';
+  timeField.appendChild(timeInput);
+  form.appendChild(timeField);
+
+  const delayField = el('label', 'field field-delay');
+  delayField.appendChild(el('span', 'field-label', 'Через, минут'));
+  const delayInput = el('input');
+  delayInput.type = 'number';
+  delayInput.min = '1';
+  delayInput.max = String(7 * 24 * 60);
+  delayInput.step = '1';
+  delayInput.inputMode = 'numeric';
+  delayInput.value = '60';
+  delayField.appendChild(delayInput);
+  form.appendChild(delayField);
+
+  const saveBtn = el('button', 'btn btn-primary', 'Сохранить');
+  saveBtn.type = 'submit';
+  form.appendChild(saveBtn);
+
+  const note = el('p', 'field-error');
+  form.appendChild(note);
+  const preview = el('p', 'push-broadcast-hint notify-schedule-preview');
+  form.appendChild(preview);
+  wrap.appendChild(form);
+  body.appendChild(wrap);
+
+  const syncFields = () => {
+    timeField.hidden = modeSelect.value !== 'time';
+    delayField.hidden = modeSelect.value !== 'delay';
+    preview.hidden = modeSelect.value !== 'time' && modeSelect.value !== 'delay';
+    if (modeSelect.value === 'time') {
+      preview.textContent = 'Новому пользователю окно придёт в ближайшее указанное время по Минску.';
+    } else if (modeSelect.value === 'delay') {
+      preview.textContent = 'Отсчёт начнётся после регистрации.';
+    }
+  };
+  modeSelect.addEventListener('change', syncFields);
+
+  const showSaved = (data) => {
+    modeSelect.value = data.mode || 'immediate';
+    timeInput.value = data.time || '10:00';
+    delayInput.value = String(data.delayMinutes || 60);
+    syncFields();
+    preview.hidden = false;
+    preview.textContent =
+      data.mode === 'immediate'
+        ? 'Сейчас: окно показывается сразу после регистрации.'
+        : `Следующее окно для нового пользователя: ${data.preview}.`;
+  };
+
+  api('/api/admin/notify-schedule')
+    .then(showSaved)
+    .catch(() => {
+      preview.textContent = 'Расписание недоступно — проверьте, что сервис обновлён.';
+    });
+
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    note.textContent = '';
+    saveBtn.disabled = true;
+    try {
+      const data = await api('/api/admin/notify-schedule', {
+        method: 'POST',
+        body: {
+          mode: modeSelect.value,
+          time: timeInput.value || '10:00',
+          delayMinutes: Number(delayInput.value) || 60,
+        },
+      });
+      showSaved(data);
+      toast('Время напоминания сохранено', 'ok');
+    } catch (error) {
+      note.textContent = error.message;
+    } finally {
+      saveBtn.disabled = false;
+    }
+  });
+}
+
 function renderAdmin(body, users, overview, approvals = [], refresh = null) {
   body.innerHTML = '';
   const stats = el('div', 'stats');
@@ -6513,6 +6635,8 @@ function renderAdmin(body, users, overview, approvals = [], refresh = null) {
   renderQuality(body);
 
   renderPushBroadcast(body, users);
+
+  renderNotifySchedule(body);
 
   /* Место под копии бронируем сразу, а заполняем после ответа сервера. */
   const backupHolder = el('div');
@@ -8722,6 +8846,9 @@ let notifyOfferLoading = null;
 let notifyOfferShown = false;
 let notifyOfferActionDone = false;
 let notifyOfferTimer = 0;
+/* Отдельный таймер «через сколько показать»: если администратор назначил
+   время позже, окно должно появиться само, а не ждать перезагрузки. */
+let notifyOfferDueTimer = 0;
 /* Разрешение спрашиваем ровно из первого действия человека. */
 let pushPermissionArmed = false;
 /* В этом открытии приложения браузер уже спрашивали — второй раз не просим. */
@@ -8787,6 +8914,28 @@ function postNotifyOffer(action) {
   });
 }
 
+/* Если администратор назначил отправку на будущее, ставим таймер на это
+   время. Таймер не длиннее получаса: после долгого сна компьютера и смены
+   часового пояса расписание перечитывается заново, а не срабатывает вслепую. */
+function armNotifyOfferCheck(info) {
+  clearTimeout(notifyOfferDueTimer);
+  notifyOfferDueTimer = 0;
+  if (!info?.eligible || info.show) return;
+  /* Прошлое окно уже закрыто: следующее назначенное время снова сможет его
+     показать, даже если вкладка не перезагружалась. */
+  notifyOfferShown = false;
+  if (info.status !== 'due' && info.status !== 'scheduled') return;
+  const at = Date.parse(info.nextAt || info.dueAt || '');
+  if (!Number.isFinite(at)) return;
+  const wait = Math.min(Math.max(at - Date.now(), 500) + 500, 30 * 60 * 1000);
+  notifyOfferDueTimer = setTimeout(() => {
+    notifyOfferDueTimer = 0;
+    /* Кэш состояния больше не верен: время могло наступить или измениться. */
+    notifyOfferLoading = null;
+    void maybeShowNotifyOffer();
+  }, wait);
+}
+
 /* Пока человек не решил, не просим разрешение на первом случайном тапе:
    иначе «Отложить» ничего бы не откладывало. */
 function notifyOfferHoldsPermission() {
@@ -8795,7 +8944,14 @@ function notifyOfferHoldsPermission() {
 
 async function maybeShowNotifyOffer() {
   const info = await loadNotifyOffer();
-  if (!state.user || !info?.eligible || !info.show || notifyOfferShown) return;
+  if (!state.user || !info?.eligible || notifyOfferShown) return;
+  /* Время ещё не пришло — не показываем и не теряем: вернёмся по таймеру. */
+  if (!info.show) {
+    armNotifyOfferCheck(info);
+    return;
+  }
+  clearTimeout(notifyOfferDueTimer);
+  notifyOfferDueTimer = 0;
   const auth = $('#auth');
   if (auth && !auth.classList.contains('hidden')) return;
   const modalRoot = $('#modalRoot');
@@ -8864,6 +9020,7 @@ function showNotifyOfferModal(info) {
         void postNotifyOffer('postpone')
           .then((view) => {
             if (view?.eligible) notifyOfferInfo = { ...notifyOfferInfo, ...view };
+            armNotifyOfferCheck(view);
           })
           .catch(() => {});
       }
@@ -8916,6 +9073,7 @@ async function enableNotifyOfferFromModal() {
   try {
     const view = await postNotifyOffer('postpone');
     if (view?.eligible) notifyOfferInfo = { ...notifyOfferInfo, ...view };
+    armNotifyOfferCheck(view);
   } catch {
     /* Повторим при следующем открытии. */
   }
@@ -8929,6 +9087,7 @@ async function postponeNotifyOfferFromModal() {
   try {
     view = await postNotifyOffer('postpone');
     if (view?.eligible) notifyOfferInfo = { ...notifyOfferInfo, ...view };
+    armNotifyOfferCheck(view);
   } catch {
     /* Сеть подвела — при следующем открытии окно вернётся. */
   }
@@ -9206,6 +9365,9 @@ async function initPush() {
     document.addEventListener('visibilitychange', () => {
       if (document.hidden) return;
       clearAppBadge();
+      /* Пока вкладка была свёрнута, могло наступить время напоминания. */
+      notifyOfferLoading = null;
+      void maybeShowNotifyOffer();
       /* Разрешение могли выдать в настройках браузера или в другой вкладке. */
       if (Notification.permission === 'granted') {
         void enablePush()

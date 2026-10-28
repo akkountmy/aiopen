@@ -1,5 +1,6 @@
 import path from 'node:path';
 import { DATA_DIR } from './config.mjs';
+import { alignNotifyMs, firstNotifyMs, readNotifySchedule } from './notifyschedule.mjs';
 import { nowIso, readJson, writeJson } from './util.mjs';
 
 /* Напоминание о включении уведомлений после регистрации.
@@ -48,7 +49,13 @@ function findOffer(offers, userId) {
 
 function due(item, nowMs) {
   if (!item) return false;
-  if (item.status === 'due') return true;
+  /* «due» без даты — запись прошлых версий: она всегда считалась готовой.
+     Если дата есть, уважаем её и для «due»: администратор может поставить
+     отправку на определённое время, и окно не должно выскочить раньше. */
+  if (item.status === 'due') {
+    const at = Date.parse(item.dueAt || '');
+    return !Number.isFinite(at) || at <= nowMs;
+  }
   if (item.status !== 'scheduled') return false;
   const at = Date.parse(item.dueAt || '');
   return Number.isFinite(at) && at <= nowMs;
@@ -81,11 +88,17 @@ export function createNotifyOffer(userId, { now = nowIso() } = {}) {
   const offers = readOffers();
   let item = findOffer(offers, userId);
   if (!item) {
+    /* Время первого окна задаёт администратор: сразу, через N минут или в
+       определённый час. Если время ещё не пришло, запись ждёт в «scheduled». */
+    const schedule = readNotifySchedule();
+    const at = firstNotifyMs(Date.parse(now), schedule);
+    const dueNow = at <= Date.parse(now);
     item = {
       userId,
-      status: 'due',
+      status: dueNow ? 'due' : 'scheduled',
       stage: 1,
-      dueAt: now,
+      dueAt: new Date(at).toISOString(),
+      scheduleMode: schedule.mode,
       createdAt: now,
       updatedAt: now,
       shownCount: 0,
@@ -130,8 +143,10 @@ export function postponeNotifyOffer(userId, { now = nowIso() } = {}) {
   } else {
     item.stage = stage + 1;
     item.status = 'scheduled';
-    /* После первого напоминания — месяц, после второго — три месяца. */
-    item.dueAt = addMonths(now, stage === 1 ? 1 : 3);
+    /* После первого напоминания — месяц, после второго — три месяца. Время
+       суток берём из настроек администратора, чтобы повтор не приходил ночью. */
+    const base = Date.parse(addMonths(now, stage === 1 ? 1 : 3));
+    item.dueAt = new Date(alignNotifyMs(base, readNotifySchedule())).toISOString();
   }
   item.updatedAt = now;
   writeOffers(offers);
