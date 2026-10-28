@@ -58,7 +58,10 @@ function b64url(buffer) {
 
 function fakeSubscription(tag) {
   return {
-    endpoint: `https://127.0.0.1:65530/push/${tag}`,
+    /* Адрес должен быть из белого списка push-служб: сервер не принимает
+       произвольные endpoint. Дальше отправка всё равно упадёт — ключи
+       выдуманные, и это как раз проверяется. */
+    endpoint: `https://fcm.googleapis.com/fake-push/${tag}`,
     keys: { p256dh: b64url(crypto.randomBytes(65)), auth: b64url(crypto.randomBytes(16)) },
     expirationTime: null,
   };

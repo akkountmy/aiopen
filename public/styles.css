@@ -6687,6 +6687,130 @@ html.kb-open .scroll-jump {
   font-size: var(--fs-14);
 }
 
+/* Отложенная отправка: дата и время стоят одной строкой под выбором «когда».
+   Подпись «по Минску» рядом с полями — чтобы админ в другом поясе не гадал. */
+.push-when-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.push-when-row input {
+  flex: 1 1 140px;
+  min-width: 0;
+}
+
+.push-when-row[hidden],
+.push-when-preview[hidden] {
+  display: none;
+}
+
+.push-when-preview {
+  margin: 6px 0 0;
+  color: var(--text-3);
+  font-size: var(--fs-12);
+  line-height: var(--lh-16);
+}
+
+/* Список запланированных: ближайшие сверху, рядом статус и причина отказа. */
+.push-schedule-block {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.push-schedule-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.push-schedule-list {
+  display: grid;
+  gap: 6px;
+}
+
+.push-schedule-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--layer-2);
+}
+
+.push-schedule-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.push-schedule-title-line {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.push-schedule-name {
+  color: var(--text);
+  font-size: var(--fs-13);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.push-schedule-status {
+  flex: none;
+  padding: 1px 7px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--text-3);
+  font-size: var(--fs-11);
+  line-height: var(--lh-16);
+  white-space: nowrap;
+}
+
+.push-schedule-status.scheduled {
+  color: var(--accent-strong);
+  border-color: rgba(86, 134, 254, 0.35);
+}
+
+.push-schedule-status.sent {
+  color: var(--success);
+  border-color: rgba(78, 209, 126, 0.35);
+}
+
+.push-schedule-status.failed,
+.push-schedule-status.missed {
+  color: var(--danger-ink);
+  border-color: rgba(242, 90, 90, 0.35);
+}
+
+.push-schedule-meta {
+  margin-top: 3px;
+  color: var(--text-3);
+  font-size: var(--fs-12);
+  line-height: var(--lh-16);
+}
+
+.push-schedule-note {
+  margin-top: 2px;
+  color: var(--text-4);
+  font-size: var(--fs-11);
+  line-height: var(--lh-16);
+}
+
+.push-schedule-cancel {
+  flex: none;
+  height: 30px;
+  margin: 0;
+  padding: 0 10px;
+  font-size: var(--fs-12);
+}
+
 .push-picker-head {
   display: flex;
   align-items: baseline;
@@ -6960,6 +7084,22 @@ html.kb-open .scroll-jump {
 
   .push-device {
     white-space: normal;
+  }
+
+  .push-when-row input {
+    flex: 1 1 100%;
+  }
+
+  .push-schedule-row {
+    flex-wrap: wrap;
+  }
+
+  .push-schedule-main {
+    flex: 1 1 100%;
+  }
+
+  .push-schedule-cancel {
+    margin-left: auto;
   }
 }
 

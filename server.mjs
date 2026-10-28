@@ -52,6 +52,16 @@ import {
   postponeNotifyOffer,
 } from './src/notifyoffer.mjs';
 import { notifyScheduleView, saveNotifySchedule } from './src/notifyschedule.mjs';
+import {
+  PUSH_LATE_LIMIT_MS,
+  cancelPushSchedule,
+  claimPushSchedule,
+  createPushSchedule,
+  duePushSchedule,
+  finishPushSchedule,
+  listPushSchedule,
+  recoverPushSchedule,
+} from './src/pushschedule.mjs';
 import { classifyCompletion } from './src/pushpolicy.mjs';
 import {
   forgetUser as pushForgetUser,
@@ -2514,6 +2524,132 @@ function sendSharedFile(res, full, { name, head = false } = {}) {
   fs.createReadStream(full).pipe(res);
 }
 
+/* --- отложенные рассылки уведомлений ---
+   Администратор выбирает день и время, а отправкой занимается этот тик. Список
+   получателей пересчитываем в момент отправки: за сутки человек мог выключить
+   уведомления на телефоне или наоборот включить на новом. */
+let scheduledPushBusy = false;
+
+function pushAudience({ all = false, requested = [], testOnly = false, adminId = '' } = {}) {
+  const targets = pushTargets(store.users());
+  const devicesByUser = new Map(targets.users.map((item) => [item.userId, item.devices]));
+  const requestedIds = [...new Set((Array.isArray(requested) ? requested : []).map(String).filter(Boolean))];
+  const userIds = testOnly
+    ? [adminId].filter((id) => devicesByUser.get(id) > 0)
+    : all
+      ? [...devicesByUser.keys()].filter((id) => devicesByUser.get(id) > 0)
+      : requestedIds.filter((id) => devicesByUser.get(id) > 0);
+  /* Про тех, кому уведомления не придут вовсе, сообщаем отдельно: иначе
+     администратор решит, что объявление получили все. */
+  const skipped = testOnly
+    ? (devicesByUser.get(adminId) ? 0 : 1)
+    : all
+      ? store.users().filter((item) => !devicesByUser.get(item.id)).length
+      : requestedIds.filter((id) => !devicesByUser.get(id)).length;
+  return { userIds, skipped };
+}
+
+/** Подпись аудитории для списка запланированных рассылок. */
+function pushAudienceText(item) {
+  if (item.all) return 'Все, у кого включены уведомления';
+  const users = store.users();
+  const names = item.userIds
+    .map((id) => users.find((user) => user.id === id))
+    .filter(Boolean)
+    .map((user) => user.displayName || user.username);
+  if (!names.length) return 'Получатели не найдены';
+  if (names.length <= 3) return names.join(', ');
+  return `${names.slice(0, 3).join(', ')} и ещё ${names.length - 3}`;
+}
+
+function publicScheduledPush(item) {
+  return { ...item, audience: pushAudienceText(item) };
+}
+
+async function deliverScheduledPush(item) {
+  /* Забираем запись в работу до отправки: второй тик и перезапуск не отправят
+     то же объявление ещё раз. */
+  const claimed = claimPushSchedule(item.id);
+  if (!claimed) return;
+  const audience = pushAudience({ all: claimed.all, requested: claimed.userIds });
+  if (!audience.userIds.length) {
+    finishPushSchedule(claimed.id, {
+      status: 'failed',
+      sentAt: nowIso(),
+      skipped: audience.skipped,
+      error: 'Ни у одного получателя не включены уведомления',
+    });
+    console.log(`[push] отложенная рассылка «${claimed.title}» не отправлена: нет получателей`);
+    return;
+  }
+  try {
+    const result = await pushToUsers(audience.userIds, {
+      title: claimed.title,
+      body: claimed.text,
+      url: '/',
+      kind: 'news',
+      tag: `dsh-news-${claimed.id}`,
+      onlyWhenAway: false,
+    });
+    const ok = result.sent > 0;
+    finishPushSchedule(claimed.id, {
+      status: ok ? 'sent' : 'failed',
+      sentAt: nowIso(),
+      result,
+      skipped: audience.skipped,
+      error: ok ? null : 'Ни одно устройство не приняло уведомление',
+    });
+    console.log(
+      `[push] отложенная рассылка от ${claimed.createdBy || 'администратора'}: ` +
+        `принято устройств ${result.sent} из ${result.total}, людей ${result.users}`,
+    );
+  } catch (error) {
+    finishPushSchedule(claimed.id, {
+      status: 'failed',
+      sentAt: nowIso(),
+      skipped: audience.skipped,
+      error: error?.message || 'Ошибка отправки',
+    });
+    console.error('[push] отложенная рассылка не удалась:', error?.message || error);
+  }
+}
+
+function scheduledPushTick() {
+  if (scheduledPushBusy) return;
+  scheduledPushBusy = true;
+  const now = Date.now();
+  (async () => {
+    for (const item of duePushSchedule(now)) {
+      const at = Date.parse(item.sendAt);
+      if (now - at > PUSH_LATE_LIMIT_MS) {
+        finishPushSchedule(item.id, {
+          status: 'missed',
+          sentAt: nowIso(),
+          error: 'Время прошло, пока сервис был недоступен',
+        });
+        console.log(`[push] отложенная рассылка «${item.title}» пропущена: окно прошло`);
+        continue;
+      }
+      await deliverScheduledPush(item);
+    }
+  })()
+    .catch((error) => console.error('[push] планировщик:', error?.message || error))
+    .finally(() => {
+      scheduledPushBusy = false;
+    });
+}
+
+function startPushScheduler() {
+  const recovered = recoverPushSchedule();
+  if (recovered) console.log(`[push] после перезапуска закрыто незавершённых отправок: ${recovered}`);
+  /* Первый тик — с задержкой: при старте сервиса сначала поднимаются ключи и
+     хранилище, а рассылке спешить некуда. */
+  const startDelayMs = Math.max(0, Number(process.env.DSHOW_PUSH_START_MS ?? 15 * 1000) || 0);
+  setTimeout(scheduledPushTick, startDelayMs).unref?.();
+  const timer = setInterval(scheduledPushTick, 30 * 1000);
+  timer.unref?.();
+}
+
 async function route(req, res) {
   const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
   const pathname = tryDecode(url.pathname);
@@ -3359,6 +3495,52 @@ async function route(req, res) {
       if (!admin) return;
       return sendJson(res, 200, pushTargets(store.users()), { 'Cache-Control': 'no-store' });
     }
+    /* Отложенные рассылки: список, постановка в расписание и отмена. Время
+       принимаем настенным (дата + ЧЧ:ММ по Минску), а храним готовый момент. */
+    if (pathname === '/api/admin/push/schedule' && method === 'GET') {
+      const admin = requireAdmin(req, res);
+      if (!admin) return;
+      const view = listPushSchedule();
+      return sendJson(
+        res,
+        200,
+        { ...view, items: view.items.map(publicScheduledPush) },
+        { 'Cache-Control': 'no-store' },
+      );
+    }
+    if (pathname === '/api/admin/push/schedule' && method === 'POST') {
+      const admin = requireAdmin(req, res);
+      if (!admin) return;
+      const body = await readJsonBody(req);
+      const requested = [...new Set((Array.isArray(body.userIds) ? body.userIds : []).map(String).filter(Boolean))];
+      const known = new Set(store.users().map((user) => user.id));
+      const userIds = requested.filter((id) => known.has(id));
+      try {
+        const item = createPushSchedule(
+          { ...body, all: body.all === true, userIds },
+          { createdBy: admin.username },
+        );
+        console.log(
+          `[push] ${admin.username} запланировал рассылку «${item.title}» на ${item.sendAt}` +
+            (item.all ? ', всем' : `, получателей ${item.userIds.length}`),
+        );
+        return sendJson(res, 200, { ok: true, item: publicScheduledPush(item) });
+      } catch (error) {
+        return sendError(res, 400, error?.message || 'Не удалось запланировать рассылку');
+      }
+    }
+    if (pathname === '/api/admin/push/schedule/cancel' && method === 'POST') {
+      const admin = requireAdmin(req, res);
+      if (!admin) return;
+      const body = await readJsonBody(req);
+      try {
+        const item = cancelPushSchedule(body.id, { by: admin.username });
+        console.log(`[push] ${admin.username} отменил рассылку «${item.title}»`);
+        return sendJson(res, 200, { ok: true, item: publicScheduledPush(item) });
+      } catch (error) {
+        return sendError(res, 400, error?.message || 'Не удалось отменить рассылку');
+      }
+    }
     if (pathname === '/api/admin/push' && method === 'POST') {
       const admin = requireAdmin(req, res);
       if (!admin) return;
@@ -3369,26 +3551,13 @@ async function route(req, res) {
       if (title.length > 80) return sendError(res, 400, 'Заголовок длиннее 80 символов');
       if (!text) return sendError(res, 400, 'Укажите текст уведомления');
       if (text.length > 300) return sendError(res, 400, 'Текст длиннее 300 символов');
-      const targets = pushTargets(store.users());
-      const devicesByUser = new Map(targets.users.map((item) => [item.userId, item.devices]));
       const requested = [...new Set((Array.isArray(body.userIds) ? body.userIds : []).map(String).filter(Boolean))];
       const all = body.all === true;
       /* Пробная отправка — всегда только на устройства самого администратора.
          Аудиторию из запроса при этом игнорируем: иначе опечатка или старая
          вкладка превращали проверку в рассылку «Тест» всем пользователям. */
       const testOnly = body.test === true;
-      const userIds = testOnly
-        ? [admin.id].filter((id) => devicesByUser.get(id) > 0)
-        : all
-          ? [...devicesByUser.keys()].filter((id) => devicesByUser.get(id) > 0)
-          : requested.filter((id) => devicesByUser.get(id) > 0);
-      /* Про тех, кому уведомления не придут вовсе, сообщаем отдельно: иначе
-         администратор решит, что объявление получили все. */
-      const skipped = testOnly
-        ? (devicesByUser.get(admin.id) ? 0 : 1)
-        : all
-          ? store.users().filter((item) => !devicesByUser.get(item.id)).length
-          : requested.filter((id) => !devicesByUser.get(id)).length;
+      const { userIds, skipped } = pushAudience({ all, requested, testOnly, adminId: admin.id });
       if (!userIds.length) {
         return sendError(
           res,
@@ -3554,6 +3723,10 @@ if (process.env.DSHOW_DASHBOARD !== '0') startDashboardScheduler();
 /* Суточные копии состояния: даже если проект удалят по ошибке или файл индекса
    побьётся, переписки и структура вернутся. Выключается DSHOW_BACKUPS=0. */
 if (process.env.DSHOW_BACKUPS !== '0') startAutoBackup();
+
+/* Отложенные рассылки уведомлений: раз в полминуты проверяем, не пора ли
+   отправлять. Выключается DSHOW_PUSH_SCHEDULE=0 — это нужно проверкам. */
+if (process.env.DSHOW_PUSH_SCHEDULE !== '0') startPushScheduler();
 
 process.on('SIGINT', () => {
   console.log('\nОстановка…');

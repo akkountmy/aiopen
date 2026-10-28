@@ -6064,6 +6064,61 @@ const PUSH_STATUS = {
   unknown: { label: 'нет данных', cls: 'muted' },
 };
 
+/* Отложенная рассылка: дата и время вводятся по Минску, поэтому и подписи
+   рядом с формой считаем в минском поясе, а не в поясе браузера. */
+const PUSH_TZ = 'Europe/Minsk';
+let pushScheduleGeneration = 0;
+const PUSH_SCHEDULE_STATUS = {
+  scheduled: { label: 'запланирована', cls: 'scheduled' },
+  sending: { label: 'отправляется', cls: 'sending' },
+  sent: { label: 'отправлена', cls: 'sent' },
+  failed: { label: 'не отправлена', cls: 'failed' },
+  missed: { label: 'пропущена', cls: 'missed' },
+  canceled: { label: 'отменена', cls: 'canceled' },
+};
+
+function pushZonedParts(ms) {
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone: PUSH_TZ,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  });
+  const out = {};
+  for (const part of formatter.formatToParts(new Date(ms))) {
+    if (part.type !== 'literal') out[part.type] = part.value;
+  }
+  return out;
+}
+
+function pushDefaultWhen() {
+  const parts = pushZonedParts(Date.now() + 15 * 60000);
+  return { date: `${parts.year}-${parts.month}-${parts.day}`, time: `${parts.hour}:${parts.minute}` };
+}
+
+function pushWhenLabel(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleString('ru-RU', {
+    timeZone: PUSH_TZ,
+    day: 'numeric',
+    month: 'long',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function pushWallLabel(date, time) {
+  if (!date || !time) return '';
+  const probe = new Date(`${date}T12:00:00Z`);
+  if (Number.isNaN(probe.getTime())) return '';
+  const day = probe.toLocaleDateString('ru-RU', { timeZone: 'UTC', day: 'numeric', month: 'long' });
+  return `${day} в ${time} по Минску`;
+}
+
 function pushStatusInfo(item) {
   if (item.enabled > 0 && (item.disabled > 0 || item.pending > 0)) {
     return { label: 'включены не везде', cls: 'partial' };
@@ -6164,6 +6219,9 @@ async function renderBackups(container) {
 }
 
 function renderPushBroadcast(body, users) {
+  /* Панель могут перерисовать, не закрывая: старые опросы списка должны
+     замолчать, иначе они продолжат дёргать сервер и перерисовывать старые узлы. */
+  const scheduleGeneration = ++pushScheduleGeneration;
   body.appendChild(el('div', 'admin-section-title', 'Рассылка уведомлений'));
   const card = el('div', 'push-broadcast');
   const hint = el('p', 'push-broadcast-hint', 'Смотрим, у кого включены уведомления…');
@@ -6202,6 +6260,40 @@ function renderPushBroadcast(body, users) {
   audienceField.appendChild(audience);
   form.appendChild(audienceField);
 
+  /* Когда отправить: сразу или в выбранный день и час. Время намеренно
+     подписано «Минск»: сервер живёт в этом поясе, и админ с другого пояса
+     должен понимать, какое время он вводит. */
+  const whenField = el('div', 'field push-when-field');
+  whenField.appendChild(el('span', 'field-label', 'Когда отправить'));
+  const whenSelect = el('select');
+  for (const [value, label] of [
+    ['now', 'Сейчас, сразу после нажатия'],
+    ['later', 'В выбранное время (Минск)'],
+  ]) {
+    const option = el('option', '', label);
+    option.value = value;
+    whenSelect.appendChild(option);
+  }
+  whenField.appendChild(whenSelect);
+
+  const whenRow = el('div', 'push-when-row');
+  const dateInput = el('input');
+  dateInput.type = 'date';
+  dateInput.setAttribute('aria-label', 'Дата отправки');
+  const timeInput = el('input');
+  timeInput.type = 'time';
+  timeInput.step = '60';
+  timeInput.setAttribute('aria-label', 'Время отправки');
+  whenRow.append(dateInput, timeInput);
+  whenField.appendChild(whenRow);
+  const whenPreview = el('p', 'push-when-preview');
+  whenField.appendChild(whenPreview);
+  form.appendChild(whenField);
+
+  const defaultWhen = pushDefaultWhen();
+  dateInput.value = defaultWhen.date;
+  timeInput.value = defaultWhen.time;
+
   const pickerHead = el('div', 'push-picker-head');
   pickerHead.appendChild(el('span', 'push-picker-title', 'Получатели'));
   const pickerNote = el('span', 'push-picker-note', 'Отметить можно только устройства с включёнными уведомлениями');
@@ -6224,6 +6316,20 @@ function renderPushBroadcast(body, users) {
   actions.appendChild(testBtn);
   form.appendChild(actions);
 
+  const syncWhen = () => {
+    const later = whenSelect.value === 'later';
+    whenRow.hidden = !later;
+    whenPreview.hidden = !later;
+    whenPreview.textContent = later
+      ? `Уйдёт ${pushWallLabel(dateInput.value, timeInput.value) || 'в выбранное время'}.`
+      : '';
+    sendBtn.textContent = later ? 'Запланировать' : 'Отправить уведомление';
+  };
+  whenSelect.addEventListener('change', syncWhen);
+  dateInput.addEventListener('change', syncWhen);
+  timeInput.addEventListener('change', syncWhen);
+  syncWhen();
+
   const testHint = el('p', 'push-broadcast-hint', 'Проверка уходит только на ваши устройства — остальные пользователи её не получат.');
   form.appendChild(testHint);
 
@@ -6235,6 +6341,17 @@ function renderPushBroadcast(body, users) {
   card.appendChild(hint);
   card.appendChild(summary);
   card.appendChild(form);
+
+  /* Список отложенных: видно, что уже стоит в расписании, на когда и кому.
+     Отменить можно только ту, что ещё ждёт своего времени. */
+  const scheduleBlock = el('div', 'push-schedule-block');
+  const scheduleHead = el('div', 'push-schedule-head');
+  scheduleHead.appendChild(el('span', 'push-picker-title', 'Запланированные рассылки'));
+  scheduleHead.appendChild(el('span', 'push-picker-note', 'Время по Минску'));
+  scheduleBlock.appendChild(scheduleHead);
+  const scheduleList = el('div', 'push-schedule-list');
+  scheduleBlock.appendChild(scheduleList);
+  card.appendChild(scheduleBlock);
   body.appendChild(card);
 
   let entries = [];
@@ -6315,6 +6432,103 @@ function renderPushBroadcast(body, users) {
     }
     syncAudience();
   };
+
+  const renderScheduled = (items) => {
+    scheduleList.innerHTML = '';
+    if (!items.length) {
+      scheduleList.appendChild(
+        el('p', 'push-broadcast-hint', 'Пока ничего не запланировано.'),
+      );
+      return;
+    }
+    for (const item of items) {
+      const row = el('div', `push-schedule-row ${item.status}`);
+      const main = el('div', 'push-schedule-main');
+      const titleLine = el('div', 'push-schedule-title-line');
+      titleLine.appendChild(el('span', 'push-schedule-name', item.title));
+      const status = PUSH_SCHEDULE_STATUS[item.status] || PUSH_SCHEDULE_STATUS.scheduled;
+      titleLine.appendChild(el('span', `push-schedule-status ${status.cls}`, status.label));
+      main.appendChild(titleLine);
+
+      const whenText =
+        item.status === 'sent' && item.sentAt
+          ? `Отправлена ${pushWhenLabel(item.sentAt)}`
+          : item.status === 'canceled' && item.canceledAt
+            ? `Отменена · была на ${pushWhenLabel(item.sendAt)}`
+            : item.status === 'missed'
+              ? `Пропущена · была на ${pushWhenLabel(item.sendAt)}`
+              : `На ${pushWhenLabel(item.sendAt)}`;
+      main.appendChild(el('div', 'push-schedule-meta', `${whenText} · ${item.audience || ''}`));
+
+      const details = [];
+      if (item.result && Number.isFinite(Number(item.result.sent))) {
+        const sent = Number(item.result.sent);
+        const total = Number(item.result.total) || 0;
+        details.push(`принято ${sent} из ${total} ${plural(total, 'устройство', 'устройства', 'устройств')}`);
+      }
+      if (item.skipped) {
+        details.push(`не дойдёт ${item.skipped} ${plural(item.skipped, 'человеку', 'людям', 'людям')}`);
+      }
+      if (item.error) details.push(item.error);
+      if (details.length) main.appendChild(el('div', 'push-schedule-note', details.join(' · ')));
+      row.appendChild(main);
+
+      if (item.status === 'scheduled') {
+        const cancelBtn = el('button', 'btn btn-quiet push-schedule-cancel', 'Отменить');
+        cancelBtn.type = 'button';
+        cancelBtn.addEventListener('click', async () => {
+          cancelBtn.disabled = true;
+          /* Окно подтверждения заменяет панель администратора в общем слоте.
+             Открываем панель заново следующим шагом — после того как окно
+             подтверждения действительно закроется. */
+          const reopenAdmin = () => setTimeout(() => void adminModal(), 0);
+          try {
+            const ok = await confirmDialog(
+              'Отменить рассылку?',
+              `«${item.title}» не уйдёт получателям.`,
+              'Отменить рассылку',
+              true,
+            );
+            if (!ok) {
+              reopenAdmin();
+              return;
+            }
+            await api('/api/admin/push/schedule/cancel', { method: 'POST', body: { id: item.id } });
+            toast('Рассылка отменена', 'ok');
+            reopenAdmin();
+          } catch (error) {
+            toast(error.message, 'error');
+            reopenAdmin();
+          }
+        });
+        row.appendChild(cancelBtn);
+      }
+      scheduleList.appendChild(row);
+    }
+  };
+
+  const loadSchedule = async () => {
+    try {
+      const data = await api('/api/admin/push/schedule');
+      if (scheduleGeneration !== pushScheduleGeneration) return;
+      renderScheduled(Array.isArray(data.items) ? data.items : []);
+    } catch {
+      if (scheduleGeneration !== pushScheduleGeneration) return;
+      scheduleList.replaceChildren(
+        el('p', 'push-broadcast-hint', 'Не удалось загрузить список отложенных рассылок. Обновите страницу.'),
+      );
+    }
+  };
+  /* Пока панель открыта, раз в полминуты подтягиваем статусы: отправленная
+     рассылка должна сама превратиться из «запланирована» в «отправлена». */
+  const pollSchedule = async () => {
+    if (scheduleGeneration !== pushScheduleGeneration || !body.isConnected) return;
+    await loadSchedule();
+    if (scheduleGeneration === pushScheduleGeneration && body.isConnected) {
+      setTimeout(pollSchedule, 30000);
+    }
+  };
+  void pollSchedule();
 
   api('/api/admin/push')
     .then((data) => {
@@ -6401,6 +6615,17 @@ function renderPushBroadcast(body, users) {
       textInput.focus();
       return;
     }
+    const later = whenSelect.value === 'later';
+    if (later && !dateInput.value) {
+      note.textContent = 'Выберите дату отправки';
+      dateInput.focus();
+      return;
+    }
+    if (later && !timeInput.value) {
+      note.textContent = 'Выберите время отправки';
+      timeInput.focus();
+      return;
+    }
     const selected = audience.value === 'some';
     const userIds = boxes.filter((box) => box.checked).map((box) => box.value);
     if (selected && !userIds.length) {
@@ -6409,30 +6634,43 @@ function renderPushBroadcast(body, users) {
     }
     sendBtn.disabled = true;
     const caption = sendBtn.textContent;
-    sendBtn.textContent = 'Отправляем…';
+    sendBtn.textContent = later ? 'Планируем…' : 'Отправляем…';
     try {
-      const result = await api('/api/admin/push', {
-        method: 'POST',
-        body: { all: !selected, userIds, title, text },
-      });
-      if (result.sent) {
-        toast(
-          `Уведомление ушло на ${result.sent} ${plural(result.sent, 'устройство', 'устройства', 'устройств')}`,
-          'ok',
-        );
+      if (later) {
+        /* Время отправляем настенным: сервер сам переведёт минское время в
+           UTC. Так админ с другим поясом в браузере не сдвинет рассылку. */
+        const data = await api('/api/admin/push/schedule', {
+          method: 'POST',
+          body: { all: !selected, userIds, title, text, date: dateInput.value, time: timeInput.value },
+        });
+        toast(`Рассылка запланирована на ${pushWhenLabel(data.item?.sendAt)}`, 'ok');
         titleInput.value = '';
         textInput.value = '';
-        for (const box of boxes) {
-          box.checked = false;
-          box.closest('.push-pick')?.classList.remove('on');
-        }
-        syncAudience();
+        await loadSchedule();
       } else {
-        toast('Ни одно устройство не приняло уведомление', 'error');
-      }
-      if (result.skipped) {
-        resultLine.textContent = `Не дойдёт: ${result.skipped} ${plural(result.skipped, 'человеку', 'людям', 'людям')} — у них уведомления выключены или устройства ещё не подключены.`;
-        resultLine.hidden = false;
+        const result = await api('/api/admin/push', {
+          method: 'POST',
+          body: { all: !selected, userIds, title, text },
+        });
+        if (result.sent) {
+          toast(
+            `Уведомление ушло на ${result.sent} ${plural(result.sent, 'устройство', 'устройства', 'устройств')}`,
+            'ok',
+          );
+          titleInput.value = '';
+          textInput.value = '';
+          for (const box of boxes) {
+            box.checked = false;
+            box.closest('.push-pick')?.classList.remove('on');
+          }
+          syncAudience();
+        } else {
+          toast('Ни одно устройство не приняло уведомление', 'error');
+        }
+        if (result.skipped) {
+          resultLine.textContent = `Не дойдёт: ${result.skipped} ${plural(result.skipped, 'человеку', 'людям', 'людям')} — у них уведомления выключены или устройства ещё не подключены.`;
+          resultLine.hidden = false;
+        }
       }
     } catch (error) {
       note.textContent = error.message;

@@ -68,6 +68,11 @@ function zonedToUtc(year, month, day, hour, minute) {
   return guess;
 }
 
+/** Настенное время Минска → UTC-миллисекунды. Нужно и отложенным рассылкам. */
+export function minskWallToMs(year, month, day, hour, minute) {
+  return zonedToUtc(year, month, day, hour, minute);
+}
+
 function dayShift(parts, days) {
   const date = new Date(Date.UTC(parts.year, parts.month - 1, parts.day + days));
   return { year: date.getUTCFullYear(), month: date.getUTCMonth() + 1, day: date.getUTCDate() };
