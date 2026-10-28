@@ -43,6 +43,14 @@ import { approvalMessage, notifyAdmin, suspicionMessage } from './src/notify.mjs
 import { issueOpenLink, resolveOpenLink, asciiFileName, OPEN_PREFIX } from './src/openlink.mjs';
 import { clearPresence, isUserActive, touchPresence } from './src/presence.mjs';
 import { proofreadText } from './src/proofread.mjs';
+import {
+  createNotifyOffer,
+  denyNotifyOffer,
+  enableNotifyOffer,
+  markNotifyOfferShown,
+  notifyOfferState,
+  postponeNotifyOffer,
+} from './src/notifyoffer.mjs';
 import { classifyCompletion } from './src/pushpolicy.mjs';
 import {
   forgetUser as pushForgetUser,
@@ -1377,6 +1385,14 @@ async function handleSignup(req, res) {
     return sendError(res, 409, 'Такой логин уже занят');
   }
   const device = deviceIdOf(req);
+  /* Напоминание о уведомлениях получает только тот, кто завёл аккаунт сам.
+     Старым пользователям запись не создаётся: их нельзя спрашивать задним
+     числом, они уже привыкли к прежнему поведению. */
+  try {
+    createNotifyOffer(user.id);
+  } catch (error) {
+    console.error('notify-offer:', error?.message || error);
+  }
   const { token, displaced } = issueSession(store, user.id, {
     ip,
     ua: req.headers['user-agent'],
@@ -2574,6 +2590,25 @@ async function route(req, res) {
     if (pathname === '/api/me' && method === 'GET') return sendJson(res, 200, bootstrapPayload(user));
     if (pathname === '/api/bootstrap' && method === 'GET') return sendJson(res, 200, bootstrapPayload(user));
 
+    /* --- напоминание о включении уведомлений --- */
+    if (pathname === '/api/notify-offer' && method === 'GET') {
+      return sendJson(res, 200, notifyOfferState(user.id), { 'Cache-Control': 'no-store' });
+    }
+    if (pathname === '/api/notify-offer' && method === 'POST') {
+      const body = await readJsonBody(req);
+      const action = String(body.action || '');
+      const device = deviceIdOf(req);
+      let result;
+      if (action === 'shown') result = markNotifyOfferShown(user.id);
+      else if (action === 'postpone') result = postponeNotifyOffer(user.id);
+      else if (action === 'enable') result = enableNotifyOffer(user.id, { deviceId: body.deviceId || device.id });
+      else if (action === 'denied' || action === 'unsupported') {
+        result = denyNotifyOffer(user.id, { reason: action });
+      } else {
+        return sendError(res, 400, 'Неизвестное действие');
+      }
+      return sendJson(res, 200, result, { 'Cache-Control': 'no-store' });
+    }
     /* --- уведомления в ярлык-приложение --- */
     /* Вкладка сообщает, на экране она или ушла в фон. Пока хоть одна вкладка
        пользователя видима, пуш о готовой задаче не отправляем ни на одно его

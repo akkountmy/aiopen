@@ -38,6 +38,7 @@ const ICONS = {
   key: '<svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="7.5" cy="12.5" r="3.5"/><path d="M10 10l6-6M14 6l1.5 1.5M16 4l1.5 1.5"/></svg>',
   users:
     '<svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="7.5" cy="7" r="2.6"/><path d="M3 16c0-2.2 2-3.6 4.5-3.6S12 13.8 12 16"/><path d="M13 5.2a2.4 2.4 0 010 4.6M14 12.6c1.9.3 3 1.6 3 3.4"/></svg>',
+  bell: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 8.2a5 5 0 0110 0c0 3.1 1.1 4.2 1.7 4.8H3.3C3.9 12.4 5 11.3 5 8.2z"/><path d="M8.2 16a2 2 0 003.6 0"/></svg>',
   logout:
     '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M12 4H5.5A1.5 1.5 0 004 5.5v9A1.5 1.5 0 005.5 16H12"/><path d="M11 10h6M14.5 7L17.5 10l-3 3"/></svg>',
   pen: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M13.5 4.5l2 2L7 15H5v-2z"/></svg>',
@@ -825,8 +826,18 @@ async function startApp(payload) {
   if (state.activeProjectId) syncFilesPanel({ reload: !restoredUi });
   /* Черновик возвращаем, если страница сама обновилась до новой версии. */
   restoreDraft();
-  /* Уведомления включаются сами после входа: человек ничего не настраивает. */
+  /* Новым пользователям сначала показываем окно включения уведомлений.
+     Остальным уведомления, как и раньше, включаются сами после входа. */
   pushRegistered = false;
+  notifyOfferInfo = null;
+  notifyOfferLoading = null;
+  notifyOfferShown = false;
+  notifyOfferActionDone = false;
+  clearTimeout(notifyOfferTimer);
+  notifyOfferTimer = setTimeout(() => {
+    notifyOfferTimer = 0;
+    void maybeShowNotifyOffer();
+  }, 600);
   void ensurePush();
   /* Сервер должен знать, что человек сейчас в сервисе: тогда пуш о готовой
      задаче не уйдёт ни на это устройство, ни на телефон. */
@@ -838,6 +849,9 @@ async function startApp(payload) {
   /* Подсказка про боковые шторки — после того, как экран уже нарисован:
      иначе она мелькает над пустой страницей. */
   setTimeout(maybeShowSwipeHint, 2200);
+  /* Совет поставить ярлык — только теперь, когда вход уже состоялся: на экране
+     логина он не должен появляться. */
+  scheduleHomeScreenOffer();
 }
 
 function activeProject() {
@@ -885,14 +899,21 @@ function projectNode(project) {
   const chats = project.chats || [];
   const open = state.expanded.has(project.id);
   const collapsed = Boolean(chats.length) && !open;
-  /* Знак того, что внутри проекта идёт работа: видно и при свёрнутом списке. */
-  const hasLiveRun = chats.some((chat) => liveRunFor(chat.id));
+  /* Знак того, что внутри проекта идёт работа: видно и при свёрнутом списке.
+     Считаем сами диалоги, а не только факт: в подсказке точки называем их
+     число, чтобы по свёрнутой папке было понятно, сколько задач идёт. */
+  const liveChats = chats.filter((chat) => liveRunFor(chat.id));
+  const hasLiveRun = liveChats.length > 0;
+  const liveLabel = hasLiveRun
+    ? `Идёт работа: ${liveChats.length} ${plural(liveChats.length, 'задача', 'задачи', 'задач')}`
+    : '';
   const wrap = el(
     'div',
     `project${project.id === state.activeProjectId ? ' active' : ''}${project.workflowId ? ' in-workflow' : ''}${collapsed ? ' collapsed' : ''}${hasLiveRun ? ' live' : ''}`,
   );
   const row = el('div', 'project-row');
   row.title = chats.length ? (open ? 'Свернуть диалоги' : 'Раскрыть диалоги') : project.name;
+  if (hasLiveRun && collapsed) row.title += ` · ${liveLabel}`;
   /* Треугольник слева — та же деталь, что у папок: по нему видно, раскрыт ли
      список диалогов. У проекта без диалогов место остаётся пустым, чтобы
      имена не прыгали. */
@@ -909,6 +930,17 @@ function projectNode(project) {
   main.type = 'button';
   main.innerHTML = `<span class="p-caret${chats.length ? '' : ' is-empty'}"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M6 8l4 4 4-4"/></svg></span><span class="f-icon">${projectIcon}</span><span class="p-name">${escapeHtml(project.name)}</span>`;
   if (chats.length) main.setAttribute('aria-expanded', String(open));
+  /* Точка — отдельный элемент строки, а не ::after у имени: у длинного
+     названия имя обрезается многоточием, и точка внутри .p-name пропадала
+     первой. Теперь её место в строке зарезервировано, и на компьютере она
+     видна так же, как в ярлыке-приложении. */
+  if (hasLiveRun && collapsed) {
+    const live = el('span', 'p-live');
+    live.title = liveLabel;
+    live.setAttribute('role', 'img');
+    live.setAttribute('aria-label', liveLabel);
+    main.appendChild(live);
+  }
   const count = el('span', 'p-count', project.chats?.length ? String(project.chats.length) : '');
   main.appendChild(count);
   row.appendChild(main);
@@ -1019,14 +1051,33 @@ function projectNode(project) {
 
 function workflowNode(workflow) {
   const collapsed = state.collapsedWorkflows.has(workflow.id);
-  const node = el('div', `workflow${collapsed ? ' collapsed' : ''}`);
   const projects = state.projects.filter((project) => project.workflowId === workflow.id);
+  /* Свёрнутая папка прячет строки проектов вместе с их точками. Считаем
+     задачи внутри и показываем точку на самой папке: иначе работающий
+     ассистент в свёрнутой папке не виден совсем — ни в компьютере, ни в
+     ярлыке-приложении. */
+  const liveCount = projects.reduce(
+    (total, project) => total + (project.chats || []).filter((chat) => liveRunFor(chat.id)).length,
+    0,
+  );
+  const liveLabel = liveCount
+    ? `В папке идёт работа: ${liveCount} ${plural(liveCount, 'задача', 'задачи', 'задач')}`
+    : '';
+  const node = el('div', `workflow${collapsed ? ' collapsed' : ''}${collapsed && liveCount ? ' live' : ''}`);
   const row = el('div', 'workflow-row');
   row.title = collapsed ? 'Развернуть папку' : 'Свернуть папку';
+  if (collapsed && liveCount) row.title += ` · ${liveLabel}`;
   const main = el('button', 'row-main');
   main.type = 'button';
   main.setAttribute('aria-expanded', String(!collapsed));
   main.innerHTML = `<span class="workflow-caret"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M6 8l4 4 4-4"/></svg></span><span class="w-icon">${ICONS.folder}</span><span class="w-name">${escapeHtml(workflow.name)}</span>`;
+  if (collapsed && liveCount) {
+    const live = el('span', 'w-live');
+    live.title = liveLabel;
+    live.setAttribute('role', 'img');
+    live.setAttribute('aria-label', liveLabel);
+    main.appendChild(live);
+  }
   main.appendChild(el('span', 'w-count', String(projects.length)));
   row.appendChild(main);
   const menuBtn = el('button', 'row-menu');
@@ -1449,6 +1500,16 @@ function renderMessage(message) {
   head.querySelector('.work-label').textContent = message.streaming && message.workNote ? message.workNote : 'работаю…';
   wrap.appendChild(head);
 
+  /* Ответ на длинную задачу идёт минутами, и человек успевает уйти в чтение
+     прошлых сообщений. Подпись «отвечаю на …» прямо в шапке показывает, что
+     работа идёт именно по последнему запросу, а не по вчерашнему. */
+  if (message.streaming && message.replyTo) {
+    const ask = el('div', 'msg-ask');
+    const text = String(message.replyTo).replace(/\s+/g, ' ').trim();
+    ask.textContent = `Отвечаю на: «${text.length > 90 ? `${text.slice(0, 90).trimEnd()}…` : text}»`;
+    wrap.appendChild(ask);
+  }
+
   if (message.streaming) wrap.classList.add('streaming');
   else wrap.classList.remove('streaming');
 
@@ -1519,9 +1580,15 @@ function renderThread() {
     return;
   }
   thread.innerHTML = '';
+  /* Какой запрос сейчас в работе: подпись нужна самому ответу, а не ленте,
+     поэтому храним её в сообщении (переживает перерисовку потока). */
+  let lastRequest = '';
   for (const message of state.chat.messages) {
+    if (message.role === 'user') lastRequest = message.content || '';
+    else if (message.role === 'assistant' && message.streaming) message.replyTo = lastRequest;
     thread.appendChild(renderMessage(message));
   }
+  syncQueuedBubbles();
   scrollToBottom(true);
   requestAnimationFrame(markWideBlocks);
 }
@@ -2468,6 +2535,9 @@ function queueActionButton(icon, label, className, onClick) {
 function renderQueue() {
   const panel = $('#queuePanel');
   if (!panel) return;
+  /* Просьба, ждущая очереди, должна быть видна и в самой ленте: иначе после
+     отправки она исчезает с экрана, а человек видит только прошлый ответ. */
+  syncQueuedBubbles();
   panel.innerHTML = '';
   const items = chatQueue();
   if (!items.length) {
@@ -2518,6 +2588,36 @@ function renderQueue() {
     list.appendChild(row);
   });
   panel.appendChild(list);
+}
+
+/* Пузырь просьбы, которая ждёт очереди. В переписку она попадёт только когда
+   сервер её запустит, поэтому в ленте рисуем отдельный, «призрачный» пузырь:
+   человек видит, что его сообщение принято, и оно не исчезает с экрана.
+   Живёт только в DOM и снимается, как только задача стартовала. */
+function renderQueuedMessage(item) {
+  const wrap = el('article', 'msg msg-user msg-queued');
+  wrap.dataset.queueId = item.id || '';
+  if (Array.isArray(item.attachments) && item.attachments.length) {
+    wrap.appendChild(userAttachmentChips(item.attachments));
+  }
+  const bubble = el('div', 'bubble');
+  bubble.textContent = item.text || 'Вложение без текста';
+  wrap.appendChild(bubble);
+  wrap.appendChild(
+    el(
+      'div',
+      'queued-note',
+      currentLiveRun() ? 'В очереди · начну, как только закончу текущий ответ' : 'В очереди · нажмите ▶ у поля ввода, чтобы запустить',
+    ),
+  );
+  return wrap;
+}
+
+function syncQueuedBubbles() {
+  const thread = $('#thread');
+  if (!thread || !state.chat) return;
+  thread.querySelectorAll('.msg-queued').forEach((node) => node.remove());
+  for (const item of chatQueue()) thread.appendChild(renderQueuedMessage(item));
 }
 
 function queueEditDialog(item) {
@@ -5771,6 +5871,14 @@ function resetClientState() {
   hideDashboard();
   state.dashboard = emptyDashboardState();
   state.dragOut = false;
+  /* Напоминание принадлежит аккаунту: при выходе забываем и загруженное
+     состояние, и отложенное окно. */
+  notifyOfferInfo = null;
+  notifyOfferLoading = null;
+  notifyOfferShown = false;
+  notifyOfferActionDone = false;
+  clearTimeout(notifyOfferTimer);
+  notifyOfferTimer = 0;
 }
 
 async function logout() {
@@ -8599,12 +8707,21 @@ document.addEventListener('paste', (event) => {
 
 /* ------------------------- уведомления ------------------------- */
 
-/* Уведомления работают у всех и всегда: человек их не включает и не выключает.
-   Браузер выдаёт разрешение только по действию человека, поэтому первый тап по
-   экрану открывает его родной запрос — один раз, дальше браузер помнит ответ
-   сам. Включение идёт не мгновенно (браузер регистрируется в своей push-службе),
-   поэтому повторный вызов ждёт тот же результат, а не заводит вторую подписку. */
+/* Уведомления для старых пользователей, как и раньше, включаются сами после
+   входа. Новым при регистрации показываем окно выбора: включить сразу или
+   отложить. Браузер выдаёт разрешение только по действию человека, поэтому
+   первый тап по экрану открывает его родной запрос — один раз, дальше браузер
+   помнит ответ сам. Включение идёт не мгновенно (браузер регистрируется в своей
+   push-службе), поэтому повторный вызов ждёт тот же результат, а не заводит
+   вторую подписку. */
 let pushEnabling = null;
+/* Напоминание после регистрации: расписание хранится на сервере, здесь только
+   загруженное состояние и защита от второго окна в этой же вкладке. */
+let notifyOfferInfo = null;
+let notifyOfferLoading = null;
+let notifyOfferShown = false;
+let notifyOfferActionDone = false;
+let notifyOfferTimer = 0;
 /* Разрешение спрашиваем ровно из первого действия человека. */
 let pushPermissionArmed = false;
 /* В этом открытии приложения браузер уже спрашивали — второй раз не просим. */
@@ -8638,6 +8755,186 @@ function pushDeviceKey() {
     if (!pushFallbackDeviceKey) pushFallbackDeviceKey = make();
     return pushFallbackDeviceKey;
   }
+}
+
+/* ------------------- напоминание после регистрации ------------------- */
+
+/* Сервер решает, пора ли напоминать: первый раз — сразу после регистрации,
+   потом через месяц и через три. В браузере ничего не запоминаем, иначе
+   месяцы ожидания терялись бы при очистке хранилища или на другом устройстве. */
+function loadNotifyOffer() {
+  if (!state.user) return Promise.resolve(null);
+  if (!notifyOfferLoading) {
+    notifyOfferLoading = api('/api/notify-offer')
+      .then((info) => {
+        notifyOfferInfo = info && typeof info === 'object' ? info : { eligible: false, show: false, status: 'none' };
+        return notifyOfferInfo;
+      })
+      .catch(() => {
+        /* Старый сервер или нет сети: окно не показываем, обычное включение
+           уведомлений продолжает работать как раньше. */
+        notifyOfferInfo = null;
+        return null;
+      });
+  }
+  return notifyOfferLoading;
+}
+
+function postNotifyOffer(action) {
+  return api('/api/notify-offer', {
+    method: 'POST',
+    body: { action, deviceId: pushDeviceKey() },
+  });
+}
+
+/* Пока человек не решил, не просим разрешение на первом случайном тапе:
+   иначе «Отложить» ничего бы не откладывало. */
+function notifyOfferHoldsPermission() {
+  return Boolean(notifyOfferInfo?.eligible && notifyOfferInfo.status !== 'enabled');
+}
+
+async function maybeShowNotifyOffer() {
+  const info = await loadNotifyOffer();
+  if (!state.user || !info?.eligible || !info.show || notifyOfferShown) return;
+  const auth = $('#auth');
+  if (auth && !auth.classList.contains('hidden')) return;
+  const modalRoot = $('#modalRoot');
+  if (modalRoot && !modalRoot.classList.contains('hidden')) {
+    /* Не перекрываем уже открытое окно — вернёмся, когда человек его закроет. */
+    clearTimeout(notifyOfferTimer);
+    notifyOfferTimer = setTimeout(() => {
+      notifyOfferTimer = 0;
+      void maybeShowNotifyOffer();
+    }, 1500);
+    return;
+  }
+  if (!pushSupported()) {
+    await postNotifyOffer('unsupported').catch(() => {});
+    notifyOfferInfo = { ...info, status: 'unsupported', show: false };
+    return;
+  }
+  if (Notification.permission === 'granted') {
+    /* Разрешение уже выдано раньше — просто подключаем подписку и закрываем
+       вопрос, не показывая окно. */
+    await enablePush().catch(() => {});
+    try {
+      notifyOfferInfo = { ...info, ...(await postNotifyOffer('enable')) };
+    } catch {
+      /* Повторим при следующем открытии. */
+    }
+    return;
+  }
+  if (Notification.permission === 'denied') {
+    await postNotifyOffer('denied').catch(() => {});
+    notifyOfferInfo = { ...info, status: 'denied', show: false };
+    return;
+  }
+  showNotifyOfferModal(info);
+}
+
+function showNotifyOfferModal(info) {
+  notifyOfferShown = true;
+  notifyOfferActionDone = false;
+  const body = el('div', 'notify-offer');
+  const icon = el('div', 'notify-offer-icon');
+  icon.innerHTML = ICONS.bell;
+  const text = el('div', 'notify-offer-text');
+  text.append(
+    el('p', 'notify-offer-lead', 'Узнай о новых возможностях DSH Open'),
+    el(
+      'p',
+      '',
+      'Включи уведомления — сообщим, когда задача будет готова, и расскажем о новых возможностях. Все уведомления на этом устройстве включатся сразу.',
+    ),
+    el('p', 'notify-offer-note', 'Можно отложить: напомним позже.'),
+  );
+  body.append(icon, text);
+  openModal({
+    title: 'Уведомления DSH Open',
+    body,
+    actions: [
+      { label: 'Включить', kind: 'primary', onClick: enableNotifyOfferFromModal },
+      { label: 'Отложить', kind: 'quiet', onClick: postponeNotifyOfferFromModal },
+    ],
+    onClose: () => {
+      /* Крестик, Escape и клик мимо окна — это тоже «Отложить»: третий такой
+         уход выключает напоминания, как и третья кнопка. */
+      if (!notifyOfferActionDone) {
+        notifyOfferActionDone = true;
+        void postNotifyOffer('postpone')
+          .then((view) => {
+            if (view?.eligible) notifyOfferInfo = { ...notifyOfferInfo, ...view };
+          })
+          .catch(() => {});
+      }
+      /* Подсказку про ярлык не ставим сразу поверх только что закрытого окна:
+         человек должен успеть вернуться к работе. */
+      scheduleHomeScreenOffer(4000);
+    },
+  });
+  /* Отметка «показано» нужна только для статистики; на расписание не влияет. */
+  void postNotifyOffer('shown').catch(() => {});
+}
+
+async function enableNotifyOfferFromModal() {
+  notifyOfferActionDone = true;
+  /* Родной запрос браузера должен уйти прямо из клика, до любых await. */
+  let permission = Notification.permission;
+  if (permission === 'default') {
+    try {
+      permission = await Notification.requestPermission();
+    } catch {
+      permission = Notification.permission;
+    }
+  }
+  if (permission === 'granted') {
+    let subscribed = false;
+    try {
+      subscribed = await enablePush();
+    } catch {
+      /* Разрешение уже есть, подписку доделаем при следующем открытии. */
+    }
+    try {
+      notifyOfferInfo = { ...notifyOfferInfo, ...(await postNotifyOffer('enable')) };
+    } catch {
+      /* Сервер получит состояние при следующем открытии. */
+    }
+    toast(
+      subscribed ? 'Уведомления включены' : 'Разрешение выдано. Подключим уведомления при следующем открытии.',
+      'ok',
+    );
+    return true;
+  }
+  if (permission === 'denied') {
+    await postNotifyOffer('denied').catch(() => {});
+    notifyOfferInfo = { ...notifyOfferInfo, status: 'denied', show: false };
+    toast('Уведомления запрещены в настройках браузера. Разрешите их для DSH Open.');
+    return true;
+  }
+  /* Человек закрыл родной запрос, ничего не выбрав. Это не отказ — просто
+     откладываем напоминание, как если бы нажал «Отложить». */
+  try {
+    const view = await postNotifyOffer('postpone');
+    if (view?.eligible) notifyOfferInfo = { ...notifyOfferInfo, ...view };
+  } catch {
+    /* Повторим при следующем открытии. */
+  }
+  toast('Хорошо, напомним позже', 'ok');
+  return true;
+}
+
+async function postponeNotifyOfferFromModal() {
+  notifyOfferActionDone = true;
+  let view = null;
+  try {
+    view = await postNotifyOffer('postpone');
+    if (view?.eligible) notifyOfferInfo = { ...notifyOfferInfo, ...view };
+  } catch {
+    /* Сеть подвела — при следующем открытии окно вернётся. */
+  }
+  if (view?.status === 'stopped') toast('Хорошо, больше не напоминаем', 'ok');
+  else toast('Хорошо, напомним позже', 'ok');
+  return true;
 }
 
 /* Рассказываем серверу, что происходит на этом устройстве. Отправляем и при
@@ -8789,6 +9086,9 @@ async function enablePushOnce() {
    для родного запроса разрешения. Спрашиваем один раз: отказ браузера уважаем,
    второй раз он всё равно не спросит без настроек. */
 function armPushPermission() {
+  /* Новому пользователю разрешение спрашивает только окно после регистрации.
+     Иначе первый же тап включал бы уведомления в обход «Отложить». */
+  if (notifyOfferHoldsPermission()) return;
   if (!pushSupported() || pushPermissionArmed || pushAsked || Notification.permission !== 'default') return;
   pushPermissionArmed = true;
   const events = ['pointerdown', 'touchstart', 'keydown'];
@@ -8886,6 +9186,11 @@ function ensurePush() {
 }
 
 async function initPush() {
+  /* Сначала узнаём, положено ли человеку окно после регистрации. Иначе
+     подписка успела бы вооружить первый тап раньше, чем придёт ответ, и
+     «Отложить» превращалось бы в родной запрос разрешения. */
+  await loadNotifyOffer();
+  if (!state.user) return;
   if (!pushSupported()) {
     void reportPushState();
     return;
@@ -9013,8 +9318,11 @@ function startPresence() {
 /* ---------------------- ярлык на домашний экран ---------------------- */
 
 /* Подсказка «поставьте ярлык» — ровно один раз на телефон и только в браузере:
-   если страница уже открыта как приложение, предлагать нечего. */
+   если страница уже открыта как приложение, предлагать нечего. Показываем её
+   только вошедшему человеку: на экране входа она отвлекала бы от логина и
+   предлагала ставить приложение, которым ещё не пользуются. */
 const HOME_SCREEN_KEY = 'dshow-home-screen-offer-v1';
+let homeScreenOfferTimer = 0;
 
 function homeScreenPlatform() {
   const ua = navigator.userAgent || '';
@@ -9075,13 +9383,29 @@ const HOME_SCREEN_STEPS = {
   ],
 };
 
+/* Подсказку запускает startApp — то есть только после успешного входа или
+   восстановленного сеанса. Небольшая пауза нужна, чтобы окно появилось поверх
+   уже нарисованного приложения, а не пустого экрана. */
+function scheduleHomeScreenOffer(delay = 1200) {
+  clearTimeout(homeScreenOfferTimer);
+  homeScreenOfferTimer = setTimeout(() => {
+    homeScreenOfferTimer = 0;
+    offerHomeScreenOnce();
+  }, delay);
+}
+
 function offerHomeScreenOnce() {
   const platform = homeScreenPlatform();
   if (!platform || openedAsApp()) return;
+  /* Пока человек не вошёл, подсказки нет: форма входа остаётся главным. */
+  if (!state.user) return;
+  const auth = $('#auth');
+  if (auth && !auth.classList.contains('hidden')) return;
+  /* Если человек уже открыл своё окно, не перекрываем его установочным советом. */
+  const modalRoot = $('#modalRoot');
+  if (modalRoot && !modalRoot.classList.contains('hidden')) return;
   try {
     if (localStorage.getItem(HOME_SCREEN_KEY)) return;
-    /* Отмечаем сразу: подсказка не должна возвращаться ни при отказе, ни при сбое. */
-    localStorage.setItem(HOME_SCREEN_KEY, String(Date.now()));
   } catch {
     /* Без хранилища подсказка стала бы вечной — молчим. */
     return;
@@ -9098,7 +9422,7 @@ function offerHomeScreenOnce() {
     el(
       'p',
       '',
-      'Вижу, вы открыли сервис с телефона. Добавьте DSH Open на домашний экран — тогда он запускается в одно касание и выглядит как обычное приложение, без адресной строки.',
+      'Вы вошли в DSH Open с телефона. Добавьте ярлык на домашний экран — тогда сервис запускается в одно касание и выглядит как обычное приложение, без адресной строки.',
     ),
   );
   const steps = el('ol', 'a2hs-steps');
@@ -9107,6 +9431,12 @@ function offerHomeScreenOnce() {
   }
   text.appendChild(steps);
   body.append(icon, text);
+  /* Отмечаем прямо перед показом: отказ или сбой не должны возвращать совет. */
+  try {
+    localStorage.setItem(HOME_SCREEN_KEY, String(Date.now()));
+  } catch {
+    return;
+  }
   openModal({ title: 'Добавить на домашний экран', body, actions: [{ label: 'Понятно', kind: 'primary' }] });
 }
 
@@ -9241,6 +9571,4 @@ async function bootStart() {
     syncFromServer();
     checkAppVersion();
   });
-  /* Подсказку показываем, когда экран уже нарисован: иначе окно висит над пустой страницей. */
-  setTimeout(offerHomeScreenOnce, 1200);
 })();

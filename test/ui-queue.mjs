@@ -176,8 +176,25 @@ async function main() {
   await send('Вторая задача');
 
   await page.waitForSelector('#queuePanel:not(.hidden)', { timeout: 10000 });
+  if (process.env.DSHOW_UI_SHOT_ASK) {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.waitForTimeout(400);
+    await page.screenshot({ path: process.env.DSHOW_UI_SHOT_ASK });
+    await page.setViewportSize({ width: 1280, height: 900 });
+  }
   check((await page.locator('.queue-item').count()) === 1, 'очередь видна над полем ввода');
   check((await page.locator('.queue-text').first().textContent())?.includes('Вторая задача'), 'текст задачи в очереди', await page.locator('.queue-text').first().textContent());
+  /* Отправленное сообщение не должно исчезать из ленты, пока стоит в очереди. */
+  check(
+    (await page.locator('.msg-queued .bubble').first().textContent())?.includes('Вторая задача'),
+    'просьба из очереди видна в ленте',
+    (await page.locator('.msg-queued').count()) + ' шт.',
+  );
+  check(
+    (await page.locator('.msg.streaming .msg-ask').first().textContent())?.includes('Первая задача'),
+    'в шапке ответа видно, на какой запрос он отвечает',
+    await page.locator('.msg-ask').first().textContent(),
+  );
 
   await page.click('.queue-edit');
   await page.waitForSelector('.queue-edit-textarea', { timeout: 5000 });
@@ -200,6 +217,7 @@ async function main() {
   await page.getByRole('button', { name: 'Убрать', exact: true }).click();
   await page.waitForSelector('#queuePanel.hidden', { state: 'attached', timeout: 8000 });
   check((await page.locator('.queue-item').count()) === 0, 'задача убирается из очереди');
+  check((await page.locator('.msg-queued').count()) === 0, 'пузырь из ленты убирается вместе с очередью');
 
   await send('Вторая задача');
   await page.waitForSelector('.queue-item', { timeout: 8000 });

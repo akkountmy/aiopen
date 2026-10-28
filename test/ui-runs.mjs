@@ -348,6 +348,51 @@ try {
   check(beforeReload.length > 0, 'в ответе уже есть текст', `${beforeReload.length} символов`);
   check((await count('.chat-row .c-live')) === 1, 'в списке диалогов горит точка «идёт задача»');
 
+  /* Сворачиваем проект, в котором идёт ответ: точка должна остаться на
+     строке папки и не прятаться под многоточием длинного имени. */
+  await clickProject(firstProject);
+  check(
+    await waitFor(`!!document.querySelector('.project.collapsed.live')`, 3000),
+    'свёрнутый проект отмечен как работающий',
+  );
+  const folderMark = await evaluate(`(() => {
+    const project = document.querySelector('.project.collapsed.live');
+    if (!project) return null;
+    const dot = project.querySelector('.p-live');
+    const row = project.querySelector('.project-row');
+    if (!dot || !row) return { dot: false };
+    const d = dot.getBoundingClientRect();
+    const r = row.getBoundingClientRect();
+    const css = getComputedStyle(dot);
+    return {
+      dot: dot.offsetWidth > 0 && dot.offsetHeight > 0,
+      inside: d.left >= r.left - 1 && d.right <= r.right + 1,
+      animation: css.animationName,
+      duration: parseFloat(css.animationDuration) || 0,
+      rowTint: getComputedStyle(row).backgroundColor,
+    };
+  })()`);
+  check(Boolean(folderMark?.dot), 'у свёрнутого проекта есть отдельная точка «идёт»');
+  check(Boolean(folderMark?.inside), 'точку не обрезает длинное имя проекта');
+  /* В этом окружении Windows обычно просит уменьшить движение, поэтому
+     допустимы обе анимации: обычная пульсация и мягкое мигание без движения.
+     Важно, что анимация не заглушена общим правилом reduce (0.001 ms). */
+  check(
+    ['live-pulse', 'live-fade'].includes(folderMark?.animation) && folderMark.duration >= 1,
+    'точка пульсирует, а не замирает',
+    `${folderMark?.animation || 'нет'} ${folderMark?.duration || 0}s`,
+  );
+  check(
+    Boolean(folderMark?.rowTint) && folderMark.rowTint !== 'rgba(0, 0, 0, 0)',
+    'строка свёрнутого проекта подсвечена',
+    folderMark?.rowTint || 'нет фона',
+  );
+  await clickProject(firstProject);
+  check(
+    await waitFor(`document.querySelectorAll('.chat-row .c-live').length === 1`, 3000),
+    'после раскрытия точка снова стоит в строке диалога',
+  );
+
   /* Сама перезагрузка: как F5 в браузере. */
   await reload();
   const restored = await waitFor(`document.querySelectorAll('#thread .msg-assistant .md').length > 0`, 15000);
@@ -428,6 +473,74 @@ try {
   check(await waitFor(`!document.querySelector('#thread .msg-assistant.streaming')`, 20000), 'вторая задача завершилась');
   const secondFinal = await answerText();
   check(secondFinal.includes('парковку'), 'второй ответ полный', `${secondFinal.trim().slice(0, 40)}…`);
+
+  /* --------- 3. работа внутри свёрнутой папки проектов --------- */
+
+  await fill('#input', 'И третий раз про Делимобиль');
+  await click('#sendBtn');
+  check(await waitFor(`!!document.querySelector('#thread .msg-assistant.streaming')`, 12000), 'третья задача пошла');
+
+  /* Складываем проект в папку, пока ответ печатается, и перезагружаем
+     страницу: вкладка должна снова подключиться к задаче уже внутри папки.
+     Так проверяем и восстановление задачи, и сводную точку на самой папке. */
+  const moved = await evaluate(`(async () => {
+    const boot = await (await fetch('/api/me')).json();
+    const project = boot.projects.find((p) => p.name === ${JSON.stringify(firstProject)});
+    if (!project) throw new Error('нет проекта');
+    const created = await (await fetch('/api/workflows', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'Папка ' + ${JSON.stringify(STAMP)} }),
+    })).json();
+    const response = await fetch('/api/projects/' + project.id, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ workflowId: created.workflow.id }),
+    });
+    return { status: response.status, workflow: created.workflow.id };
+  })()`);
+  check(moved?.status === 200, 'проект переложен в папку', `HTTP ${moved?.status}`);
+
+  await reload();
+  check(
+    await waitFor(`!!document.querySelector('.workflow-row') && !!document.querySelector('.chat-row .c-live')`, 15000),
+    'задача видна внутри папки после перезагрузки',
+  );
+  await evaluate(`(() => { document.querySelector('.workflow-row').click(); return true; })()`);
+  check(await waitFor(`!!document.querySelector('.workflow.collapsed.live')`, 3000), 'свёрнутая папка отмечена как работающая');
+  const workflowMark = await evaluate(`(() => {
+    const folder = document.querySelector('.workflow.collapsed.live');
+    if (!folder) return null;
+    const dot = folder.querySelector('.w-live');
+    const row = folder.querySelector('.workflow-row');
+    if (!dot || !row) return { dot: false };
+    const d = dot.getBoundingClientRect();
+    const r = row.getBoundingClientRect();
+    const css = getComputedStyle(dot);
+    return {
+      dot: dot.offsetWidth > 0 && dot.offsetHeight > 0,
+      inside: d.left >= r.left - 1 && d.right <= r.right + 1,
+      animation: css.animationName,
+      duration: parseFloat(css.animationDuration) || 0,
+      rowTint: getComputedStyle(row).backgroundColor,
+    };
+  })()`);
+  check(Boolean(workflowMark?.dot), 'у свёрнутой папки есть отдельная точка «идёт»');
+  check(Boolean(workflowMark?.inside), 'точку не обрезает длинное имя папки');
+  check(
+    ['live-pulse', 'live-fade'].includes(workflowMark?.animation) && workflowMark.duration >= 1,
+    'точка на папке пульсирует, а не замирает',
+    `${workflowMark?.animation || 'нет'} ${workflowMark?.duration || 0}s`,
+  );
+  check(
+    Boolean(workflowMark?.rowTint) && workflowMark.rowTint !== 'rgba(0, 0, 0, 0)',
+    'строка свёрнутой папки подсвечена',
+    workflowMark?.rowTint || 'нет фона',
+  );
+  await evaluate(`(() => { document.querySelector('.workflow-row').click(); return true; })()`);
+  check(await waitFor(`!document.querySelector('.workflow.collapsed')`, 3000), 'папка раскрылась обратно');
+  check(await waitFor(`!document.querySelector('#thread .msg-assistant.streaming')`, 20000), 'третья задача завершилась');
+  check(pageErrors.length === 0, 'ошибок в консоли за весь сценарий нет', pageErrors.slice(0, 2).join(' | '));
 } catch (error) {
   fail('сценарий', error.stack || error.message);
 } finally {
