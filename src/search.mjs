@@ -4,6 +4,7 @@ import { extractDocumentText } from './docparse.mjs';
 import { extractReadable, extractFields } from './extract.mjs';
 import { truncate } from './util.mjs';
 import { deepseekEnabled, deepseekSearch, deepseekFetch } from './deepseek-search.mjs';
+import { looksLikeChallenge, obscuraConfigured, obscuraLoad } from './obscura.mjs';
 
 const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
@@ -264,11 +265,22 @@ function extractLinks(html, baseUrl, origin) {
  * он выкидывает меню, рекламу и подвал, а таблицы и списки сохраняет.
  * Если Readability не справился, работает прежний разбор регулярками.
  */
-export async function readPage(rawUrl, { maxChars = 32000 } = {}) {
+export async function readPage(rawUrl, { maxChars = 32000, engine = 'auto', proxy = '' } = {}) {
   const url = assertPublicUrl(rawUrl);
-  const page = await requestPage(url.href, { accept: 'text/html,application/xhtml+xml,*/*;q=0.5' });
+  const page = await loadHtml(url, { accept: 'text/html,application/xhtml+xml,*/*;q=0.5', engine, proxy });
+  const challenge = page.kind === 'html' ? looksLikeChallenge(page.text) : false;
   if (page.kind !== 'html') {
-    return { url: page.url, kind: page.kind, title: '', text: truncate(page.text, maxChars), tables: [], links: [], headings: [] };
+    return {
+      url: page.url,
+      kind: page.kind,
+      title: '',
+      text: truncate(page.text, maxChars),
+      tables: [],
+      links: [],
+      headings: [],
+      fetchEngine: page.engine || 'http',
+      challenge,
+    };
   }
   try {
     const extracted = extractReadable(page.text, page.url);
@@ -296,6 +308,8 @@ export async function readPage(rawUrl, { maxChars = 32000 } = {}) {
         markdown: truncate(extracted.markdown, maxChars),
         chars: extracted.chars,
         engine: extracted.engine,
+        fetchEngine: page.engine || 'http',
+        challenge,
       };
     }
   } catch {
@@ -316,6 +330,8 @@ export async function readPage(rawUrl, { maxChars = 32000 } = {}) {
     text: truncate(text, maxChars),
     chars: text.length,
     engine: 'regex',
+    fetchEngine: page.engine || 'http',
+    challenge,
   };
 }
 
@@ -403,12 +419,59 @@ async function requestPage(rawUrl, { method = 'GET', headers = {}, body = null, 
   }
 }
 
+/**
+ * Загрузка страницы «как браузер» — обычный запрос плюс запасной путь через
+ * obscura, когда вместо контента пришла заглушка анти-бота.
+ *
+ * `engine`: auto (по умолчанию) — пробует HTTP и переключается на obscura при
+ * признаках блокировки; http — только обычный запрос; obscura — сразу браузер.
+ * Смысл автопереключения: раньше такие страницы просто «не находились», и модель
+ * получала пустоту вместо данных, хотя сайт открывается в обычном браузере.
+ */
+async function loadHtml(
+  rawUrl,
+  {
+    accept,
+    method = 'GET',
+    headers = {},
+    body = null,
+    engine = 'auto',
+    proxy = '',
+    timeoutMs = FETCH_TIMEOUT_MS,
+    waitMs = 0,
+  } = {},
+) {
+  const mode = String(engine || 'auto').toLowerCase();
+  const url = assertPublicUrl(rawUrl);
+  if (mode === 'obscura') {
+    return obscuraLoad(url.href, { timeoutMs, waitMs, proxy });
+  }
+  const page = await requestPage(url.href, { method, headers, body, accept, timeoutMs });
+  if (mode === 'http' || page.kind !== 'html' || !obscuraConfigured()) return page;
+  const text = page.text || '';
+  const suspicious = page.status >= 400 || looksLikeChallenge(text) || text.length < 400;
+  if (!suspicious) return page;
+  try {
+    const stealth = await obscuraLoad(url.href, { timeoutMs, waitMs, proxy });
+    const better = stealth.text.length >= Math.max(400, text.length * 0.5);
+    if (!better) return page;
+    return { ...stealth, url: page.url || stealth.url, status: stealth.text.length > text.length ? 200 : page.status };
+  } catch (error) {
+    /* Без бинарника или без сети — возвращаем что есть: пусть ответ честно
+       покажет заглушку, а причина останется в поле stealthError. */
+    return { ...page, stealthError: String(error?.message || error) };
+  }
+}
+
 /** Загружает страницу и приводит её к тексту. `markdown: true` — с разметкой. */
-export async function fetchUrl(url, { maxChars = 24000, method = 'GET', headers = {}, body = null, markdown = false } = {}) {
+export async function fetchUrl(
+  url,
+  { maxChars = 24000, method = 'GET', headers = {}, body = null, markdown = false, engine = 'auto', proxy = '' } = {},
+) {
   /* Fetch API отдаёт уже очищенный Markdown и не зависит от вёрстки. Берём его
      для обычного GET без своих заголовков; POST/API и приватные адреса идут
      прежним путём, где нужны тело запроса и точный контроль. */
-  if (deepseekEnabled() && method === 'GET' && !body && !Object.keys(headers || {}).length) {
+  if (engine === 'auto' && deepseekEnabled() && method === 'GET' && !body && !Object.keys(headers || {}).length) {
     try {
       assertPublicUrl(url);
       const page = await deepseekFetch(url);
@@ -422,12 +485,13 @@ export async function fetchUrl(url, { maxChars = 24000, method = 'GET', headers 
         text: content,
         markdown: markdown ? content : undefined,
         bytes: Buffer.byteLength(page.content),
+        fetchEngine: 'deepseek',
       };
     } catch {
       // Сайт не отдался через DeepSeek — ниже обычная загрузка с браузерным fallback.
     }
   }
-  const page = await requestPage(url, { method, headers, body });
+  const page = await loadHtml(url, { method, headers, body, engine, proxy });
   let text = page.text;
   let title = (text.match(/^.{0,120}/) || [''])[0].trim();
   let extracted = null;
@@ -450,6 +514,9 @@ export async function fetchUrl(url, { maxChars = 24000, method = 'GET', headers 
     text: truncate(text, maxChars),
     markdown: extracted && page.kind === 'html' ? truncate(extracted.markdown, maxChars) : undefined,
     bytes: page.bytes,
+    fetchEngine: page.engine || 'http',
+    stealthError: page.stealthError || '',
+    challenge: page.kind === 'html' ? looksLikeChallenge(page.text) : false,
   };
 }
 
@@ -526,12 +593,14 @@ export async function scrapePage(
     timeoutMs = 45000,
     waitMs = 0,
     waitSelector = '',
+    engine = 'auto',
+    proxy = '',
   } = {},
 ) {
   const url = assertPublicUrl(rawUrl);
   const page = render
     ? await renderHtml(url.href, { timeoutMs, waitMs, waitSelector })
-    : await requestPage(url.href, { accept: 'text/html,application/xhtml+xml,*/*;q=0.5' });
+    : await loadHtml(url.href, { accept: 'text/html,application/xhtml+xml,*/*;q=0.5', engine, proxy, timeoutMs, waitMs });
   if (page.kind && page.kind !== 'html') {
     return {
       url: page.url,
@@ -540,9 +609,12 @@ export async function scrapePage(
       title: '',
       text: truncate(page.text, maxChars),
       fields: null,
+      fetchEngine: page.engine || 'http',
+      challenge: false,
     };
   }
   const html = page.text || page.html || '';
+  const challenge = looksLikeChallenge(html);
   const extracted = extractReadable(html, page.url);
   let fields = null;
   if (selectors && typeof selectors === 'object' && Object.keys(selectors).length) {
@@ -559,6 +631,8 @@ export async function scrapePage(
     publishedTime: extracted.publishedTime,
     lang: extracted.lang,
     engine: extracted.engine,
+    fetchEngine: render ? 'playwright' : page.engine || 'http',
+    challenge,
     chars: extracted.chars,
     markdownChars: extracted.markdownChars,
     text: truncate(body, maxChars),

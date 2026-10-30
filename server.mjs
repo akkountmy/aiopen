@@ -97,6 +97,7 @@ import { nowIso, safeName, uid, uniqueFileName } from './src/util.mjs';
 import { describeImage } from './src/vision.mjs';
 import { webSearch } from './src/search.mjs';
 import { browserStatus } from './src/browser.mjs';
+import { ensureObscura, obscuraConfigured, obscuraInfo } from './src/obscura.mjs';
 import { describeTrim } from './src/trim.mjs';
 import { describeProfile } from './src/model.mjs';
 import { describeReview } from './src/review.mjs';
@@ -2717,6 +2718,7 @@ async function route(req, res) {
         docs: await docEngines(),
         skills: listSkills().length,
         browser: await browserStatus({ probe: url.searchParams.get('browser') === '1' }),
+        stealth: obscuraInfo(),
       });
     }
 
@@ -2726,6 +2728,19 @@ async function route(req, res) {
 
     if (pathname === '/api/me' && method === 'GET') return sendJson(res, 200, bootstrapPayload(user));
     if (pathname === '/api/bootstrap' && method === 'GET') return sendJson(res, 200, bootstrapPayload(user));
+
+    /* --- stealth-браузер obscura: статус и установка по требованию --- */
+    if (pathname === '/api/stealth' && method === 'GET') {
+      return sendJson(res, 200, obscuraInfo(), { 'Cache-Control': 'no-store' });
+    }
+    if (pathname === '/api/stealth' && method === 'POST') {
+      try {
+        const binary = await ensureObscura();
+        return sendJson(res, 200, { ...obscuraInfo(), binary, installed: true });
+      } catch (error) {
+        return sendJson(res, 500, { ...obscuraInfo(), installed: false, error: String(error?.message || error) });
+      }
+    }
 
     /* --- напоминание о включении уведомлений --- */
     if (pathname === '/api/notify-offer' && method === 'GET') {
@@ -3727,6 +3742,18 @@ if (process.env.DSHOW_BACKUPS !== '0') startAutoBackup();
 /* Отложенные рассылки уведомлений: раз в полминуты проверяем, не пора ли
    отправлять. Выключается DSHOW_PUSH_SCHEDULE=0 — это нужно проверкам. */
 if (process.env.DSHOW_PUSH_SCHEDULE !== '0') startPushScheduler();
+
+/* Stealth-браузер obscura: первый запрос не должен ждать скачивания 75 МБ.
+   Ставим заранее и молча — если сети нет, инструменты просто останутся на HTTP.
+   Выключение: DSHOW_OBSCURA=off. */
+if (obscuraConfigured() && !obscuraInfo().ready) {
+  const timer = setTimeout(() => {
+    ensureObscura()
+      .then((binary) => console.log(`  Obscura: готов (${binary})`))
+      .catch((error) => console.log(`  Obscura: не установлена (${String(error?.message || error).slice(0, 120)})`));
+  }, 4000);
+  timer.unref?.();
+}
 
 process.on('SIGINT', () => {
   console.log('\nОстановка…');

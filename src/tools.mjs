@@ -14,6 +14,7 @@ import { describeImage } from './vision.mjs';
 import { fetchUrl, webSearch, readPage, fetchMany, crawlSite, searchMany, scrapePage } from './search.mjs';
 import { runJavascript } from './jsruntime.mjs';
 import { checkPage, describePage } from './browser.mjs';
+import { obscuraInfo } from './obscura.mjs';
 import { pageCheckNote, pageTemplate, staticPageChecks, staticIssueCount } from './pagecheck.mjs';
 import { escapeHtml, formatBytes, safeName, truncate } from './util.mjs';
 import { writeZip } from './zip.mjs';
@@ -28,6 +29,29 @@ function searchBadge(result) {
   if (date) facts.push(date);
   if (Number.isFinite(result?.authority)) facts.push(`авторитет ${result.authority}/4`);
   return facts.length ? `${facts.join(' · ')}\n` : '';
+}
+
+/** Движок загрузки из аргументов инструмента: незнакомое значение — auto. */
+function normalizeEngine(value, allowed) {
+  const engine = String(value || '').trim().toLowerCase();
+  return allowed.includes(engine) ? engine : 'auto';
+}
+
+/**
+ * Что сказать про загрузку, если сайт сопротивлялся. Молчать нельзя: без этой
+ * строки модель считает заглушку анти-бота содержимым страницы и пересказывает
+ * её как данные.
+ */
+function stealthNote(page) {
+  const lines = [];
+  if (page.fetchEngine === 'obscura') lines.push('Загружено браузером obscura (stealth).');
+  if (page.stealthError) lines.push(`Obscura недоступна: ${page.stealthError}`);
+  if (page.challenge) {
+    lines.push(
+      'Внимание: страница похожа на проверку анти-бота (капча или заглушка) — это не содержимое сайта. Обычно помогает proxy в параметрах: домашний IP сайт считает подозрительным.',
+    );
+  }
+  return lines.length ? `\n\n[${lines.join(' ')}]` : '';
 }
 
 /** Не даём инструментам заполнить диск до отказа: сервис должен оставаться рабочим. */
@@ -915,7 +939,7 @@ export const TOOL_DEFS = [
     function: {
       name: 'fetch_url',
       description:
-        'Загрузить веб-страницу, PDF или API по ссылке и получить текст. Обычный GET идёт через DeepSeek Fetch (чистый Markdown, без браузера), POST и свои заголовки — напрямую, с запасной загрузкой.',
+        'Загрузить веб-страницу, PDF или API по ссылке и получить текст. Обычный GET идёт через DeepSeek Fetch (чистый Markdown, без браузера), POST и свои заголовки — напрямую. Если сайт отвечает заглушкой анти-бота, страница повторно берётся браузером obscura (engine: "obscura" — сразу, "http" — без браузера).',
       parameters: {
         type: 'object',
         properties: {
@@ -927,6 +951,12 @@ export const TOOL_DEFS = [
             type: 'object',
             description: 'Свои заголовки, например {"Content-Type":"application/json"} или {"Authorization":"Bearer …"}.',
           },
+          engine: {
+            type: 'string',
+            enum: ['auto', 'http', 'obscura'],
+            description: 'auto (по умолчанию) — HTTP и при блокировке obscura; http — только HTTP; obscura — сразу браузер.',
+          },
+          proxy: { type: 'string', description: 'Прокси для obscura, если сайт недоступен по сети: http://host:port или socks5://host:port.' },
         },
         required: ['url'],
       },
@@ -937,12 +967,18 @@ export const TOOL_DEFS = [
     function: {
       name: 'read_page',
       description:
-        'Прочитать страницу как статью: заголовок, описание, оглавление, таблицы, ссылки и очищенный от меню текст. Работает без браузера — лучший выбор для больших и «шумных» страниц и для сбора ссылок перед crawl.',
+        'Прочитать страницу как статью: заголовок, описание, оглавление, таблицы, ссылки и очищенный от меню текст. Работает без браузера — лучший выбор для больших и «шумных» страниц и для сбора ссылок перед crawl. Если пришла заглушка анти-бота, страница повторно берётся браузером obscura.',
       parameters: {
         type: 'object',
         properties: {
           url: { type: 'string' },
           max_chars: { type: 'integer', description: 'Максимум символов текста, по умолчанию 32000.' },
+          engine: {
+            type: 'string',
+            enum: ['auto', 'http', 'obscura'],
+            description: 'auto (по умолчанию) — HTTP и при блокировке obscura; http — только HTTP; obscura — сразу браузер.',
+          },
+          proxy: { type: 'string', description: 'Прокси для obscura, если сайт недоступен по сети.' },
         },
         required: ['url'],
       },
@@ -953,7 +989,7 @@ export const TOOL_DEFS = [
     function: {
       name: 'scrape_page',
       description:
-        'Разобрать страницу профессионально: чистый Markdown с заголовками, списками и таблицами, либо текст, либо поля по CSS-селекторам (цена, название, ссылка, дата). Понимает selector@attr. Для сайтов на JavaScript включите render — страница отрисуется браузером. Бесплатно, без внешних API и ключей.',
+        'Разобрать страницу профессионально: чистый Markdown с заголовками, списками и таблицами, либо текст, либо поля по CSS-селекторам (цена, название, ссылка, дата). Понимает selector@attr. Сайты на JavaScript: render — настоящий браузер, engine: "obscura" — stealth-браузер против анти-бота (сразу, без попытки HTTP). Бесплатно, без внешних API и ключей.',
       parameters: {
         type: 'object',
         properties: {
@@ -969,6 +1005,13 @@ export const TOOL_DEFS = [
               'Поля для сбора, например {"title":"h1","price":".price","link":"a.buy@href","date":"time@datetime"}. Без него возвращается статья.',
           },
           render: { type: 'boolean', description: 'Отрисовать JavaScript в браузере (медленнее; в облаке может быть недоступно).' },
+          engine: {
+            type: 'string',
+            enum: ['auto', 'http', 'obscura', 'browser'],
+            description:
+              'auto (по умолчанию) — HTTP, при заглушке анти-бота obscura; http — только HTTP; obscura — сразу stealth-браузер; browser — то же, что render: true.',
+          },
+          proxy: { type: 'string', description: 'Прокси для obscura, если сайт недоступен по сети: http://host:port или socks5://host:port.' },
           wait_ms: { type: 'integer', description: 'Подождать после загрузки при render, мс, до 20000.' },
           wait_selector: { type: 'string', description: 'Дождаться элемента при render, например ".price".' },
           max_chars: { type: 'integer', description: 'Максимум символов результата, по умолчанию 30000.' },
@@ -1963,12 +2006,19 @@ export async function executeTool(name, args, ctx) {
         method: args.method || 'GET',
         headers: args.headers && typeof args.headers === 'object' ? args.headers : {},
         body: typeof args.body === 'string' ? args.body : null,
+        engine: normalizeEngine(args.engine, ['auto', 'http', 'obscura']),
+        proxy: typeof args.proxy === 'string' ? args.proxy : '',
       });
-      const head = `Страница ${page.url} (${page.status || 200}${page.kind !== 'text' ? `, ${page.kind}` : ''})${page.title ? ` — ${page.title}` : ''}`;
-      return { text: `${head}\n\n${page.text}`, meta: { url: page.url, bytes: page.bytes } };
+      const via = page.fetchEngine === 'obscura' ? ', браузер obscura' : page.fetchEngine === 'deepseek' ? ', DeepSeek Fetch' : '';
+      const head = `Страница ${page.url} (${page.status || 200}${page.kind !== 'text' ? `, ${page.kind}` : ''}${via})${page.title ? ` — ${page.title}` : ''}`;
+      return { text: `${head}\n\n${page.text}${stealthNote(page)}`, meta: { url: page.url, bytes: page.bytes, engine: page.fetchEngine } };
     }
     case 'read_page': {
-      const page = await readPage(args.url, { maxChars: Math.min(60000, Number(args.max_chars) || 32000) });
+      const page = await readPage(args.url, {
+        maxChars: Math.min(60000, Number(args.max_chars) || 32000),
+        engine: normalizeEngine(args.engine, ['auto', 'http', 'obscura']),
+        proxy: typeof args.proxy === 'string' ? args.proxy : '',
+      });
       const parts = [`URL: ${page.url}`];
       if (page.title) parts.push(`Заголовок: ${page.title}`);
       if (page.description) parts.push(`Описание: ${page.description}`);
@@ -1987,15 +2037,18 @@ export async function executeTool(name, args, ctx) {
         parts.push(`Ссылки (${page.links.length}):\n${links.join('\n')}`);
       }
       parts.push(`Текст:\n${page.text}`);
-      return { text: parts.join('\n\n'), meta: { url: page.url, chars: page.chars } };
+      return { text: `${parts.join('\n\n')}${stealthNote(page)}`, meta: { url: page.url, chars: page.chars, engine: page.fetchEngine } };
     }
     case 'scrape_page': {
       const format = ['markdown', 'text', 'json'].includes(args.format) ? args.format : 'markdown';
+      const engine = normalizeEngine(args.engine, ['auto', 'http', 'obscura', 'browser']);
       const page = await scrapePage(args.url, {
         format,
         maxChars: Math.min(80000, Math.max(1000, Number(args.max_chars) || 30000)),
         selectors: args.selectors && typeof args.selectors === 'object' && !Array.isArray(args.selectors) ? args.selectors : null,
-        render: Boolean(args.render),
+        render: Boolean(args.render) || engine === 'browser',
+        engine: engine === 'browser' ? 'auto' : engine,
+        proxy: typeof args.proxy === 'string' ? args.proxy : '',
         waitMs: Math.min(20000, Math.max(0, Number(args.wait_ms) || 0)),
         waitSelector: typeof args.wait_selector === 'string' ? args.wait_selector : '',
         timeoutMs: Math.min(90000, Math.max(5000, Number(args.timeout_ms) || 45000)),
@@ -2003,8 +2056,8 @@ export async function executeTool(name, args, ctx) {
       const head = `URL: ${page.url}${page.title ? `\nЗаголовок: ${page.title}` : ''}`;
       if (page.fields) {
         return {
-          text: `${head}\n\n${JSON.stringify(page.fields, null, 2)}`,
-          meta: { url: page.url, fields: Object.keys(page.fields).length, engine: page.engine, chars: page.chars },
+          text: `${head}\n\n${JSON.stringify(page.fields, null, 2)}${stealthNote(page)}`,
+          meta: { url: page.url, fields: Object.keys(page.fields).length, engine: page.fetchEngine, chars: page.chars },
         };
       }
       if (format === 'json') {
@@ -2020,11 +2073,11 @@ export async function executeTool(name, args, ctx) {
           links: page.links,
           text: page.text,
         };
-        return { text: JSON.stringify(data, null, 2), meta: { url: page.url, engine: page.engine, chars: page.chars } };
+        return { text: JSON.stringify(data, null, 2), meta: { url: page.url, engine: page.fetchEngine, chars: page.chars } };
       }
       return {
-        text: `${head}${page.description ? `\nОписание: ${page.description}` : ''}\n\n${page.text}`,
-        meta: { url: page.url, engine: page.engine, chars: page.chars, markdown: format === 'markdown' },
+        text: `${head}${page.description ? `\nОписание: ${page.description}` : ''}\n\n${page.text}${stealthNote(page)}`,
+        meta: { url: page.url, engine: page.fetchEngine, chars: page.chars, markdown: format === 'markdown' },
       };
     }
     case 'fetch_many': {
