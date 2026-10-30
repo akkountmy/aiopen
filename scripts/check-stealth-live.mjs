@@ -16,7 +16,12 @@
 const BASE = String(process.env.DSHOW_BASE || 'http://127.0.0.1:3123').replace(/\/+$/, '');
 const USER = String(process.env.DSHOW_ADMIN_USER || '').trim();
 const PASS = String(process.env.DSHOW_ADMIN_PASSWORD || '');
-const URL_TO_LOAD = process.argv[2] || 'https://www.reddit.com/r/rust/';
+/* Режим свободного вопроса: node scripts/check-stealth-live.mjs --ask "текст"
+   Нужен, чтобы проверить на живом сервисе не только загрузку страницы, но и
+   любой ответ модели (например, что навык из каталога действительно открылся). */
+const ASK_INDEX = process.argv.indexOf('--ask');
+const ASK = ASK_INDEX >= 0 ? String(process.argv[ASK_INDEX + 1] || '').trim() : '';
+const URL_TO_LOAD = ASK ? '' : process.argv[2] || 'https://www.reddit.com/r/rust/';
 const WANT_ENGINE = process.argv[3] || 'obscura';
 
 if (!USER || !PASS) {
@@ -65,13 +70,15 @@ const created = await api(`/api/projects/${project.id}/chats`, { method: 'POST',
 const chatId = created.chat.id;
 console.log(`временный диалог ${chatId} в проекте «${project.name || project.id}»`);
 
-const prompt = [
-  'Проверка движка загрузки (служебная).',
-  `Вызови инструмент fetch_url ровно один раз для адреса ${URL_TO_LOAD} с параметром engine="${WANT_ENGINE}".`,
-  'Затем ответь двумя строками и ничего больше не делай:',
-  'ENGINE=<значение meta.engine из ответа инструмента>',
-  'CHARS=<сколько символов текста пришло>',
-].join('\n');
+const prompt = ASK
+  ? ASK
+  : [
+      'Проверка движка загрузки (служебная).',
+      `Вызови инструмент fetch_url ровно один раз для адреса ${URL_TO_LOAD} с параметром engine="${WANT_ENGINE}".`,
+      'Затем ответь двумя строками и ничего больше не делай:',
+      'ENGINE=<значение meta.engine из ответа инструмента>',
+      'CHARS=<сколько символов текста пришло>',
+    ].join('\n');
 
 const started = Date.now();
 try {
@@ -102,16 +109,19 @@ try {
   }
   const elapsed = Math.round((Date.now() - started) / 1000);
   if (!answer) throw new Error(`за ${elapsed} с ответ не пришёл`);
-
-  const engine = (/ENGINE=(\S+)/.exec(answer) || [])[1] || '';
-  const chars = (/CHARS=(\d+)/.exec(answer) || [])[1] || '?';
-  console.log(`\nответ за ${elapsed} с:\n${answer.trim().slice(0, 700)}\n`);
-  console.log(`движок: ${engine || 'не назван'}, символов: ${chars}`);
-  if (engine === WANT_ENGINE) {
-    console.log(`\nок: страница пришла через ${WANT_ENGINE}`);
+  if (ASK) {
+    console.log(`\nответ за ${elapsed} с:\n${answer.trim().slice(0, 2000)}\n`);
   } else {
-    console.log(`\nВНИМАНИЕ: ожидался ${WANT_ENGINE}, а движок — ${engine || 'не назван'}`);
-    process.exitCode = 1;
+    const engine = (/ENGINE=(\S+)/.exec(answer) || [])[1] || '';
+    const chars = (/CHARS=(\d+)/.exec(answer) || [])[1] || '?';
+    console.log(`\nответ за ${elapsed} с:\n${answer.trim().slice(0, 700)}\n`);
+    console.log(`движок: ${engine || 'не назван'}, символов: ${chars}`);
+    if (engine === WANT_ENGINE) {
+      console.log(`\nок: страница пришла через ${WANT_ENGINE}`);
+    } else {
+      console.log(`\nВНИМАНИЕ: ожидался ${WANT_ENGINE}, а движок — ${engine || 'не назван'}`);
+      process.exitCode = 1;
+    }
   }
 } finally {
   try {
