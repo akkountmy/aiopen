@@ -63,6 +63,31 @@ RUN npx playwright-core install --with-deps chromium \
  && chmod -R a+rX /ms-playwright \
  && rm -rf /var/lib/apt/lists/* /tmp/*
 
+# Стелс-браузер obscura (h4ckf0r0day/obscura, Apache-2.0) — запасной путь загрузки
+# для сайтов, которые отдают заглушку анти-бота обычному HTTP. Кладём его в образ
+# заранее: в контейнере установка при старте означала бы 75 МБ с GitHub при каждом
+# первом запуске и лишнюю минуту до готовности. Адрес и контрольная сумма
+# закреплены, версия поднимается через --build-arg. Если платформа не x86_64 или
+# передан --build-arg WITH_OBSCURA=0, слой пропускается и движок просто выключен.
+# Второй файл архива (obscura-worker) нужен только режимам serve/mcp — оставляем.
+ARG OBSCURA_VERSION=0.2.5
+ARG OBSCURA_SHA256=d9175cf7573d0243fc303a6f1a3b68affc757af0b5549cacb018e9670988316c
+ARG WITH_OBSCURA=1
+RUN set -eu; \
+    if [ "$WITH_OBSCURA" = "1" ] && [ "$(uname -m)" = "x86_64" ]; then \
+      url="https://github.com/h4ckf0r0day/obscura/releases/download/v${OBSCURA_VERSION}/obscura-x86_64-linux-stealth.tar.gz"; \
+      mkdir -p /app/vendor/obscura; \
+      node -e "const fs=require('node:fs');fetch(process.argv[1],{redirect:'follow'}).then((r)=>{if(!r.ok)throw new Error('HTTP '+r.status);return r.arrayBuffer()}).then((b)=>fs.writeFileSync('/tmp/obscura.tar.gz',Buffer.from(b))).catch((e)=>{console.error(e.message);process.exit(1)})" "$url"; \
+      echo "${OBSCURA_SHA256}  /tmp/obscura.tar.gz" | sha256sum -c -; \
+      tar -xzf /tmp/obscura.tar.gz -C /app/vendor/obscura; \
+      chmod +x /app/vendor/obscura/obscura; \
+      rm -f /tmp/obscura.tar.gz; \
+      /app/vendor/obscura/obscura --version; \
+    else \
+      echo "obscura: слой пропущен (arch=$(uname -m), WITH_OBSCURA=${WITH_OBSCURA})"; \
+    fi
+
+
 COPY . .
 
 RUN mkdir -p /data \

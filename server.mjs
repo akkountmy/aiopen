@@ -95,7 +95,7 @@ import { listSkills } from './src/skills.mjs';
 import { pipeZip } from './src/zip.mjs';
 import { nowIso, safeName, uid, uniqueFileName } from './src/util.mjs';
 import { describeImage } from './src/vision.mjs';
-import { webSearch } from './src/search.mjs';
+import { webSearch, fetchUrl, assertPublicUrl, assertResolvesPublic } from './src/search.mjs';
 import { browserStatus } from './src/browser.mjs';
 import { ensureObscura, obscuraConfigured, obscuraInfo } from './src/obscura.mjs';
 import { describeTrim } from './src/trim.mjs';
@@ -2729,11 +2729,53 @@ async function route(req, res) {
     if (pathname === '/api/me' && method === 'GET') return sendJson(res, 200, bootstrapPayload(user));
     if (pathname === '/api/bootstrap' && method === 'GET') return sendJson(res, 200, bootstrapPayload(user));
 
-    /* --- stealth-браузер obscura: статус и установка по требованию --- */
+    /* --- stealth-браузер obscura: статус, установка и проверка по требованию --- */
     if (pathname === '/api/stealth' && method === 'GET') {
       return sendJson(res, 200, obscuraInfo(), { 'Cache-Control': 'no-store' });
     }
     if (pathname === '/api/stealth' && method === 'POST') {
+      const body = await readJsonBody(req, LIMITS.jsonBody).catch(() => ({}));
+      /* probe: живая проверка загрузки на одном адресе. Нужна потому, что
+         «установлено» ещё не значит «открывает»: в контейнере может не быть
+         библиотеки, сети или прав — и это видно только по настоящей загрузке.
+         Идёт тем же путём, что и инструмент модели (fetch_url), поэтому в ответе
+         видно и движок, и честную ошибку стелс-загрузки. */
+      const probe = String(body?.probe || '').trim();
+      if (probe) {
+        const asked = String(body?.engine || 'obscura').trim().toLowerCase();
+        const engine = ['auto', 'http', 'obscura'].includes(asked) ? asked : 'obscura';
+        const started = Date.now();
+        try {
+          const target = assertPublicUrl(probe);
+          await assertResolvesPublic(target.hostname);
+          const page = await fetchUrl(target.href, { engine, maxChars: 24000 });
+          const text = String(page.text || '');
+          return sendJson(
+            res,
+            200,
+            {
+              ok: text.trim().length > 0,
+              url: page.url,
+              requestedEngine: engine,
+              engine: page.fetchEngine || '',
+              chars: text.length,
+              title: page.title || '',
+              challenge: Boolean(page.challenge),
+              stealthError: page.stealthError || '',
+              elapsedMs: Date.now() - started,
+              head: text.slice(0, 400),
+            },
+            { 'Cache-Control': 'no-store' },
+          );
+        } catch (error) {
+          return sendJson(
+            res,
+            502,
+            { ok: false, url: probe, requestedEngine: engine, elapsedMs: Date.now() - started, error: String(error?.message || error) },
+            { 'Cache-Control': 'no-store' },
+          );
+        }
+      }
       try {
         const binary = await ensureObscura();
         return sendJson(res, 200, { ...obscuraInfo(), binary, installed: true });

@@ -81,6 +81,30 @@ const CHALLENGE_MARKERS = [
   'слишком много запросов',
   'проблем с ip',
   'обновить страницу',
+  /* Капчи-слайдеры (ozon и подобные) и типовые тексты Cloudflare/hCaptcha:
+     заглушка выглядит как обычная картинка с подписью, и без этих строк модель
+     могла принять её за содержимое страницы. */
+  'slide the slider',
+  'slide the puzzle',
+  'fit the puzzle',
+  'confirm that you are human',
+  'confirm you are human',
+  'i am not a robot',
+  'i\u2019m not a robot',
+  'please complete the security check',
+  'press and hold',
+  'press & hold',
+  'robot check',
+  'abt-challenge',
+  'challenges.cloudflare.com',
+  'cf-challenge',
+  'g-recaptcha',
+  'hcaptcha',
+  'recaptcha/api',
+  'проверка безопасности',
+  'подтвердите, что вы человек',
+  'потяните ползунок',
+  'перетащите фрагмент',
 ];
 
 let installPromise = null;
@@ -469,16 +493,33 @@ export async function obscuraLoad(rawUrl, { timeoutMs = 30_000, waitMs = 0, wait
   if (proxy) args.push('--proxy', String(proxy));
   const result = await run(binary, args, Math.max(LIMITS.timeoutMs, timeoutMs + 20_000));
   if (!result.ok) {
-    const error = new Error(result.error || 'Obscura не отдал страницу');
+    /* До живого сервиса сообщение об ошибке доходит только текстом ошибки:
+       поэтому в него кладём код выхода и начало stderr — иначе «не открылось»
+       нельзя отличить от «нет библиотеки» или «нет сети». */
+    const details = firstLine(result.stderr);
+    const tail = String(result.stderr || '')
+      .split(/\r?\n/)
+      .filter((line) => line.trim() && !line.startsWith('[INFO]'))
+      .slice(0, 3)
+      .join(' | ')
+      .slice(0, 400);
+    const reason = result.error || 'Obscura не отдал страницу';
+    console.warn(`  Obscura: ${rawUrl} — ${reason}${details && details !== reason ? ` (${details})` : ''}`);
+    const error = new Error([reason, tail && tail !== reason ? tail : ''].filter(Boolean).join(' · '));
     error.engine = 'obscura';
+    error.exitCode = result.exitCode;
     throw error;
   }
   const body = result.stdout.replace(/^\[(INFO|WARN|DEBUG|TRACE)\].*$/gm, '').trim();
   if (!body) throw new Error('Obscura вернул пустую страницу');
   if (body.length > LIMITS.pageBytes) throw new Error('Страница слишком большая для разбора (больше 12 МБ)');
   return {
-    kind: 'html',
-    text: format === 'markdown' ? body : body,
+    /* markdown: браузер уже почистил страницу, и разбирать её повторно не нужно —
+       вызывающий получает готовый текст. html: нужен, когда из страницы берут
+       структуру (заголовки, таблицы, ссылки) или ищут поля по селекторам. */
+    kind: format === 'markdown' ? 'text' : 'html',
+    text: body,
+    ...(format === 'markdown' ? { contentType: 'text/markdown' } : {}),
     url: String(rawUrl),
     status: 200,
     engine: 'obscura',

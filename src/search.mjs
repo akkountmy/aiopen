@@ -11,6 +11,15 @@ const UA =
 
 const MAX_BYTES = 12 * 1024 * 1024;
 const FETCH_TIMEOUT_MS = 30000;
+/* У стелс-браузера свой запас времени. В контейнере запуск браузера, отрисовка
+   и ожидание сети складываются: reddit на живом сервисе отдался за 46 с, а на
+   прежнем лимите 30 с загрузка обрывалась и модель получала «страница не
+   открылась» вместо текста. Ограничение не влияет на обычный путь: он по-прежнему
+   ждёт 30 с, и только после заглушки включается браузер. */
+const STEALTH_TIMEOUT_MS = 75000;
+function stealthBudget(timeoutMs) {
+  return Math.max(Number(timeoutMs) || 0, STEALTH_TIMEOUT_MS);
+}
 const SEARCH_TIMEOUT_MS = 20000;
 /* Локальные и служебные адреса из облака недоступны: сервис работает на общем
    хосте, и запрос к 127.0.0.1 или к метаданным хостинга — это попытка пройти
@@ -439,12 +448,16 @@ async function loadHtml(
     proxy = '',
     timeoutMs = FETCH_TIMEOUT_MS,
     waitMs = 0,
+    /* html — когда из страницы нужна структура (read_page, scrape, crawl);
+       markdown — когда нужен читаемый текст (fetch_url): браузер отдаёт его сам,
+       и мусор вёрстки не попадает в ответ модели. */
+    stealthFormat = 'html',
   } = {},
 ) {
   const mode = String(engine || 'auto').toLowerCase();
   const url = assertPublicUrl(rawUrl);
   if (mode === 'obscura') {
-    return obscuraLoad(url.href, { timeoutMs, waitMs, proxy });
+    return obscuraLoad(url.href, { timeoutMs: stealthBudget(timeoutMs), waitMs, proxy, format: stealthFormat });
   }
   const page = await requestPage(url.href, { method, headers, body, accept, timeoutMs });
   if (mode === 'http' || page.kind !== 'html' || !obscuraConfigured()) return page;
@@ -452,8 +465,12 @@ async function loadHtml(
   const suspicious = page.status >= 400 || looksLikeChallenge(text) || text.length < 400;
   if (!suspicious) return page;
   try {
-    const stealth = await obscuraLoad(url.href, { timeoutMs, waitMs, proxy });
-    const better = stealth.text.length >= Math.max(400, text.length * 0.5);
+    const stealth = await obscuraLoad(url.href, { timeoutMs: stealthBudget(timeoutMs), waitMs, proxy, format: stealthFormat });
+    /* Сравнивать надо в одной мере: браузер в режиме markdown отдаёт очищенный
+       текст, и он всегда короче HTML — иначе хорошая страница проигрывала бы
+       заглушке только из-за разметки. */
+    const baseline = stealthFormat === 'markdown' ? htmlToText(text).length : text.length;
+    const better = stealth.text.length >= Math.max(400, baseline * 0.5);
     if (!better) return page;
     return { ...stealth, url: page.url || stealth.url, status: stealth.text.length > text.length ? 200 : page.status };
   } catch (error) {
@@ -491,7 +508,16 @@ export async function fetchUrl(
       // Сайт не отдался через DeepSeek — ниже обычная загрузка с браузерным fallback.
     }
   }
-  const page = await loadHtml(url, { method, headers, body, engine, proxy });
+  /* Markdown из браузера — только для обычного GET: у POST есть тело, а его
+     стелс-загрузка не передаёт, и HTML там нужен как есть. */
+  const page = await loadHtml(url, {
+    method,
+    headers,
+    body,
+    engine,
+    proxy,
+    stealthFormat: method === 'GET' && !body ? 'markdown' : 'html',
+  });
   let text = page.text;
   let title = (text.match(/^.{0,120}/) || [''])[0].trim();
   let extracted = null;
@@ -504,7 +530,17 @@ export async function fetchUrl(
       text = htmlToText(page.text);
       title = extractTitle(page.text);
     }
+  } else {
+    /* Браузер в режиме markdown уже отдал готовый текст: заголовок берём из
+       первой строки-заголовка, а не из обрезанной первой строки. */
+    title = String(/^#{1,3}\s+(.+)$/m.exec(page.text)?.[1] || title).trim();
   }
+  const markdownText =
+    extracted && page.kind === 'html'
+      ? truncate(extracted.markdown, maxChars)
+      : page.kind === 'text' && page.contentType === 'text/markdown'
+        ? truncate(text, maxChars)
+        : undefined;
   return {
     url: page.url,
     kind: page.kind,
@@ -512,11 +548,12 @@ export async function fetchUrl(
     contentType: page.contentType,
     title,
     text: truncate(text, maxChars),
-    markdown: extracted && page.kind === 'html' ? truncate(extracted.markdown, maxChars) : undefined,
+    markdown: markdownText,
     bytes: page.bytes,
     fetchEngine: page.engine || 'http',
     stealthError: page.stealthError || '',
-    challenge: page.kind === 'html' ? looksLikeChallenge(page.text) : false,
+    /* Заглушку анти-бота ловим в любом виде: и в HTML, и в очищенном тексте. */
+    challenge: looksLikeChallenge(page.text || ''),
   };
 }
 
