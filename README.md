@@ -200,7 +200,10 @@
   распаковка своим парсером tar — `tar` в образе не нужен) в `DATA_DIR/vendor/obscura-0.2.5`
   и живёт в постоянном томе `/data`. Статус — в `/api/health` (блок `stealth`) и
   `GET /api/stealth`, установка по требованию — `POST /api/stealth`.
-  Выключение: `DSHOW_OBSCURA=off`; свой бинарник: `OBSCURA_BIN=/path/obscura`.
+  Выключение: `DSHOW_OBSCURA=off`; свой бинарник: `OBSCURA_BIN=/path/obscura`;
+  свой адрес архива: `DSHOW_OBSCURA_URL`; готовый архив рядом с сервисом:
+  `DSHOW_OBSCURA_ARCHIVE=/path/obscura-x86_64-linux-stealth.tar.gz` (скачивание
+  пропускается). Журнал установки — строки `Obscura: …` в логах запуска.
 - Проверка собранной страницы живьём: `check_page` открывает адрес или файл проекта в
   настоящем Chromium и возвращает то, что видит человек — скриншот в `screens/`, ошибки
   консоли, ответы сервера на запросы страницы (401/404 отдельной строкой), незагруженные
@@ -267,6 +270,8 @@ node server.mjs
 | `DSHOW_OBSCURA` | `off` — не использовать стелс-браузер obscura при блокировках (только HTTP) | включён |
 | `OBSCURA_BIN` | свой бинарник obscura вместо автоустановки | — |
 | `DSHOW_OBSCURA_SHA256` | своя контрольная сумма архива obscura | сумма v0.2.5 |
+| `DSHOW_OBSCURA_URL` | свой адрес архива obscura вместо GitHub Releases | адрес v0.2.5 |
+| `DSHOW_OBSCURA_ARCHIVE` | готовый архив на диске — скачивание пропускается | — |
 | `DSHOW_HISTORY_TOKENS` | бюджет истории диалога | `60000` |
 | `DSHOW_KEEP_RECENT` | сколько последних сообщений не сжимать | `10` |
 | `DSHOW_BACKUPS` | `0` — не делать суточные копии состояния | `1` |

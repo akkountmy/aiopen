@@ -25,11 +25,30 @@ import { DATA_DIR, ROOT } from './config.mjs';
 
 const VERSION = '0.2.5';
 const RELEASE_FILE = `obscura-x86_64-linux-stealth.tar.gz`;
-const RELEASE_URL = `https://github.com/h4ckf0r0day/obscura/releases/download/v${VERSION}/${RELEASE_FILE}`;
+const RELEASE_URL =
+  String(process.env.DSHOW_OBSCURA_URL || '').trim() ||
+  `https://github.com/h4ckf0r0day/obscura/releases/download/v${VERSION}/${RELEASE_FILE}`;
 const RELEASE_BYTES = 74936793;
 const RELEASE_SHA256 = process.env.DSHOW_OBSCURA_SHA256 || 'd9175cf7573d0243fc303a6f1a3b68affc757af0b5549cacb018e9670988316c';
 const INSTALL_DIR = path.join(DATA_DIR, 'vendor', `obscura-${VERSION}`);
 const INSTALLED_BIN = path.join(INSTALL_DIR, 'obscura');
+/** Готовый архив рядом с сервисом: если GitHub недоступен, кладём файл руками. */
+const LOCAL_ARCHIVES = [
+  String(process.env.DSHOW_OBSCURA_ARCHIVE || '').trim(),
+  path.join(ROOT, 'vendor', RELEASE_FILE),
+  path.join(DATA_DIR, 'vendor', RELEASE_FILE),
+].filter(Boolean);
+/** Скачивание 75 МБ: долго, но не бесконечно — иначе установка висит молча. */
+const DOWNLOAD_TIMEOUT_MS = 15 * 60 * 1000;
+
+/** Журнал только при заметных событиях: установка идёт редко и один раз. */
+function log(message) {
+  try {
+    console.log(`  Obscura: ${message}`);
+  } catch {
+    /* журнал недоступен — не повод падать */
+  }
+}
 
 /** Пределы, чтобы один «браузер» не съел память процесса. */
 const LIMITS = { pageBytes: 12_000_000, stdoutBytes: 16_000_000, timeoutMs: 40_000 };
@@ -126,9 +145,7 @@ async function installBinary() {
     throw new Error('Obscura доступна только для linux-x64; задайте OBSCURA_BIN или положите бинарник в vendor/obscura');
   }
   fs.mkdirSync(INSTALL_DIR, { recursive: true });
-  const response = await fetch(RELEASE_URL, { redirect: 'follow' });
-  if (!response.ok) throw new Error(`Obscura не скачивается: HTTP ${response.status}`);
-  const archive = Buffer.from(await response.arrayBuffer());
+  const archive = await readArchive();
   if (archive.length !== RELEASE_BYTES) {
     throw new Error(`Obscura: неверный размер архива (${archive.length} вместо ${RELEASE_BYTES})`);
   }
@@ -136,6 +153,7 @@ async function installBinary() {
   if (RELEASE_SHA256 && digest !== RELEASE_SHA256) {
     throw new Error('Obscura: контрольная сумма архива не совпала');
   }
+  log(`распаковываю ${(archive.length / 1048576).toFixed(1)} МБ`);
   const staging = `${INSTALL_DIR}.tmp-${process.pid}-${Date.now()}`;
   fs.rmSync(staging, { recursive: true, force: true });
   fs.mkdirSync(staging, { recursive: true });
@@ -154,6 +172,37 @@ async function installBinary() {
   const installed = obscuraPath();
   if (!installed) throw new Error('Obscura установлена, но не запускается');
   return installed;
+}
+
+/**
+ * Архив: сначала готовый файл рядом с сервисом (если GitHub из облака
+ * недоступен — это единственный путь), потом скачивание с проверкой размера.
+ */
+async function readArchive() {
+  for (const file of LOCAL_ARCHIVES) {
+    try {
+      const data = fs.readFileSync(file);
+      if (data.length === RELEASE_BYTES) {
+        log(`беру готовый архив ${file}`);
+        return data;
+      }
+      log(`файл ${file} не того размера (${data.length}) — пропускаю`);
+    } catch {
+      /* файла нет — обычный случай */
+    }
+  }
+  log(`скачиваю релиз v${VERSION} (${(RELEASE_BYTES / 1048576).toFixed(0)} МБ) — один раз`);
+  const started = Date.now();
+  let response;
+  try {
+    response = await fetch(RELEASE_URL, { redirect: 'follow', signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS) });
+  } catch (error) {
+    throw new Error(`Obscura не скачивается: ${error?.message || error}`);
+  }
+  if (!response.ok) throw new Error(`Obscura не скачивается: HTTP ${response.status}`);
+  const archive = Buffer.from(await response.arrayBuffer());
+  log(`скачано ${(archive.length / 1048576).toFixed(1)} МБ за ${Math.round((Date.now() - started) / 1000)} с`);
+  return archive;
 }
 
 function clearCache() {
@@ -199,8 +248,59 @@ function findObscuraRoot(dir) {
 export async function extractTarStream(source, destDir) {
   const root = path.resolve(destDir);
   fs.mkdirSync(root, { recursive: true });
-  let rest = Buffer.alloc(0);
+  /* Куски держим очередью и не склеиваем: в этом тарболе два файла по 80 МБ, и
+     `Buffer.concat` на каждый приходящий чанк даёт квадратичное копирование —
+     распаковка «висит» минутами и выглядит как зависший сервис. */
+  const queue = [];
+  let queued = 0;
+  let drained = false;
   let longName = '';
+  const iterator = source[Symbol.asyncIterator]();
+
+  async function fill(min) {
+    while (!drained && queued < min) {
+      const step = await iterator.next();
+      if (step.done) {
+        drained = true;
+        break;
+      }
+      const chunk = step.value;
+      if (!chunk || !chunk.length) continue;
+      queue.push(chunk);
+      queued += chunk.length;
+    }
+    return queued >= min;
+  }
+
+  /** Ровно `size` байт из потока; null — поток кончился раньше. */
+  async function take(size) {
+    if (size === 0) return Buffer.alloc(0);
+    if (!(await fill(size))) return null;
+    const first = queue[0];
+    if (first.length >= size) {
+      if (first.length === size) queue.shift();
+      else queue[0] = first.subarray(size);
+      queued -= size;
+      return first.subarray(0, size);
+    }
+    const out = Buffer.allocUnsafe(size);
+    let written = 0;
+    while (written < size) {
+      const chunk = queue[0];
+      const need = size - written;
+      if (chunk.length <= need) {
+        chunk.copy(out, written);
+        written += chunk.length;
+        queue.shift();
+      } else {
+        chunk.copy(out, written, 0, need);
+        queue[0] = chunk.subarray(need);
+        written += need;
+      }
+    }
+    queued -= size;
+    return out;
+  }
 
   const safeTarget = (name) => {
     const safe = String(name || '').replace(/^\.\//, '').replace(/^\/+/, '');
@@ -210,54 +310,48 @@ export async function extractTarStream(source, destDir) {
     return full;
   };
 
-  for await (const chunk of source) {
-    rest = rest.length ? Buffer.concat([rest, chunk]) : chunk;
-    let offset = 0;
-    while (rest.length - offset >= 512) {
-      const header = rest.subarray(offset, offset + 512);
-      if (header[0] === 0) {
-        /* После первого нулевого блока начинаются пустые: архив закончился. */
-        offset = rest.length;
-        break;
+  for (;;) {
+    const header = await take(512);
+    if (!header) break;
+    /* После первого нулевого блока начинаются пустые: архив закончился. */
+    if (header[0] === 0) break;
+    const rawName = cString(header.subarray(0, 100));
+    const prefix = cString(header.subarray(345, 500));
+    const sizeField = header
+      .subarray(124, 136)
+      .toString('utf8')
+      .replace(/\0/g, ' ')
+      .trim();
+    const size = /^[0-7]+$/.test(sizeField) ? parseInt(sizeField, 8) : 0;
+    const type = String.fromCharCode(header[156] || 48);
+    const padding = (512 - (size % 512)) % 512;
+    const data = size ? await take(size) : Buffer.alloc(0);
+    if (data === null) break;
+    if (padding) await take(padding);
+
+    if (type === 'x' || type === 'X') {
+      for (const record of parsePax(data.toString('utf8'))) {
+        if (record.path) longName = record.path;
       }
-      const rawName = cString(header.subarray(0, 100));
-      const prefix = cString(header.subarray(345, 500));
-      const sizeField = header
-        .subarray(124, 136)
-        .toString('utf8')
-        .replace(/\0/g, ' ')
-        .trim();
-      const size = /^[0-7]+$/.test(sizeField) ? parseInt(sizeField, 8) : 0;
-      const type = String.fromCharCode(header[156] || 48);
-      const total = 512 + Math.ceil(size / 512) * 512;
-      if (rest.length - offset < total) break;
-      const data = rest.subarray(offset + 512, offset + 512 + size);
-      offset += total;
-      if (type === 'x' || type === 'X') {
-        for (const record of parsePax(data.toString('utf8'))) {
-          if (record.path) longName = record.path;
-        }
-        continue;
-      }
-      if (type === 'L') {
-        longName = data.toString('utf8').replace(/\0+$/, '');
-        continue;
-      }
-      if (type === 'g' || type === 'K') continue;
-      const full = safeTarget(longName || (prefix ? `${prefix}/${rawName}` : rawName));
-      longName = '';
-      if (!full) continue;
-      if (type === '5') {
-        fs.mkdirSync(full, { recursive: true });
-        continue;
-      }
-      /* Обычный файл; симлинки и хардлинки не нужны — тарбол кладёт файлы рядом. */
-      if (type !== '0' && type !== '\0' && type !== '7') continue;
-      fs.mkdirSync(path.dirname(full), { recursive: true });
-      await fs.promises.writeFile(full, Buffer.from(data));
-      if (process.platform !== 'win32') fs.chmodSync(full, 0o755);
+      continue;
     }
-    rest = rest.subarray(offset);
+    if (type === 'L') {
+      longName = data.toString('utf8').replace(/\0+$/, '');
+      continue;
+    }
+    if (type === 'g' || type === 'K') continue;
+    const full = safeTarget(longName || (prefix ? `${prefix}/${rawName}` : rawName));
+    longName = '';
+    if (!full) continue;
+    if (type === '5') {
+      fs.mkdirSync(full, { recursive: true });
+      continue;
+    }
+    /* Обычный файл; симлинки и хардлинки не нужны — тарбол кладёт файлы рядом. */
+    if (type !== '0' && type !== '\0' && type !== '7') continue;
+    fs.mkdirSync(path.dirname(full), { recursive: true });
+    await fs.promises.writeFile(full, data);
+    if (process.platform !== 'win32') fs.chmodSync(full, 0o755);
   }
 }
 
