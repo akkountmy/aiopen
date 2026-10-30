@@ -472,7 +472,11 @@ async function loadHtml(
     const baseline = stealthFormat === 'markdown' ? htmlToText(text).length : text.length;
     const better = stealth.text.length >= Math.max(400, baseline * 0.5);
     if (!better) return page;
-    return { ...stealth, url: page.url || stealth.url, status: stealth.text.length > text.length ? 200 : page.status };
+    /* Если браузер отдал не меньше текста, чем было, значит код 403/503 пришёл
+       от анти-бота, а страница открылась: честнее вернуть 200, иначе выше по
+       коду заглушка выглядит как ошибка сервера при живом содержимом. */
+    const status = stealth.text.length >= Math.max(400, baseline) ? 200 : page.status;
+    return { ...stealth, url: page.url || stealth.url, status };
   } catch (error) {
     /* Без бинарника или без сети — возвращаем что есть: пусть ответ честно
        покажет заглушку, а причина останется в поле stealthError. */

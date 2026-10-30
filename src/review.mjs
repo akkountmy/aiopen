@@ -390,6 +390,25 @@ export function needsReview({ answer = '', tools = [], depth = 0, minChars = REV
 }
 
 /**
+ * Есть ли в ответе то, что можно сверить с результатами инструментов: числа,
+ * имена файлов или ссылки на источники. Если сверять нечего, сильная модель
+ * проверяющему не нужна — она бы читала тот же текст и говорила «всё ок»,
+ * а платили бы мы как за аудит. Такой ответ проверяет модель хода: структуру
+ * и полноту она видит не хуже, а детерминированные проверки всё равно уже
+ * прошли выше.
+ */
+export function hasCheckableFacts({ answer = '', sources = [], createdFiles = [] } = {}) {
+  const text = String(answer || '');
+  if (extractFigures(text).length) return true;
+  if (extractFileMentions(text).length) return true;
+  /* Файл, который агент реально создал, — тоже предмет сверки: проверяющий
+     смотрит, что в ответе сказано про него. */
+  if ((Array.isArray(createdFiles) ? createdFiles : []).filter(Boolean).length) return true;
+  if ((Array.isArray(sources) ? sources : []).length >= 2) return true;
+  return false;
+}
+
+/**
  * Полный проход ревью: детерминированные проверки, затем модель, затем
  * правка при серьёзных находках (до REVIEW.fixRounds кругов). Возвращает
  * итоговый текст и отчёт.
@@ -398,13 +417,20 @@ export async function reviewAnswer({ userQuestion = '', answer = '', history = [
   const report = { checked: false, verdict: 'ok', issues: [], fixed: false, modelChecked: false, model: '', attempts: 0 };
   if (!needsReview({ answer, tools, depth })) return { text: String(answer || ''), report };
 
-  const modelName = reviewModelName({ routeModel });
-  report.model = modelName;
   const digest = buildDigest(history);
   /* Источники — отдельным блоком: без них проверяющий не отличает цифру из
      статьи от цифры, придуманной вместе со ссылкой на статью. */
   const sources = extractSources(history);
   report.sources = sources.length;
+  /* Сильную модель зовём проверяющим только когда есть что сверять: числа,
+     файлы, источники. Иначе ответ читает модель хода — она дешевле, а
+     детерминированные проверки ниже всё равно выполняются. Явно заданный
+     DSHOW_REVIEW_MODEL сильнее этой экономии: его владелец выбрал сам. */
+  const explicitModel = String(REVIEW.model || '').trim();
+  const checkable = hasCheckableFacts({ answer, sources, createdFiles });
+  const modelName = explicitModel || (checkable ? reviewModelName({ routeModel }) : '');
+  report.model = modelName;
+  report.proChecked = Boolean(modelName) && modelName === ESCALATION.proModel;
   const deterministic = checkAnswer({ answer, toolDigest: digest, createdFiles, task });
   let issues = deterministic;
   report.issues = issues.slice();

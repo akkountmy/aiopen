@@ -241,6 +241,57 @@ test('ревью идёт на сильной модели, а без неё н�
   assert.equal(reviewModelName({ routeModel: 'flash-test', model: '', escalation: { enabled: true, proModel: '' } }), '');
 });
 
+test('веб-текст: своя страница не повод для сильной, корпус — повод', () => {
+  const splitWeb = { ...split, webChars: 24000 };
+  /* Одна страница на 9 тыс. знаков — материал для пересказа. */
+  const page = chooseStepRoute({
+    route: flashBase,
+    step: 3,
+    previous: { tools: ['fetch_url'], chars: 9000, failed: false, mechanicalRun: 1 },
+    config,
+    split: splitWeb,
+  });
+  assert.equal(page.model, 'flash-test');
+  assert.match(page.why, /материал для пересказа/);
+
+  /* Тот же объём из файла — это данные, их разбирает сильная. */
+  const file = chooseStepRoute({
+    route: flashBase,
+    step: 3,
+    previous: { tools: ['read_file'], chars: 9000, failed: false, mechanicalRun: 1 },
+    config,
+    split: splitWeb,
+  });
+  assert.equal(file.model, 'pro-test');
+
+  /* Обход сайта принёс десятки тысяч знаков — это корпус, его берёт сильная. */
+  const corpus = chooseStepRoute({
+    route: flashBase,
+    step: 4,
+    previous: { tools: ['crawl'], chars: 30000, failed: false, mechanicalRun: 1 },
+    config,
+    split: splitWeb,
+  });
+  assert.equal(corpus.model, 'pro-test');
+  assert.match(corpus.why, /корпус страниц/);
+});
+
+test('порог веб-текста задаётся настройкой', () => {
+  const route = chooseStepRoute({
+    route: flashBase,
+    step: 3,
+    previous: { tools: ['fetch_many'], chars: 6000, failed: false, mechanicalRun: 1 },
+    config,
+    split: { ...split, webChars: 5000 },
+  });
+  assert.equal(route.model, 'pro-test');
+});
+
+test('настройки: порог веб-текста выше общего и не меньше тысячи', () => {
+  assert.ok(SPLIT.webChars >= 1000);
+  assert.ok(SPLIT.webChars > SPLIT.dataChars);
+});
+
 let failed = 0;
 for (const item of tests) {
   try {

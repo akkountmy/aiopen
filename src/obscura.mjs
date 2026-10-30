@@ -24,7 +24,7 @@ import zlib from 'node:zlib';
 import { DATA_DIR, ROOT } from './config.mjs';
 
 const VERSION = '0.2.5';
-const RELEASE_FILE = `obscura-x86_64-linux-stealth.tar.gz`;
+const RELEASE_FILE = 'obscura-x86_64-linux-stealth.tar.gz';
 const RELEASE_URL =
   String(process.env.DSHOW_OBSCURA_URL || '').trim() ||
   `https://github.com/h4ckf0r0day/obscura/releases/download/v${VERSION}/${RELEASE_FILE}`;

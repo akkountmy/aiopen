@@ -137,7 +137,7 @@ process.env.DSHOW_MAX_STEPS = '2';
 process.env.DSHOW_MAX_SEGMENTS = '2';
 
 const { runTurn } = await import('../src/agent.mjs');
-const { chooseProfile, describeProfile, scoreTask } = await import('../src/model.mjs');
+const { chooseProfile, describeProfile, scoreTask, chooseStepRoute } = await import('../src/model.mjs');
 const {
   buildDigest,
   checkAnswer,
@@ -146,6 +146,7 @@ const {
   extractFileMentions,
   extractSources,
   formatSources,
+  hasCheckableFacts,
   needsReview,
   parseVerdict,
   reviewAnswer,
@@ -637,6 +638,65 @@ test('за пять шагов до предела агент получает �
   assert.ok(warning, 'человек не увидел предупреждение в статусе');
   /* Предупреждение одно на ход, а не на каждом шаге. */
   assert.equal(events.filter((event) => event.type === 'progress' && event.note && /осталось/.test(event.note)).length, 1);
+});
+
+test('страница не тянет за собой сильную модель: у веб-текста свой порог', () => {
+  const config = { enabled: true, flashModel: 'flash-test', proModel: 'pro-test', flashEffort: 'high', proEffort: 'max' };
+  const split = { enabled: true, dataChars: 2500, webChars: 24000 };
+  const flash = { profile: 'flash', model: 'flash-test', effort: 'high' };
+  /* Одна статья на 9 тыс. знаков — материал для пересказа, читает модель хода. */
+  const page = chooseStepRoute({ route: flash, step: 3, previous: { tools: ['fetch_url'], chars: 9000, failed: false }, config, split });
+  assert.equal(page.model, 'flash-test');
+  assert.match(page.why, /материал для пересказа/);
+  /* Тот же объём из файла — уже разбор данных, его берёт сильная. */
+  const file = chooseStepRoute({ route: flash, step: 3, previous: { tools: ['read_file'], chars: 9000, failed: false }, config, split });
+  assert.equal(file.model, 'pro-test');
+  /* Корпус страниц (обход сайта) — снова сильная. */
+  const corpus = chooseStepRoute({ route: flash, step: 3, previous: { tools: ['crawl'], chars: 30000, failed: false }, config, split });
+  assert.equal(corpus.model, 'pro-test');
+  assert.match(corpus.why, /корпус страниц/);
+});
+
+test('проверяющего-сильную зовут только когда есть что сверять', async () => {
+  const answer = `${'Краткий пересказ страницы без цифр и файлов. '.repeat(20)}Готово.`;
+  /* Ни чисел, ни имён файлов, ни источников — сверять нечего. */
+  assert.equal(hasCheckableFacts({ answer, sources: [] }), false);
+  assert.equal(hasCheckableFacts({ answer: `${answer} Итог 12 345 руб.` }), true);
+  assert.equal(hasCheckableFacts({ answer: `${answer} Файл отчёт.docx готов.` }), true);
+
+  const asked = [];
+  const result = await reviewAnswer({
+    userQuestion: 'перескажи страницу',
+    answer,
+    history: [{ role: 'tool', content: 'текст страницы' }],
+    createdFiles: [],
+    routeModel: 'flash-test',
+    tools: [{ name: 'fetch_url', status: 'ok' }],
+    complete: async (messages, options = {}) => {
+      asked.push(options.model || '');
+      return JSON.stringify({ verdict: 'ok', issues: [] });
+    },
+  });
+  assert.equal(result.report.checked, true);
+  assert.equal(asked[0], '', 'на ответ без чисел и файлов позвали сильную модель');
+  assert.equal(result.report.proChecked, false);
+
+  /* А с числом — уже сильная: ей есть что сверять с результатами. */
+  const withNumber = await reviewAnswer({
+    userQuestion: 'сколько стоит',
+    answer: `${'Данные со страницы, разбор ниже. '.repeat(20)}Итог: 1 234 567 руб.`,
+    history: [{ role: 'tool', content: '1 234 567 руб.' }],
+    createdFiles: [],
+    routeModel: 'flash-test',
+    tools: [{ name: 'fetch_url', status: 'ok' }],
+    complete: async (messages, options = {}) => {
+      asked.push(options.model || '');
+      return JSON.stringify({ verdict: 'ok', issues: [] });
+    },
+  });
+  assert.equal(withNumber.report.checked, true);
+  assert.equal(asked[1], 'pro-test', 'ответ с числом должен проверять сильный профиль');
+  assert.equal(withNumber.report.proChecked, true);
 });
 
 let failed = 0;

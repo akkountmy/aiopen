@@ -953,6 +953,10 @@ export async function runTurn({
     } catch {
       review = null;
     }
+    /* Ревью — скрытый вызов модели: без строки в логе не видно, что проверял
+       сильный профиль и за что списались токены. */
+    const reviewLine = describeReview(review);
+    if (reviewLine) console.log(`[review] ${reviewLine}`);
   }
 
   return { text: finalText, usage, tools: toolsUsed, steps, memory: chat.memory, trim: trimStats, route: { ...route, steps: stepRoutes }, review, reasoning: reasoningText };

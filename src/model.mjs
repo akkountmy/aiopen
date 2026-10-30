@@ -173,6 +173,26 @@ export function isMechanicalTool(name) {
   return MECHANICAL_TOOLS.has(String(name || '').trim());
 }
 
+/**
+ * Инструменты, которые приносят текст страниц. Он отличается от выгрузки или
+ * файла: это материал для пересказа и цитат, а не набор чисел, который надо
+ * свести. Разбирать двадцать тысяч знаков статьи сильной моделью — платить
+ * вдвое за то, что быстрая делает так же хорошо, поэтому у веб-текста свой
+ * порог (SPLIT.webChars), заметно выше общего.
+ */
+export const WEB_TOOLS = new Set([
+  'fetch_url',
+  'fetch_many',
+  'read_page',
+  'scrape_page',
+  'crawl',
+  'check_links',
+]);
+
+export function isWebTool(name) {
+  return WEB_TOOLS.has(String(name || '').trim());
+}
+
 /** Маршрут одного профиля: модель и усилие берутся из настроек эскалации. */
 function profileRoute(profile, config = {}) {
   if (profile === 'pro' && config.proModel) {
@@ -238,7 +258,10 @@ export function chooseStepRoute({ route, step = 1, previous = null, config = {},
   if (!tools.length) return { ...base, switched: false, why: 'на прошлом шаге не было инструментов' };
 
   const chars = Number(previous.chars) || 0;
-  const dataLimit = Math.max(200, Number(split?.dataChars) || 2500);
+  const webOnly = tools.every(isWebTool);
+  const dataLimit = webOnly
+    ? Math.max(1000, Number(split?.webChars) || 24_000)
+    : Math.max(200, Number(split?.dataChars) || 2500);
   const mechanical = tools.every(isMechanicalTool);
 
   if (!mechanical) {
@@ -246,8 +269,14 @@ export function chooseStepRoute({ route, step = 1, previous = null, config = {},
   }
   if (chars >= dataLimit) {
     const kb = Math.round((chars / 1000) * 10) / 10;
-    return decide('pro', `на прошлом шаге пришло ${kb} тыс. знаков данных — разбирает сильная модель`);
+    return decide(
+      'pro',
+      webOnly
+        ? `пришло ${kb} тыс. знаков веб-текста — это корпус страниц, разбирает сильная модель`
+        : `на прошлом шаге пришло ${kb} тыс. знаков данных — разбирает сильная модель`,
+    );
   }
+  if (webOnly) return { ...base, switched: false, why: 'страница — материал для пересказа, его читает модель хода' };
   if (split?.grind === true && baseProfile === 'pro' && Number(previous.mechanicalRun) >= Math.max(1, Number(split?.grindAfter) || 2)) {
     return decide('flash', 'идёт перекладывание файлов подряд — его быстрее сделает быстрая модель');
   }
