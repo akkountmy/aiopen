@@ -668,6 +668,10 @@ const MIME = {
   '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
   '.zip': 'application/zip',
+  /* Что снимает камера в окне «Сфотографировать»: без своего типа такие файлы
+     уходили в браузер как octet-stream и скачивались вместо открытия. */
+  '.mp4': 'video/mp4',
+  '.webm': 'video/webm',
 };
 
 /* Страница из файла пользователя показывается в рамке и без доступа к сервису:

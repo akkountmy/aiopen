@@ -378,10 +378,13 @@ try {
     name: document.querySelector('#attachStrip .file-chip .fc-name')?.textContent || '',
     modalClosed: !document.querySelector('.modal.camera-modal'),
   }));
-  ok('снимок прикрепился к сообщению', /^Снимок-\d{4}-/.test(shotChip.name) && shotChip.modalClosed, JSON.stringify(shotChip));
+  ok('снимок прикрепился к сообщению',
+    /^IMG_\d{8}-\d{6}\.jpg$/.test(shotChip.name) && shotChip.modalClosed, JSON.stringify(shotChip));
 
   /* Видео: запись идёт со счётчиком, после остановки запись проигрывается в
-     том же окне, а закрытие окна гасит камеру и ссылку на файл. */
+     том же окне, а закрытие окна гасит камеру и ссылку на файл. Формат записи
+     сверяем по самому файлу: в браузере, который умеет MP4, камера пишет MP4,
+     и имя файла должно говорить то же самое. */
   await deskPage.click('#photoBtn');
   await deskPage.waitForFunction(() => {
     const video = document.querySelector('.camera-video');
@@ -389,6 +392,13 @@ try {
   }, null, { timeout: 15000 });
   await deskPage.click('.camera-mode:not(.is-on)');
   await deskPage.waitForFunction(() => document.querySelector('.modal.camera-modal .modal-foot .btn-primary')?.textContent === 'Записать видео');
+  const mp4Supported = await deskPage.evaluate(() => {
+    try {
+      return MediaRecorder.isTypeSupported('video/mp4;codecs=avc1.42E01E,mp4a.40.2');
+    } catch {
+      return false;
+    }
+  });
   await deskPage.click('.modal.camera-modal .modal-foot .btn-primary');
   await deskPage.waitForSelector('.camera-rec:not(.hidden)', { timeout: 10000 });
   await deskPage.waitForTimeout(1600);
@@ -412,10 +422,59 @@ try {
       main: document.querySelector('.modal.camera-modal .modal-foot .btn-primary')?.textContent,
       currentTime: player.currentTime,
       error,
+      hint: document.querySelector('.modal.camera-modal .camera-hint')?.textContent || '',
     };
   });
   ok('видео записалось и проигрывается', video.main === 'Прикрепить' && video.currentTime > 0, JSON.stringify(video));
+  ok('подсказка называет готовый файл формата MP4', /VID_\d{8}-\d{6}\.mp4/.test(video.hint), video.hint);
 
+  /* Настоящий формат записи видно только в самой загрузке: странице политика
+     безопасности запрещает fetch к blob:, а перехват показывает и имя файла,
+     и тип, и первые байты — «ftyp» в начале файла и есть MP4, а EBML (1A 45 DF
+     A3) — это WebM. */
+  const uploads = [];
+  await deskPage.route('**/api/attachments', async (route) => {
+    const request = route.request();
+    if (request.method() === 'POST') {
+      const body = request.postDataBuffer() || Buffer.alloc(0);
+      uploads.push({
+        name: decodeURIComponent(request.headers()['x-filename'] || ''),
+        type: request.headers()['content-type'] || '',
+        magic: body.subarray(0, 16).toString('latin1'),
+        size: body.length,
+      });
+    }
+    await route.continue();
+  });
+
+  /* Запись прикрепляется тем же путём, что и остальные файлы: в строке
+     вложений видно имя VID_…mp4, то есть файл действительно MP4. */
+  await deskPage.click('.modal.camera-modal .modal-foot .btn-primary');
+  await deskPage.waitForFunction(() => document.querySelectorAll('#attachStrip .file-chip').length === 2, null, { timeout: 20000 });
+  const videoChip = await deskPage.evaluate(() => ({
+    name: [...document.querySelectorAll('#attachStrip .file-chip .fc-name')].pop()?.textContent || '',
+    modalClosed: !document.querySelector('.modal.camera-modal'),
+  }));
+  ok('видео прикрепилось файлом VID_…mp4',
+    /^VID_\d{8}-\d{6}\.mp4$/.test(videoChip.name) && videoChip.modalClosed, JSON.stringify(videoChip));
+
+  await deskPage.waitForTimeout(150);
+  const uploaded = uploads[uploads.length - 1] || {};
+  const isMp4 = uploaded.magic?.slice(4, 8) === 'ftyp';
+  const isWebm = uploaded.magic?.slice(0, 4) === '\u001aE\u00df\u00a3';
+  ok('видео уходит на сервер настоящим MP4 (в начале файла ftyp)',
+    mp4Supported ? isMp4 && !isWebm : isWebm,
+    JSON.stringify({ mp4Supported, name: uploaded.name, type: uploaded.type, magic: uploaded.magic, size: uploaded.size }));
+  ok('тип загружаемого видео — video/mp4',
+    mp4Supported ? uploaded.type === 'video/mp4' : uploaded.type === 'video/webm', uploaded.type);
+
+  /* Закрытие окна само ничего не прикрепляет: снимаем запись в корзину окна,
+     то есть просто закрываем его, — число вложений не меняется. */
+  await deskPage.click('#photoBtn');
+  await deskPage.waitForFunction(() => {
+    const video = document.querySelector('.camera-video');
+    return Boolean(video && video.srcObject && video.readyState >= 2);
+  }, null, { timeout: 15000 });
   await deskPage.locator('.modal.camera-modal .modal-foot').getByRole('button', { name: 'Отмена' }).click();
   await deskPage.waitForSelector('.modal.camera-modal', { state: 'detached', timeout: 5000 });
   const afterClose = await deskPage.evaluate(() => ({
@@ -423,7 +482,7 @@ try {
     recorded: document.querySelectorAll('#attachStrip .file-chip').length,
   }));
   ok('закрытие окна убирает камеру и не прикрепляет запись само',
-    afterClose.videoGone && afterClose.recorded === 1, JSON.stringify(afterClose));
+    afterClose.videoGone && afterClose.recorded === 2, JSON.stringify(afterClose));
   await desktop.close();
 
   /* Камера отказала: окно не должно молча пустовать. Показываем «Камера

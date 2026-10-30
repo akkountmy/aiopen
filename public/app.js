@@ -2982,14 +2982,15 @@ function cameraLivePreferred() {
   }
 }
 
-/* Имя файла короткое и с расширением: в списке вложений видно, что это снимок
-   или видео, а время в имени не даёт двум снимкам подряд затереть друг друга. */
+/* Имя файла как у камеры телефона: IMG_20261019-123456.jpg и
+   VID_20261019-123456.mp4. По имени сразу видно, что это снимок или видео, а
+   дата и время в нём не дают двум файлам подряд затереть друг друга. */
 function cameraStamp(prefix, ext) {
   const now = new Date();
   const pad = (value) => String(value).padStart(2, '0');
-  const date = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+  const date = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}`;
   const time = `${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
-  return `${prefix}-${date}-${time}.${ext}`;
+  return `${prefix}_${date}-${time}.${ext}`;
 }
 
 function cameraErrorText(error) {
@@ -3093,10 +3094,12 @@ function cameraSyncUi() {
 
   if (result) {
     ui.main.textContent = 'Прикрепить';
+    /* В подсказке называем имя файла и формат: по имени IMG_…jpg и VID_…mp4
+       человек сразу видит, что снимок или видео сохранились так, как ждал. */
     ui.hint.textContent =
       result.kind === 'photo'
-        ? `Снимок готов, ${fmtSize(result.file.size)}. Прикрепится к сообщению.`
-        : `Видео готово, ${fmtSize(result.file.size)}. Прикрепится к сообщению файлом.`;
+        ? `Снимок готов: ${result.file.name}, ${fmtSize(result.file.size)}. Прикрепится к сообщению.`
+        : `Видео готово: ${result.file.name}, ${fmtSize(result.file.size)}. Прикрепится к сообщению файлом.`;
   } else if (!live) {
     ui.main.textContent = 'Включить камеру';
   } else if (camera.recording) {
@@ -3104,10 +3107,10 @@ function cameraSyncUi() {
     ui.hint.textContent = `Идёт запись — до ${Math.round(CAMERA_MAX_SECONDS / 60)} минут. Нажмите «Остановить запись», когда закончите.`;
   } else if (camera.mode === 'photo') {
     ui.main.textContent = 'Снять фото';
-    ui.hint.textContent = 'Живой кадр с камеры ноутбука. Снимок прикрепится к сообщению.';
+    ui.hint.textContent = 'Живой кадр с камеры ноутбука. Снимок сохранится как IMG_…jpg и прикрепится к сообщению.';
   } else {
     ui.main.textContent = 'Записать видео';
-    ui.hint.textContent = `Видео со звуком микрофона, до ${Math.round(CAMERA_MAX_SECONDS / 60)} минут. Прикрепится к сообщению файлом.`;
+    ui.hint.textContent = `Видео со звуком микрофона, до ${Math.round(CAMERA_MAX_SECONDS / 60)} минут. Сохранится как VID_…mp4 и прикрепится к сообщению файлом.`;
   }
   ui.main.disabled = false;
 }
@@ -3218,7 +3221,7 @@ async function captureCameraPhoto() {
   clearCameraResult();
   camera.result = {
     kind: 'photo',
-    file: new File([blob], cameraStamp('Снимок', 'jpg'), { type: 'image/jpeg' }),
+    file: new File([blob], cameraStamp('IMG', 'jpg'), { type: 'image/jpeg' }),
     url: URL.createObjectURL(blob),
   };
   ui.shot.src = camera.result.url;
@@ -3228,9 +3231,24 @@ async function captureCameraPhoto() {
   cameraSyncUi();
 }
 
+/* Запись идёт сразу в MP4 (H.264 + AAC) — это формат камеры телефона: такой
+   файл открывается в любом плеере и на телефоне, тогда как WebM понимают не
+   все. MP4 в MediaRecorder умеют Chrome и Safari; если браузер его не умеет
+   (например, Firefox), остаётся WebM — иначе записи не будет вовсе. Порядок
+   важнее содержания: первый тип, который браузер поддерживает, и берём. */
+const CAMERA_RECORDER_TYPES = [
+  'video/mp4;codecs=avc1.42E01E,mp4a.40.2',
+  'video/mp4;codecs=avc1.4d002a,mp4a.40.2',
+  'video/mp4;codecs=avc1,mp4a.40.2',
+  'video/mp4;codecs=avc1',
+  'video/mp4',
+  'video/webm;codecs=vp9,opus',
+  'video/webm;codecs=vp8,opus',
+  'video/webm',
+];
+
 function cameraRecorderMime() {
-  const candidates = ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm', 'video/mp4'];
-  for (const type of candidates) {
+  for (const type of CAMERA_RECORDER_TYPES) {
     try {
       if (window.MediaRecorder.isTypeSupported(type)) return type;
     } catch {
@@ -3238,6 +3256,17 @@ function cameraRecorderMime() {
     }
   }
   return '';
+}
+
+/* Расширение по настоящему типу записи, а не по названию браузера: если MP4
+   не поддержан и запись вышла в WebM, файл не должен притворяться MP4 —
+   иначе он не откроется ни в одном плеере. */
+function cameraVideoExt(type) {
+  const value = String(type || '').toLowerCase();
+  if (value.includes('mp4')) return 'mp4';
+  if (value.includes('webm')) return 'webm';
+  if (value.includes('ogg')) return 'ogv';
+  return 'webm';
 }
 
 function finishCameraRecording(token, mimeType) {
@@ -3258,11 +3287,14 @@ function finishCameraRecording(token, mimeType) {
     cameraSyncUi();
     return;
   }
-  const ext = type.includes('mp4') ? 'mp4' : 'webm';
+  const ext = cameraVideoExt(type);
+  /* В файле пишем чистый тип без кодеков: «video/mp4;codecs=…» в качестве
+     типа файла сбивает часть плееров и разборщиков. */
+  const fileType = ext === 'mp4' ? 'video/mp4' : ext === 'ogv' ? 'video/ogg' : 'video/webm';
   clearCameraResult();
   camera.result = {
     kind: 'video',
-    file: new File([blob], cameraStamp('Видео', ext), { type }),
+    file: new File([blob], cameraStamp('VID', ext), { type: fileType }),
     url: URL.createObjectURL(blob),
   };
   camera.ui.playback.src = camera.result.url;
@@ -7333,6 +7365,41 @@ function stopDictation(cancelled = false) {
   }
 }
 
+/* Тишина по краям записи — не речь, но её всё равно приходится загружать по
+   сети: между последним словом и нажатием «стоп» проходит секунда-две, ещё
+   столько же — до первого слова. Режем по кадрам 20 мс, оставляя 200 мс
+   запаса, чтобы не срезать начало и конец слова. */
+function trimSilence(samples, sampleRate) {
+  const frameSize = Math.max(1, Math.round(sampleRate * 0.02));
+  const frames = Math.floor(samples.length / frameSize);
+  if (frames < 5) return samples;
+  const loudness = new Float32Array(frames);
+  let peak = 0;
+  for (let frame = 0; frame < frames; frame += 1) {
+    let sum = 0;
+    for (let i = 0; i < frameSize; i += 1) {
+      const value = samples[frame * frameSize + i];
+      sum += value * value;
+    }
+    const rms = Math.sqrt(sum / frameSize);
+    loudness[frame] = rms;
+    if (rms > peak) peak = rms;
+  }
+  if (peak < 0.004) return samples;
+  const threshold = Math.max(peak * 0.05, 0.006);
+  let first = 0;
+  while (first < frames && loudness[first] < threshold) first += 1;
+  let last = frames - 1;
+  while (last > first && loudness[last] < threshold) last -= 1;
+  if (first > last) return samples;
+  const margin = Math.round(0.2 * sampleRate);
+  const from = Math.max(0, first * frameSize - margin);
+  const to = Math.min(samples.length, (last + 1) * frameSize + margin);
+  if (from === 0 && to >= samples.length) return samples;
+  if (to - from < sampleRate * 0.3) return samples;
+  return samples.subarray(from, to);
+}
+
 function encodeWavMono(samples, sampleRate) {
   const buffer = new ArrayBuffer(44 + samples.length * 2);
   const view = new DataView(buffer);
@@ -7364,9 +7431,19 @@ function encodeWavMono(samples, sampleRate) {
 async function blobToWav(blob) {
   const AudioCtx = window.AudioContext || window.webkitAudioContext;
   const OfflineCtx = window.OfflineAudioContext || window.webkitOfflineAudioContext;
-  if (!AudioCtx || !OfflineCtx) throw new Error('Браузер не поддерживает обработку звука');
+  if (!AudioCtx) throw new Error('Браузер не поддерживает обработку звука');
   const encoded = await blob.arrayBuffer();
-  const ctx = new AudioCtx();
+  const sampleRate = 16000;
+  /* Декодируем сразу в 16 кГц: decodeAudioData отдаёт буфер в частоте самого
+     контекста, поэтому второй проход через OfflineAudioContext (пересчёт
+     частоты) нужен только браузерам, которые такую частоту не приняли. */
+  let ctx = null;
+  try {
+    ctx = new AudioCtx({ sampleRate });
+  } catch {
+    ctx = null;
+  }
+  if (!ctx) ctx = new AudioCtx();
   let decoded;
   try {
     decoded = await new Promise((resolve, reject) => {
@@ -7376,7 +7453,10 @@ async function blobToWav(blob) {
   } finally {
     ctx.close?.().catch?.(() => {});
   }
-  const sampleRate = 16000;
+  if (Math.round(decoded.sampleRate) === sampleRate) {
+    return encodeWavMono(trimSilence(decoded.getChannelData(0), sampleRate), sampleRate);
+  }
+  if (!OfflineCtx) throw new Error('Браузер не поддерживает обработку звука');
   const frames = Math.max(1, Math.ceil(decoded.duration * sampleRate));
   const offline = new OfflineCtx(1, frames, sampleRate);
   const source = offline.createBufferSource();
@@ -7384,7 +7464,7 @@ async function blobToWav(blob) {
   source.connect(offline.destination);
   source.start(0);
   const rendered = await offline.startRendering();
-  return encodeWavMono(rendered.getChannelData(0), sampleRate);
+  return encodeWavMono(trimSilence(rendered.getChannelData(0), sampleRate), sampleRate);
 }
 
 function insertTranscript(text) {
