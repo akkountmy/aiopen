@@ -1,7 +1,7 @@
-import { CONTEXT, ESCALATION, MODEL, REVIEW, costUsd } from './config.mjs';
+import { CONTEXT, ESCALATION, MODEL, REVIEW, SPLIT, costUsd } from './config.mjs';
 import { documentExcerpt, documentKind } from './doccheck.mjs';
 import { getDeepSeekKey } from './keys.mjs';
-import { chooseProfile } from './model.mjs';
+import { chooseProfile, chooseStepRoute, describeStepRoute, isMechanicalTool } from './model.mjs';
 import { createNarrationGate } from './narration.mjs';
 import { createReasoningGate, looksRussian } from './reasoning.mjs';
 import { summaryPrompt, systemPrompt, titlePrompt } from './prompt.mjs';
@@ -497,6 +497,10 @@ export async function runTurn({
   let reasoningText = '';
   let steps = 0;
   let finished = false;
+  /* Что вернул предыдущий шаг: по этому решается, кто ведёт следующий. Профиль
+     хода — только база; внутри хода шаги неравноценны (см. chooseStepRoute). */
+  let previousStep = null;
+  const stepRoutes = [];
 
   /* Субагенты: изолированный контекст, суженный набор инструментов, отчёт
      текстом. Расход вложенной работы прибавляется к расходу основной задачи,
@@ -620,14 +624,22 @@ export async function runTurn({
         })
       : null;
 
+    /* Кто ведёт ИМЕННО этот шаг: база хода уточняется по результату прошлого
+       шага. Переключение видно в логе — иначе поведение выглядит случайным. */
+    const stepRoute = chooseStepRoute({ route, step: steps, previous: previousStep, config: ESCALATION, split: SPLIT });
+    if (stepRoute.switched) {
+      stepRoutes.push({ step: steps, profile: stepRoute.profile, why: stepRoute.why });
+      console.log(`[model] ${describeStepRoute(stepRoute)}`);
+    }
+
     const result = await callModel(
       {
-        model: route.model,
+        model: stepRoute.model,
         messages,
         tools: toolDefs,
         tool_choice: 'auto',
         max_tokens: CONTEXT.maxOutputTokens,
-        reasoning_effort: route.effort,
+        reasoning_effort: stepRoute.effort,
       },
       {
         signal,
@@ -668,7 +680,7 @@ export async function runTurn({
           limitUsd: Math.round(Number(budget.limitUsd) * 100) / 100,
         };
         emit({ type: 'budget', ...budgetHit });
-        return { text: finalText, usage, tools: toolsUsed, steps, memory: chat.memory, budgetHit, trim: trimStats, route, reasoning: reasoningText };
+        return { text: finalText, usage, tools: toolsUsed, steps, memory: chat.memory, budgetHit, trim: trimStats, route: { ...route, steps: stepRoutes }, reasoning: reasoningText };
       }
     }
 
@@ -688,6 +700,10 @@ export async function runTurn({
       })),
     };
     chat.history.push(assistantMessage);
+
+    /* Итог шага для выбора следующего: сколько данных пришло и не упал ли он. */
+    let stepChars = 0;
+    let stepFailed = false;
 
     for (const call of assistantMessage.tool_calls) {
       let args = {};
@@ -801,8 +817,20 @@ export async function runTurn({
         tool_call_id: call.id,
         content: content || 'Готово.',
       });
+      stepChars += String(content || '').length;
+      if (status === 'error') stepFailed = true;
       if (signal.aborted) throw Object.assign(new Error('aborted'), { name: 'AbortError' });
     }
+    /* Снимок шага для маршрутизации следующего. `mechanicalRun` — сколько
+       механических шагов идёт подряд: после второго подряд разбор уже не нужен. */
+    const stepTools = assistantMessage.tool_calls.map((call) => call.function.name);
+    const stepMechanical = stepTools.length > 0 && stepTools.every(isMechanicalTool);
+    previousStep = {
+      tools: stepTools,
+      chars: stepChars,
+      failed: stepFailed,
+      mechanicalRun: stepMechanical ? Number(previousStep?.mechanicalRun || 0) + 1 : 0,
+    };
     if (signal.aborted) throw Object.assign(new Error('aborted'), { name: 'AbortError' });
     /* Отрезок шагов закончился, а работа ещё идёт: человека не спрашиваем —
        агент получает «продолжай» и ведёт задачу дальше сам. Вместо голого
@@ -927,7 +955,7 @@ export async function runTurn({
     }
   }
 
-  return { text: finalText, usage, tools: toolsUsed, steps, memory: chat.memory, trim: trimStats, route, review, reasoning: reasoningText };
+  return { text: finalText, usage, tools: toolsUsed, steps, memory: chat.memory, trim: trimStats, route: { ...route, steps: stepRoutes }, review, reasoning: reasoningText };
 }
 
 /* Название диалога не должно зависеть от модели: если её ответ пустой,

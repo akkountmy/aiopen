@@ -145,3 +145,118 @@ export function describeProfile(route) {
   const why = route.reasons?.length ? route.reasons.join(', ') : 'без признаков';
   return `${route.profile} (${route.score}${route.threshold ? `/${route.threshold}` : ''}): ${why}`;
 }
+
+/**
+ * Механические инструменты: их результат — материал для следующего шага, а не
+ * решение. Кто именно прочитал файл или скачал страницу, на качество ответа не
+ * влияет; влияет то, кто будет эти данные разбирать.
+ */
+export const MECHANICAL_TOOLS = new Set([
+  'list_files',
+  'find_in_files',
+  'read_file',
+  'read_document',
+  'read_page',
+  'fetch_url',
+  'fetch_many',
+  'crawl',
+  'scrape_page',
+  'extract_archive',
+  'check_links',
+  'delete_path',
+  'move_path',
+  'remember',
+  'use_skill',
+]);
+
+export function isMechanicalTool(name) {
+  return MECHANICAL_TOOLS.has(String(name || '').trim());
+}
+
+/** Маршрут одного профиля: модель и усилие берутся из настроек эскалации. */
+function profileRoute(profile, config = {}) {
+  if (profile === 'pro' && config.proModel) {
+    return { profile: 'pro', model: config.proModel, effort: config.proEffort || 'max' };
+  }
+  return {
+    profile: 'flash',
+    model: config.flashModel || 'deepseek-flash',
+    effort: config.flashEffort || 'high',
+  };
+}
+
+/**
+ * Маршрут ОДНОГО шага хода внутри задачи.
+ *
+ * Профиль хода выбран по сложности задачи и служит базой. Но шаги внутри хода
+ * неравноценны, поэтому база уточняется по предыдущему шагу:
+ *
+ *  — шаг упал с ошибкой инструмента → следующий шаг ведёт сильная модель
+ *    (быстрая уже попробовала и не справилась);
+ *  — предыдущий шаг принёс много данных (файл, страница, выгрузка) → разбирает
+ *    сильная модель, даже если ход вообще начинался как лёгкий: задача
+ *    оказалась содержательнее, чем выглядела в запросе;
+ *  — предыдущий шаг работал «умным» инструментом (расчёт, создание документа,
+ *    проверка, запуск кода) → дальше нужна проверка, её делает сильная;
+ *  — продолжалась механика (чтение, поиск, перенос) → остаёмся на профиле хода;
+ *    на сильном профиле такую работу можно отдать быстрой модели, но только
+ *    если это включено явно (`split.grind`): экономия здесь может стоить
+ *    качества, поэтому по умолчанию выключено.
+ *
+ * Возвращает полный маршрут шага плюс `switched` и `why` — по ним видно, почему
+ * шаг пошёл не на модели хода.
+ */
+export function chooseStepRoute({ route, step = 1, previous = null, config = {}, split = {} } = {}) {
+  const settings = config || {};
+  const baseProfile = route?.profile === 'pro' && settings.proModel ? 'pro' : 'flash';
+  const base = { ...(route || {}), ...profileRoute(baseProfile, settings) };
+
+  /* Сильная модель не настроена — выбора нет. */
+  if (!settings.proModel) {
+    return { ...base, ...profileRoute('flash', settings), switched: false, why: 'сильная модель не настроена' };
+  }
+  if (split && split.enabled === false) {
+    return { ...base, switched: false, why: 'распределение шагов выключено (DSHOW_SPLIT=0)' };
+  }
+  if (Number(step) <= 1 || !previous) {
+    return { ...base, switched: false, why: 'первый шаг идёт на профиле хода' };
+  }
+
+  const decide = (profile, why) => {
+    const target = profileRoute(profile, settings);
+    return {
+      ...base,
+      ...target,
+      switched: target.profile !== baseProfile,
+      why,
+    };
+  };
+
+  if (previous.failed) return decide('pro', 'предыдущий шаг сорвался — берёт сильная модель');
+
+  const tools = Array.isArray(previous.tools) ? previous.tools.filter(Boolean) : [];
+  if (!tools.length) return { ...base, switched: false, why: 'на прошлом шаге не было инструментов' };
+
+  const chars = Number(previous.chars) || 0;
+  const dataLimit = Math.max(200, Number(split?.dataChars) || 2500);
+  const mechanical = tools.every(isMechanicalTool);
+
+  if (!mechanical) {
+    return decide('pro', `прошлый шаг работал инструментом ${tools[0]} — нужна проверка сильной моделью`);
+  }
+  if (chars >= dataLimit) {
+    const kb = Math.round((chars / 1000) * 10) / 10;
+    return decide('pro', `на прошлом шаге пришло ${kb} тыс. знаков данных — разбирает сильная модель`);
+  }
+  if (split?.grind === true && baseProfile === 'pro' && Number(previous.mechanicalRun) >= Math.max(1, Number(split?.grindAfter) || 2)) {
+    return decide('flash', 'идёт перекладывание файлов подряд — его быстрее сделает быстрая модель');
+  }
+  return { ...base, switched: false, why: 'идёт механика: чтение и перенос материалов' };
+}
+
+/** Строка для лога шага: «шаг 4: pro, переключено с flash — …». */
+export function describeStepRoute(route) {
+  if (!route) return '';
+  const mark = route.switched ? 'переключено' : 'профиль хода';
+  return `шаг на ${route.profile}: ${mark} — ${route.why || 'без причины'}`;
+}

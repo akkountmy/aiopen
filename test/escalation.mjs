@@ -202,6 +202,42 @@ test('короткий вопрос остаётся на быстрой мод�
   assert.ok(route.score < route.threshold);
 });
 
+test('данные с прошлого шага уводят следующий шаг на сильную модель', async () => {
+  reset();
+  /* Файл больше порога DSHOW_SPLIT_DATA_CHARS (2500 знаков), но меньше предела
+     дословной выдачи: модель получает его целиком — значит, разбирать должен
+     сильный проход. */
+  const rows = Array.from({ length: 400 }, (_, index) => `строка ${index + 1}: значение ${index * 3}`);
+  fs.writeFileSync(path.join(workspace, 'data.txt'), rows.join('\n'), 'utf8');
+  let step = 0;
+  behavior = () => {
+    step += 1;
+    if (step === 1) return { kind: 'tool', name: 'read_file', args: { path: 'data.txt' } };
+    return { kind: 'text', text: 'В файле 400 строк.' };
+  };
+  const outcome = await runTurn(baseTurn({ userText: 'Сколько строк в data.txt?' }));
+  const calls = mainRequests();
+  assert.ok(calls.length >= 2, `шагов меньше двух: ${calls.length}`);
+  assert.equal(calls[0].model, 'flash-test', 'первый шаг должен идти на профиле хода');
+  assert.equal(calls[1].model, 'pro-test', `второй шаг пошёл на ${calls[1].model}`);
+  assert.equal(outcome.route.model, 'flash-test', 'профиль хода не должен меняться задним числом');
+  assert.equal(outcome.route.steps.length, 1, 'переключение не попало в статистику хода');
+  assert.equal(outcome.route.steps[0].profile, 'pro');
+});
+
+test('распределение шагов выключается переменной окружения', async () => {
+  /* Отдельный экземпляр модуля настроек: переменная читается при импорте. */
+  process.env.DSHOW_SPLIT = '0';
+  try {
+    const { SPLIT: splitConfig } = await import('../src/config.mjs?split=off');
+    assert.equal(splitConfig.enabled, false);
+  } finally {
+    delete process.env.DSHOW_SPLIT;
+  }
+  const { SPLIT: splitConfig } = await import('../src/config.mjs');
+  assert.equal(splitConfig.enabled, true);
+});
+
 test('вложения, объём и создание документов поднимают сложность', () => {
   const heavy = scoreTask({
     text: 'Сведи данные в отчёт',
