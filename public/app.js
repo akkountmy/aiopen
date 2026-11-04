@@ -302,12 +302,31 @@ function rememberCode(id, code) {
 /* Файл проекта, упомянутый в ответе, открывается кликом в окне просмотра —
    как двойной щелчок в панели «Файлы проекта». Адрес собираем здесь, а не в
    момент рендера: проект можно сменить, не перерисовывая переписку. */
-const MD_FILE_EXTS = 'html?|pdf|docx?|xlsx?|pptx?|csv|tsv|md|txt|json|ya?ml|xml|png|jpe?g|webp|gif|svg|zip';
+/* Готовый звук озвучки — тоже файл проекта: имя в ответе должно открываться,
+   иначе человек ищет MP3 в панели вручную. */
+const MD_FILE_EXTS =
+  'html?|pdf|docx?|xlsx?|pptx?|csv|tsv|md|txt|json|ya?ml|xml|png|jpe?g|webp|gif|svg|zip|mp3|m4a|wav|ogg|opus|flac|aac|mp4|webm|mov';
 const MD_FILE_ONE = new RegExp(`^[^\\s/\\\\:*?"'<>|()«»]+\\.(?:${MD_FILE_EXTS})$`, 'i');
 const MD_FILE_MANY = new RegExp(
   `^[^\\s/\\\\:*?"'<>|()«»]+(?:/[^\\s/\\\\:*?"'<>|()«»]+)*\\.(?:${MD_FILE_EXTS})$`,
   'i',
 );
+
+/* Имя файла с пробелами: «Предисловие к обзору лизинга 2025.docx». В обычном
+   тексте такое от фразы не отличить, поэтому такой шаблон применяем только к
+   явно названным именам — в кавычках, в обратных кавычках и в ссылке. */
+const MD_FILE_SPACED = new RegExp(
+  `^[^\\n/\\\\:*?"'<>|«»]+\\.(?:${MD_FILE_EXTS})$`,
+  'i',
+);
+
+const fileSpacedOk = (name) => {
+  const clean = String(name || '').trim();
+  if (!clean || !MD_FILE_SPACED.test(clean)) return false;
+  /* «ни одного .docx» файлом не считаем: перед точкой обязано быть имя. */
+  const base = clean.replace(/\.[^.]+$/, '');
+  return base.length >= 2 && !/\s$/.test(base);
+};
 
 /* Зоны доменов, которые встречаются в ответах: без списка «отчёт.html» и
    «app.js» тоже стали бы адресами. */
@@ -359,19 +378,35 @@ function inlineMd(text) {
   let src = text.replace(/`([^`\n]+)`/g, (_, code) => {
     /* Имя файла в обратных кавычках — тоже ссылка: в ответах ассистента так
        чаще всего и называют созданную страницу («index.html»). */
-    if (MD_FILE_MANY.test(code.trim())) return fileLink(code, code.trim());
+    if (MD_FILE_MANY.test(code.trim()) || fileSpacedOk(code)) return fileLink(code, code.trim());
     const id = `\u0001${codes.length}\u0001`;
     codes.push(code);
     return id;
   });
 
-  /* [текст](адрес): адрес с протоколом, почта или файл проекта. */
-  src = src.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (whole, label, href) => {
+  /* [текст](адрес): адрес с протоколом, почта или файл проекта.
+     В пути бывают пробелы («Предисловие к обзору лизинга 2025.docx»), поэтому
+     адрес берём до закрывающей скобки целиком, а не до первого пробела. */
+  src = src.replace(/\[([^\]\n]+)\]\(([^)\n]+)\)/g, (whole, label, rawHref) => {
+    const href = rawHref.trim().replace(/\s/g, '%20');
     if (/^https?:\/\//i.test(href)) return externalLink(label, href);
     if (/^mailto:/i.test(href)) return holdLink(`<a class="msg-link" href="${href}">${label}</a>`);
-    const clean = href.replace(/^\.?\//, '');
+    /* Ссылка на файл проекта в служебном виде — так её отдают инструменты:
+       /api/projects/<id>/file?path=<путь>. Ведём на путь внутри проекта. */
+    const served = /\/?api\/projects\/[^/]+\/file\?path=([^&]+)/.exec(href);
+    if (served) {
+      try {
+        return fileLink(label, decodeURIComponent(served[1]).replace(/\+/g, ' '));
+      } catch {
+        return whole;
+      }
+    }
+    /* Готовый звук озвучки — обычная ссылка на скачивание. */
+    if (/^\/?api\/tts\/jobs\//.test(href)) return holdLink(`<a class="msg-link" href="/${href.replace(/^\//, '')}">${label}</a>`);
+    const clean = decodeURIComponent(href).replace(/^\.?\//, '');
     if (MD_FILE_MANY.test(clean)) return fileLink(label, clean);
     if (MD_FILE_ONE.test(clean)) return fileLink(label, clean);
+    if (fileSpacedOk(clean)) return fileLink(label, clean);
     return whole;
   });
 
@@ -389,6 +424,15 @@ function inlineMd(text) {
   src = src.replace(MD_HOST_RE, (m, pre, host) => {
     const clean = trimUrlTail(host);
     return `${pre}${externalLink(clean, `https://${clean}`)}${host.slice(clean.length)}`;
+  });
+
+  /* Имя файла в кавычках: «Предисловие к обзору лизинга 2025.docx». В обычном
+     тексте имя с пробелами не поймать (сработал бы только хвост «2025.docx» и
+     ссылка увела бы не туда), а в кавычках это цитата имени — берём целиком. */
+  src = src.replace(/([«"„])([^«»"\n]{1,180})([»"“])/g, (whole, open, name, close) => {
+    const clean = name.trim();
+    if (!fileSpacedOk(clean)) return whole;
+    return `${open}${fileLink(clean, clean)}${close}`;
   });
 
   /* Имя файла проекта в обычном тексте: страница.html, docs/отчёт.pdf. */
