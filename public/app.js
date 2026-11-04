@@ -70,6 +70,11 @@ const ICONS = {
   sliders:
     '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3.4 6.4h13.2M3.4 13.6h13.2"/><circle cx="7.6" cy="6.4" r="1.7"/><circle cx="12.4" cy="13.6" r="1.7"/></svg>',
   play: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M7.2 5.2l7.6 4.8-7.6 4.8z"/></svg>',
+  /* Динамик и квадрат «стоп» — для озвучки: одним значком помечена строка
+     файла, который можно прочитать вслух, другим останавливают синтез. */
+  speaker:
+    '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 8.2v3.6h2.5l3.3 2.6V5.6L6.5 8.2H4z"/><path d="M12.6 7.7a3.4 3.4 0 010 4.6M14.9 5.6a6.6 6.6 0 010 8.8"/></svg>',
+  stop: '<svg viewBox="0 0 20 20" aria-hidden="true"><rect x="6.2" y="6.2" width="7.6" height="7.6" rx="1.6"/></svg>',
   calendar:
     '<svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3.4" y="4.6" width="13.2" height="12" rx="1.6"/><path d="M3.4 8.4h13.2M7 3.4v2.4M13 3.4v2.4"/></svg>',
   refresh:
@@ -3027,6 +3032,16 @@ function cameraLivePreferred() {
   }
 }
 
+/* На iPhone и iPad камера и альбом ведут в один и тот же системный лист iOS —
+   «Медиатека», «Сделать снимок», «Выбрать файлы». Открыть альбом сразу из
+   страницы нельзя: этот лист рисует сама iOS, страница на него не влияет (см.
+   README). Поэтому двух кнопок там не нужно: одна «Фото» открывает тот же
+   лист, и он перестаёт выглядеть дублем двух соседних кнопок. На Android
+   камера и альбом открываются сразу, поэтому кнопки остаются раздельными. */
+function photoSheetPlatform() {
+  return homeScreenPlatform() === 'ios';
+}
+
 /* Имя файла как у камеры телефона: IMG_20261019-123456.jpg и
    VID_20261019-123456.mp4. По имени сразу видно, что это снимок или видео, а
    дата и время в нём не дают двум файлам подряд затереть друг друга. */
@@ -3919,6 +3934,20 @@ function fileActions(item) {
     });
     actions.appendChild(download);
   }
+  /* Озвучка — только у файлов, из которых читается текст: скан без текстового
+     слоя сервер отклонит, поэтому кнопка у него и не появляется. */
+  if (canNarrate(item)) {
+    const narrate = el('button', 'btn btn-ghost btn-icon');
+    narrate.type = 'button';
+    narrate.title = 'Озвучить';
+    narrate.setAttribute('aria-label', `Озвучить «${item.name}» — сделать MP3`);
+    narrate.innerHTML = ICONS.speaker;
+    narrate.addEventListener('click', (event) => {
+      event.stopPropagation();
+      openNarration(item);
+    });
+    actions.appendChild(narrate);
+  }
   const del = el('button', 'btn btn-ghost btn-icon');
   del.type = 'button';
   del.title = 'Удалить';
@@ -3999,6 +4028,10 @@ function mimeOf(fileName) {
     docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
     xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    mp3: 'audio/mpeg',
+    m4a: 'audio/mp4',
+    wav: 'audio/wav',
+    ogg: 'audio/ogg',
   };
   return map[ext] || 'application/octet-stream';
 }
@@ -4116,6 +4149,11 @@ function focusComposerOnOpen() {
 
 const PREVIEW_IMAGE = /\.(png|jpe?g|webp|gif|bmp|avif|svg)$/i;
 const PREVIEW_TEXT = /\.(txt|md|markdown|csv|tsv|json|log|ya?ml|xml|ini|conf|srt)$/i;
+/* Звук проигрывается прямо в окне просмотра: озвучку книги незачем скачивать,
+   чтобы понять, нравится ли голос. */
+const AUDIO_FILE = /\.(mp3|m4a|wav|ogg|oga|opus|aac|flac)$/i;
+/* Из этих документов можно сделать озвучку: сервер достаёт из них текст. */
+const NARRATABLE = /\.(txt|md|markdown|pdf|docx?|docm|dotx?|rtf|odt|html?|htm|csv|tsv|json|log|srt)$/i;
 /* Документы Office показываем в своём окне. Внешние Word, Excel и PowerPoint
    больше не вызываются: именно они открывали системное окно «Microsoft
    Office» с вопросом, открывать ли файл из интернета. */
@@ -4288,6 +4326,7 @@ const PV_TONE = {
   pdf: 'pdf',
   html: 'web', htm: 'web',
   md: 'text', markdown: 'text', txt: 'text', log: 'text',
+  mp3: 'audio', m4a: 'audio', wav: 'audio', ogg: 'audio', oga: 'audio', opus: 'audio', aac: 'audio', flac: 'audio',
 };
 
 const PV_CODE = /^(json|js|mjs|cjs|ts|css|py|ps1|sh|sql|bat|xml|ya?ml|ini|conf|env|srt)$/i;
@@ -4303,6 +4342,7 @@ const PV_KIND = {
   pptx: 'slide', pptm: 'slide', ppt: 'slide', ppsx: 'slide', odp: 'slide',
   pdf: 'pdf',
   html: 'web', htm: 'web',
+  mp3: 'audio', m4a: 'audio', wav: 'audio', ogg: 'audio', oga: 'audio', opus: 'audio', aac: 'audio', flac: 'audio',
 };
 
 function previewKindOf(name) {
@@ -4340,6 +4380,7 @@ function pvKindLabel(name) {
     md: 'Текст Markdown', markdown: 'Текст Markdown', txt: 'Текст', log: 'Журнал',
     json: 'Данные JSON',
     png: 'Изображение', jpg: 'Изображение', jpeg: 'Изображение', webp: 'Изображение', gif: 'Изображение', svg: 'Изображение',
+    mp3: 'Звук MP3', m4a: 'Звук', wav: 'Звук WAV', ogg: 'Звук', oga: 'Звук', opus: 'Звук', aac: 'Звук', flac: 'Звук FLAC',
     zip: 'Архив',
   };
   return map[ext] || (PV_CODE.test(ext) ? 'Код' : 'Файл');
@@ -4688,7 +4729,25 @@ function openFilePreview(item) {
     );
   }
 
-  if (PREVIEW_IMAGE.test(item.name)) {
+  if (AUDIO_FILE.test(item.name)) {
+    /* Плеер родной, браузерный: у него уже есть перемотка, громкость и режим
+       «на экране блокировки». Сервер отдаёт файл частями, поэтому перемотка
+       работает и на телефоне, а не только пока загружено начало. */
+    const player = el('audio', 'audio-preview');
+    player.controls = true;
+    player.preload = 'metadata';
+    player.src = url;
+    body.appendChild(player);
+    body.appendChild(
+      el(
+        'p',
+        'pv-hint',
+        'Запись можно слушать здесь же и перематывать. Кнопка «Скачать» сохранит MP3 в память ' +
+          onPhoneWord() +
+          ' — удобно для дороги.',
+      ),
+    );
+  } else if (PREVIEW_IMAGE.test(item.name)) {
     const img = el('img', 'preview-img');
     img.src = url;
     img.alt = item.name;
@@ -4739,6 +4798,421 @@ function openFilePreview(item) {
   });
 }
 
+
+/* ------------------------------ озвучка книги ------------------------------
+   Документ превращается в MP3: сервер режет текст на фразы, синтезирует их
+   нейроголосом и склеивает в один файл рядом с исходником. Окно ведёт человека
+   по шагам: выбрал голос и темп → видит прогресс → слушает и скачивает.
+
+   Синтез книги идёт минутами, поэтому окно не держит запрос: сервер отвечает
+   сразу номером задания, а прогресс мы спрашиваем раз в секунду. Закрыли
+   окно — задание продолжает работать, MP3 всё равно появится в папке проекта. */
+
+function canNarrate(item) {
+  return Boolean(item) && !item.dir && NARRATABLE.test(item.name);
+}
+
+/* Секунды → «2 ч 14 мин»: длительность книги, а не ожидание синтеза. */
+function ttsHuman(seconds) {
+  const total = Math.max(0, Math.round(Number(seconds) || 0));
+  if (total >= 3600) return `${Math.floor(total / 3600)} ч ${String(Math.round((total % 3600) / 60)).padStart(2, '0')} мин`;
+  if (total >= 60) return `${Math.floor(total / 60)} мин`;
+  return `${total} с`;
+}
+
+/* Папка файла внутри проекта: озвучка и Word ложатся рядом с исходником. */
+function dirOf(relPath) {
+  const cut = String(relPath || '').lastIndexOf('/');
+  return cut > 0 ? String(relPath).slice(0, cut) : '';
+}
+
+/* Секунды → «2 мин 14 с»: столько примерно ждать синтеза. */
+function ttsWait(seconds) {
+  const total = Math.max(0, Math.round(Number(seconds) || 0));
+  if (total >= 60) return `${Math.floor(total / 60)} мин ${String(total % 60).padStart(2, '0')} с`;
+  return `${total} с`;
+}
+
+async function openNarration(item) {
+  const box = el('div', 'tts-box');
+  const intro = el('p', 'tts-intro');
+  intro.textContent = `Файл «${item.name}» будет прочитан вслух. Рядом, в папке проекта, появятся части MP3 и Word с текстом книги.`;
+  /* План показываем до старта: человек сразу видит, что книга выйдет частями
+     по полчаса, а не одним файлом на пять часов. */
+  const planLine = el('p', 'tts-hint');
+  planLine.textContent = 'Считаю объём и части…';
+  box.appendChild(intro);
+  box.appendChild(planLine);
+
+  const form = el('div', 'tts-form');
+
+  const voiceRow = el('label', 'tts-row');
+  voiceRow.appendChild(el('span', 'tts-label', 'Голос'));
+  const voiceSelect = el('select', 'tts-select');
+  voiceSelect.setAttribute('aria-label', 'Голос');
+  voiceRow.appendChild(voiceSelect);
+  form.appendChild(voiceRow);
+
+  const voiceHint = el('p', 'tts-hint', 'Загружаем голоса…');
+  form.appendChild(voiceHint);
+
+  const rateRow = el('label', 'tts-row');
+  rateRow.appendChild(el('span', 'tts-label', 'Темп'));
+  const rateSelect = el('select', 'tts-select');
+  rateSelect.setAttribute('aria-label', 'Темп речи');
+  rateRow.appendChild(rateSelect);
+  form.appendChild(rateRow);
+  box.appendChild(form);
+
+  const start = el('button', 'btn btn-primary tts-start');
+  start.type = 'button';
+  start.textContent = 'Озвучить';
+  box.appendChild(start);
+
+  const progress = el('div', 'tts-progress');
+  progress.hidden = true;
+  /* Прогресс объявляем и скринридеру: без этого синтез на несколько минут
+     выглядел бы как «ничего не происходит». */
+  progress.setAttribute('aria-live', 'polite');
+  const progressText = el('div', 'tts-progress-text');
+  const bar = el('div', 'tts-bar');
+  const fill = el('div', 'tts-bar-fill');
+  bar.appendChild(fill);
+  const barNote = el('div', 'tts-bar-note');
+  progress.appendChild(progressText);
+  progress.appendChild(bar);
+  progress.appendChild(barNote);
+  box.appendChild(progress);
+
+  const result = el('div', 'tts-result');
+  box.appendChild(result);
+
+  /* Пока идёт синтез или играет готовый файл, окно не должно само закрыться
+     от случайного тапа мимо: человек потеряет прогресс. */
+  let stopped = false;
+  let busy = false;
+  let polling = null;
+
+  const setBusy = (value) => {
+    busy = value;
+    start.disabled = value;
+    voiceSelect.disabled = value;
+    rateSelect.disabled = value;
+  };
+
+  const paint = (job) => {
+    const percent = Math.max(0, Math.min(100, Number(job.percent) || 0));
+    fill.style.width = `${percent}%`;
+    const parts = [];
+    if (job.status === 'queued') parts.push('В очереди — ждёт свободный поток');
+    else if (job.stage) parts.push(job.stage);
+    if (job.chunks > 1) parts.push(`${job.doneChunks} из ${job.chunks} фраз`);
+    if (job.files?.length) parts.push(`готово частей: ${job.files.length} из ${job.parts?.length || 1}`);
+    progressText.textContent = `${parts.join(' · ') || 'Синтез'} — ${percent}%`;
+    const notes = [];
+    if (job.etaSeconds && job.status === 'running') notes.push(`осталось примерно ${ttsWait(job.etaSeconds)}`);
+    if (job.warnings?.length) notes.push(job.warnings.join(' '));
+    barNote.textContent = notes.join(' · ');
+  };
+
+  const stopPolling = () => {
+    if (polling) clearInterval(polling);
+    polling = null;
+  };
+
+  /* Одна дорожка на книгу и список частей: плеер переключается на выбранную
+     часть, ничего не скачивая заранее. */
+  const showResult = (job) => {
+    progress.hidden = true;
+    cancel.hidden = true;
+    result.replaceChildren();
+    const parts = Array.isArray(job.files) && job.files.length ? job.files : job.file ? [{ ...job.file, index: 1 }] : [];
+    const player = el('audio', 'tts-player');
+    player.controls = true;
+    player.preload = 'metadata';
+    player.src = `/api/tts/jobs/${job.id}/audio`;
+    result.appendChild(player);
+
+    const meta = el('p', 'tts-result-meta');
+    const total = parts.reduce((sum, part) => sum + (Number(part.seconds) || 0), 0);
+    const totalHuman = total ? ttsHuman(total) : '';
+    meta.textContent = [
+      parts.length > 1 ? `${parts.length} частей` : 'один файл',
+      totalHuman ? `всего ${totalHuman}` : '',
+      'MP3',
+    ]
+      .filter(Boolean)
+      .join(' · ');
+    result.appendChild(meta);
+
+    if (parts.length > 1) {
+      const list = el('div', 'tts-parts');
+      for (const part of parts) {
+        const row = el('div', 'tts-part');
+        const name = el('button', 'tts-part-name');
+        name.type = 'button';
+        name.textContent = `Часть ${part.index}`;
+        name.title = part.name || '';
+        name.addEventListener('click', () => {
+          player.src = `/api/tts/jobs/${job.id}/audio?part=${part.index}`;
+          player.play().catch(() => {});
+        });
+        row.appendChild(name);
+        const info = el('span', 'tts-part-info', [part.duration, pvSize(part.size)].filter(Boolean).join(' · '));
+        row.appendChild(info);
+        const save = el('button', 'tts-part-save', 'Скачать');
+        save.type = 'button';
+        save.addEventListener('click', async () => {
+          save.disabled = true;
+          try {
+            await saveFileFromServer(`/api/tts/jobs/${job.id}/audio?part=${part.index}&download=1`, part.name || `часть ${part.index}.mp3`);
+          } catch (error) {
+            toast(error.message);
+          } finally {
+            save.disabled = false;
+          }
+        });
+        row.appendChild(save);
+        list.appendChild(row);
+      }
+      result.appendChild(list);
+    }
+
+    const where = el('p', 'tts-hint');
+    where.textContent = job.word
+      ? `Файлы лежат в папке проекта: части MP3 и «${job.word.name}» с текстом книги.`
+      : `Файл «${parts[0]?.name || 'озвучка.mp3'}» лежит в папке проекта, рядом с документом.`;
+    result.appendChild(where);
+
+    if (job.word) {
+      const wordPath = [dirOf(item.path), job.word.name].filter(Boolean).join('/');
+      const wordLink = el('button', 'btn btn-quiet tts-word', 'Скачать текст Word');
+      wordLink.type = 'button';
+      wordLink.addEventListener('click', async () => {
+        wordLink.disabled = true;
+        try {
+          await saveFileFromServer(fileUrl(wordPath, true), job.word.name);
+        } catch (error) {
+          toast(error.message);
+        } finally {
+          wordLink.disabled = false;
+        }
+      });
+      result.appendChild(wordLink);
+    }
+
+    /* Обе кнопки под записью — один ряд: «Скачать MP3» для сохранения на
+       устройство и «Озвучить ещё раз» для другой скорости или голоса. */
+    const actions = el('div', 'tts-actions');
+    const save = el('button', 'btn btn-quiet tts-save');
+    save.type = 'button';
+    save.textContent = 'Скачать MP3';
+    save.hidden = parts.length > 1;
+    save.addEventListener('click', async () => {
+      save.disabled = true;
+      try {
+        await saveFileFromServer(`/api/tts/jobs/${job.id}/audio?download=1`, job.file?.name || 'озвучка.mp3');
+      } catch (error) {
+        toast(error.message);
+      } finally {
+        save.disabled = false;
+      }
+    });
+    /* Скачивание — тем же способом, что у остальных файлов: в памяти страницы,
+       без ухода из приложения в чужое окно. */
+    result.appendChild(actions);
+    actions.appendChild(save);
+
+    const again = el('button', 'btn btn-quiet tts-again');
+    again.type = 'button';
+    again.textContent = 'Озвучить ещё раз';
+    again.addEventListener('click', () => {
+      result.replaceChildren();
+      progress.hidden = true;
+      form.hidden = false;
+      start.hidden = false;
+      start.textContent = 'Озвучить';
+      setBusy(false);
+      start.focus();
+    });
+    actions.appendChild(again);
+    /* Список файлов обновляем сразу: новый MP3 появляется в панели, и человек
+       видит, что работа не потерялась. */
+    loadFiles();
+    toast('Озвучка готова');
+  };
+
+  const poll = (job) => {
+    stopPolling();
+    polling = setInterval(async () => {
+      if (stopped) return stopPolling();
+      try {
+        const { job: fresh } = await api(`/api/tts/jobs/${job.id}`);
+        paint(fresh);
+        if (fresh.status === 'done') {
+          stopPolling();
+          showResult(fresh);
+        } else if (fresh.status === 'failed') {
+          stopPolling();
+          setBusy(false);
+          progressText.textContent = 'Не получилось озвучить';
+          barNote.textContent = fresh.error || 'Сервис синтеза не ответил. Попробуйте ещё раз.';
+          start.textContent = 'Попробовать снова';
+          start.hidden = false;
+        } else if (fresh.status === 'cancelled') {
+          stopPolling();
+          setBusy(false);
+          progress.hidden = true;
+          start.hidden = false;
+          start.textContent = 'Озвучить';
+        }
+      } catch (error) {
+        /* Одна неудачная проверка не повод сдаваться: сеть могла моргнуть. */
+        barNote.textContent = error.message;
+      }
+    }, 1200);
+  };
+
+  start.addEventListener('click', async () => {
+    if (busy) return;
+    setBusy(true);
+    start.hidden = true;
+    form.hidden = true;
+    result.replaceChildren();
+    progress.hidden = false;
+    fill.style.width = '0%';
+    progressText.textContent = 'Отправляю документ на синтез…';
+    barNote.textContent = '';
+    try {
+      const { job } = await api(`/api/projects/${filesProjectId()}/tts`, {
+        method: 'POST',
+        body: { path: item.path, voice: voiceSelect.value, rate: rateSelect.value },
+      });
+      progress.hidden = false;
+      paint(job);
+      cancel.dataset.job = job.id;
+      cancel.hidden = false;
+      poll(job);
+    } catch (error) {
+      setBusy(false);
+      start.hidden = false;
+      start.textContent = 'Озвучить';
+      cancel.hidden = true;
+      progress.hidden = false;
+      progressText.textContent = 'Озвучить не удалось';
+      barNote.textContent = error.message;
+    }
+  });
+
+  /* Тормозит синтез, а не окно: прогресс остаётся виден, а кнопка меняется на
+     «Остановить». Кнопку отмены ставим рядом со стартом, в том же месте. */
+  const cancel = el('button', 'btn btn-quiet tts-cancel');
+  cancel.type = 'button';
+  cancel.textContent = 'Остановить';
+  cancel.hidden = true;
+  box.insertBefore(cancel, progress);
+  cancel.addEventListener('click', async () => {
+    if (cancel.dataset.job) {
+      try {
+        await api(`/api/tts/jobs/${cancel.dataset.job}`, { method: 'DELETE' });
+      } catch {
+        /* Если сервер уже закончил — отменять нечего. */
+      }
+    }
+    stopPolling();
+    setBusy(false);
+    progress.hidden = true;
+    result.replaceChildren();
+    cancel.hidden = true;
+    form.hidden = false;
+    start.hidden = false;
+    start.textContent = 'Озвучить';
+  });
+
+  openModal({
+    title: 'Озвучка',
+    headLead: pvBadge(item.name),
+    subtitle: pvSummary(item),
+    body: box,
+    className: 'tts-modal',
+    actions: [{ label: 'Закрыть', kind: 'primary' }],
+    onClose: () => {
+      stopped = true;
+      stopPolling();
+    },
+  });
+
+  /* Голоса приходят с сервера: список из четырёх понятных вариантов и подсказка
+     к выбранному. Пока ответ идёт, в списке стоят разумные значения по
+     умолчанию — форма остаётся рабочей. */
+  const fillVoices = (voices, rates, defaults) => {
+    voiceSelect.replaceChildren();
+    for (const voice of voices) {
+      const option = el('option', '', voice.label || voice.id);
+      option.value = voice.id;
+      option.title = voice.hint || '';
+      voiceSelect.appendChild(option);
+    }
+    rateSelect.replaceChildren();
+    for (const rate of rates) {
+      const option = el('option', '', rate.label);
+      option.value = rate.id;
+      rateSelect.appendChild(option);
+    }
+    voiceSelect.value = defaults?.voice || voices[0]?.id || '';
+    rateSelect.value = defaults?.rate || '1';
+    const current = voices.find((voice) => voice.id === voiceSelect.value);
+    voiceHint.textContent = current?.hint || 'Спокойный голос, ровная интонация на длинной главе.';
+  };
+
+  voiceSelect.addEventListener('change', () => {
+    const current = [...voiceSelect.options].find((option) => option.value === voiceSelect.value);
+    voiceHint.textContent = current?.title || 'Спокойный голос, ровная интонация на длинной главе.';
+  });
+
+  /* Запасной вариант нужен, только если сервер не ответил: без него окно
+     осталось бы с пустым списком голосов. */
+  const fallbackVoices = [
+    { id: 'ru-RU-SvetlanaNeural', label: 'Светлана — женский, спокойный', hint: 'Ровная интонация, не утомляет на длинной главе.' },
+    { id: 'ru-RU-DmitryNeural', label: 'Дмитрий — мужской, низкий', hint: 'Плотный голос для деловых документов.' },
+  ];
+  fillVoices(
+    fallbackVoices,
+    [
+      { id: '0.9', label: 'Чуть медленнее' },
+      { id: '1', label: 'Обычный темп' },
+      { id: '1.15', label: 'Чуть быстрее' },
+    ],
+    { voice: 'ru-RU-SvetlanaNeural', rate: '1' },
+  );
+  try {
+    const catalog = await api('/api/tts/voices');
+    fillVoices(catalog.voices || fallbackVoices, catalog.rates || [], catalog.defaults);
+  } catch {
+    voiceHint.textContent = 'Голоса не загрузились — выбран спокойный женский. Можно озвучить и так.';
+  }
+
+  /* Сколько будет частей и сколько это звука. Ответ приходит через секунду-
+     две (текст книги разбирается заново), поэтому строка сначала честно
+     говорит, что считаем. */
+  try {
+    const plan = await api(`/api/projects/${filesProjectId()}/tts-plan?path=${encodeURIComponent(item.path)}`);
+    if (!plan.ok) {
+      planLine.textContent = plan.reason || 'Из этого файла не читается текст — озвучить не получится.';
+      start.disabled = true;
+      start.textContent = 'Озвучить нельзя';
+      return;
+    }
+    const totalHuman = ttsHuman(plan.minutes * 60);
+    const longest = Math.round(Math.max(...plan.parts.map((part) => Number(part.minutes) || 0)));
+    planLine.textContent =
+      plan.parts.length > 1
+        ? `${plan.chars.toLocaleString('ru-RU')} знаков ≈ ${totalHuman} звука. Получится ${plan.parts.length} частей до ${longest} мин и Word «${plan.word}» с текстом.`
+        : `${plan.chars.toLocaleString('ru-RU')} знаков ≈ ${totalHuman} звука. Получится один MP3 на ${longest} мин и Word «${plan.word}» с текстом.`;
+  } catch (error) {
+    planLine.textContent = `Части не рассчитались (${error.message}) — озвучка всё равно работает.`;
+  }
+}
 
 /* Загрузка файлов в проект. dir — папка внутри проекта ('.' — корень): файл
    попадает в корень проекта или в ту папку, на строку которой его бросили. */
@@ -8992,12 +9466,16 @@ window.addEventListener('resize', () => {
 });
 loadAnswerModes();
 $('#stopBtn').addEventListener('click', stopGeneration);
-/* Прикрепление — три кнопки без меню: камера, галерея и файл стоят в одном
-   ряду с орфографией, микрофоном и отправкой, каждая срабатывает в один тап.
+/* Прикрепление — кнопки без меню: камера, галерея и файл стоят в одном ряду с
+   орфографией, микрофоном и отправкой, каждая срабатывает в один тап.
    На компьютере «Сфотографировать» открывает окно с живым кадром камеры
-   ноутбука, на телефоне — системную камеру через выбор файла с capture. */
+   ноутбука, на Android — системную камеру через выбор файла с capture.
+   На iPhone и iPad камера и альбом ведут в один системный лист, поэтому там
+   кнопка одна: «Фото» открывает этот лист без capture — в нём уже есть и
+   «Сделать снимок», и «Медиатека». */
 $('#photoBtn').addEventListener('click', () => {
-  if (cameraLivePreferred()) openCameraDialog();
+  if (photoSheetPlatform()) pickFiles({ accept: 'image/*' });
+  else if (cameraLivePreferred()) openCameraDialog();
   else pickFiles({ accept: 'image/*', capture: 'environment', multiple: false });
 });
 $('#galleryBtn').addEventListener('click', () => pickFiles({ accept: 'image/*' }));
@@ -10558,11 +11036,30 @@ function compactMedia() {
 function applyComposerLayout() {
   const compact = compactMedia().matches || openedAsApp();
   document.documentElement.classList.toggle('compact-input', compact);
-  /* Подпись кнопки съёмки честно говорит, что за ней: на компьютере — камера
-     ноутбука, на телефоне — системная камера. Повод тот же, что у обработчика
-     #photoBtn, поэтому спрашиваем ту же функцию. */
+  /* На iPhone и iPad одна кнопка вместо камеры и альбома: iOS всё равно
+     показывает свой лист выбора фото обоим путям. Класс photo-sheet убирает
+     кнопку альбома из ряда, а подпись и значок «Фото» честно говорят, что за
+     кнопкой оба пути. Повод тот же, что у обработчика #photoBtn, поэтому
+     спрашиваем ту же функцию. */
+  const sheet = photoSheetPlatform();
+  document.documentElement.classList.toggle('photo-sheet', sheet);
   const photo = $('#photoBtn');
-  if (photo) photo.title = cameraLivePreferred() ? 'Сфотографировать — включить камеру' : 'Сфотографировать';
+  if (photo) {
+    /* Значок меняем только при смене платформы: applyComposerLayout зовётся на
+       каждый resize, а пересборка innerHTML на кнопке в фокусе сбрасывает её. */
+    const glyph = sheet ? 'image' : 'camera';
+    if (photo.dataset.glyph !== glyph) {
+      photo.innerHTML = ICONS[glyph];
+      photo.dataset.glyph = glyph;
+    }
+    const label = sheet
+      ? 'Фото — снимок или из галереи'
+      : cameraLivePreferred()
+        ? 'Сфотографировать — включить камеру'
+        : 'Сфотографировать';
+    photo.title = label;
+    photo.setAttribute('aria-label', label);
+  }
   /* Живая камера — признак компьютера (в ярлыке-приложении на ноутбуке ширина
      тоже узкая раскладка). Там альбом дублирует «Файл», поэтому скрыт. */
   document.documentElement.classList.toggle('camera-live', cameraLivePreferred());

@@ -463,6 +463,9 @@ export async function runTurn({
   chat,
   projectName,
   userName,
+  /* Владелец разговора: фоновые задания (озвучка) записываются на него, чтобы
+     человек видел прогресс и мог остановить синтез. */
+  ownerId = null,
   userText,
   /* Выжимка прошлых диалогов проекта: новый чат не начинает с чистого листа. */
   projectContext = '',
@@ -625,7 +628,7 @@ export async function runTurn({
     });
   }
 
-  const toolCtx = { workspace, signal, remember, projectName, userName, facts, depth, spawnAgent: spawnSubagents };
+  const toolCtx = { workspace, signal, remember, projectName, userName, facts, depth, ownerId, spawnAgent: spawnSubagents };
 
   /* За пять шагов до предела модель получает предупреждение, а человек —
      строку в живом статусе. Раньше предел наступал внезапно: агент упирался в

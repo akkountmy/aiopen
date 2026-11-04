@@ -792,3 +792,56 @@ export function describePage(result) {
   }
   return lines.join('\n');
 }
+
+/**
+ * Печать локальной HTML-страницы в PDF и/или снимок в PNG тем же браузером,
+ * которым проверяются страницы. Нужен для чертежей: SVG-лист по формату
+ * (A1–A4) печатается один в один, а PNG снимается с заданным увеличением.
+ */
+export async function printHtml(options = {}) {
+  const file = path.resolve(String(options.file || ''));
+  if (!file || !fs.existsSync(file)) throw new Error(`Нет HTML-файла для печати: ${options.file || '—'}`);
+  const pdfPath = options.pdfPath ? path.resolve(String(options.pdfPath)) : '';
+  const pngPath = options.pngPath ? path.resolve(String(options.pngPath)) : '';
+  if (!pdfPath && !pngPath) throw new Error('Нечего печатать: нужен pdfPath или pngPath');
+
+  const found = await engine();
+  if (!found.driver) throw new Error(found.reason || 'браузер в окружении не запускается');
+
+  const width = Math.min(3000, Math.max(400, Math.round(Number(options.width) || 1600)));
+  const height = Math.min(3000, Math.max(400, Math.round(Number(options.height) || 1130)));
+  const timeoutMs = Math.min(MAX_TIMEOUT_MS, Math.max(15000, Number(options.timeoutMs) || 45000));
+
+  const granted = await acquireGate(Number(process.env.DSHOW_BROWSER_QUEUE_MS) || DEFAULT_QUEUE_MS);
+  if (!granted) throw new Error('браузер занят другой проверкой — попробуйте через минуту');
+
+  let browser = null;
+  let session = null;
+  try {
+    browser = await launch(found, timeoutMs);
+    session = await openSession(found, browser, { width, height });
+    const { page } = session;
+    await page.goto(pathToFileURL(file).href, { waitUntil: 'load', timeout: timeoutMs });
+    await session.waitIdle(Math.min(8000, timeoutMs));
+    /* Шрифты и графика в SVG появляются не мгновенно: даём кадру устояться. */
+    await sleep(Math.min(1500, Math.max(0, Number(options.settleMs) || 350)));
+    if (pngPath) await page.screenshot({ path: pngPath, fullPage: false });
+    if (pdfPath) {
+      const size = options.pageSize && typeof options.pageSize === 'object'
+        ? { width: `${Number(options.pageSize.width) || 297}mm`, height: `${Number(options.pageSize.height) || 420}mm` }
+        : { format: String(options.format || 'A3') };
+      await page.pdf({ path: pdfPath, ...size, landscape: Boolean(options.landscape), printBackground: true, margin: { top: '0', right: '0', bottom: '0', left: '0' }, preferCSSPageSize: false });
+    }
+    return {
+      pdf: pdfPath && fs.existsSync(pdfPath) ? pdfPath : '',
+      png: pngPath && fs.existsSync(pngPath) ? pngPath : '',
+      engine: found.label,
+      pdfBytes: pdfPath && fs.existsSync(pdfPath) ? fs.statSync(pdfPath).size : 0,
+      pngBytes: pngPath && fs.existsSync(pngPath) ? fs.statSync(pngPath).size : 0,
+    };
+  } finally {
+    if (session) await session.close().catch(() => {});
+    if (browser) await browser.close().catch(() => {});
+    releaseGate();
+  }
+}

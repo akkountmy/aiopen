@@ -5385,6 +5385,226 @@ html.kb-open .scroll-jump {
   background: rgba(210, 180, 100, 0.13);
 }
 
+/* Звук — свой цвет в общем наборе значков: по нему сразу видно, что файл можно
+   слушать, а не читать. */
+.pv-badge.pv-audio {
+  color: #6fd6c8;
+  border-color: rgba(90, 210, 195, 0.32);
+  background: rgba(70, 200, 185, 0.13);
+}
+
+/* Окно звука не растягивается на весь экран: под плеером пустое поле выглядело
+   бы поломкой, поэтому высота тут по содержимому. */
+.modal.file-preview-modal.pv-kind-audio {
+  width: min(560px, 92vw);
+  height: auto;
+  max-height: 88dvh;
+}
+
+.pv-kind-audio .file-preview {
+  padding: 18px 16px 20px;
+}
+
+.audio-preview {
+  display: block;
+  width: 100%;
+  margin: 2px 0 4px;
+}
+
+/* ---------------------------- озвучка документа ---------------------------- */
+
+.modal.tts-modal {
+  width: min(520px, 92vw);
+  height: auto;
+  max-height: 90dvh;
+}
+
+.tts-box {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.tts-intro {
+  margin: 0;
+  color: var(--text-2);
+  font-size: var(--fs-13);
+  line-height: 20px;
+}
+
+.tts-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Строка формы: подпись слева фиксированной ширины, список справа — так поле
+   «Голос» и поле «Темп» стоят друг под другом и не разъезжаются. */
+.tts-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.tts-label {
+  flex: none;
+  width: 56px;
+  color: var(--text-3);
+  font-size: var(--fs-12);
+}
+
+.tts-select {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 36px;
+  padding: 0 10px;
+  border-radius: 9px;
+  border: 1px solid var(--line-strong);
+  background: var(--layer-2);
+  color: var(--text);
+  font-size: var(--fs-13);
+}
+
+.tts-hint {
+  margin: 0;
+  color: var(--text-3);
+  font-size: var(--fs-12);
+  line-height: 17px;
+}
+
+.tts-start,
+.tts-save,
+.tts-again {
+  align-self: flex-start;
+}
+
+/* Прогресс: полоса с заливкой акцентом и подпись под ней. Проценты видит и
+   человек, и скринридер (`aria-live`), поэтому синтез не выглядит зависанием. */
+.tts-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.tts-progress-text {
+  color: var(--text-2);
+  font-size: var(--fs-12);
+  line-height: 17px;
+}
+
+.tts-bar {
+  height: 8px;
+  border-radius: 99px;
+  background: var(--layer-3);
+  overflow: hidden;
+}
+
+.tts-bar-fill {
+  height: 100%;
+  width: 0;
+  border-radius: 99px;
+  background: var(--accent);
+  transition: width 0.35s ease;
+}
+
+.tts-bar-note {
+  color: var(--text-3);
+  font-size: var(--fs-11);
+  line-height: 15px;
+  min-height: 15px;
+}
+
+.tts-result {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.tts-player {
+  width: 100%;
+}
+
+.tts-result-meta {
+  margin: 0;
+  color: var(--text-3);
+  font-size: var(--fs-12);
+}
+
+/* Части книги: строка на часть, название — кнопка «слушать», справа размер и
+   скачивание. Двенадцать строк должны читаться без прокрутки на телефоне, поэтому
+   высота строки маленькая, а длинные имена обрезаются. */
+.tts-parts {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 240px;
+  overflow: auto;
+  padding: 4px 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+.tts-part {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 2px;
+}
+
+.tts-part-name {
+  flex: 0 0 auto;
+  border: 0;
+  background: none;
+  padding: 2px 0;
+  color: var(--accent);
+  font: inherit;
+  font-size: var(--fs-13);
+  text-align: left;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.tts-part-info {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-3);
+  font-size: var(--fs-12);
+}
+
+.tts-part-save {
+  flex: 0 0 auto;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: transparent;
+  padding: 3px 8px;
+  color: var(--text-2);
+  font: inherit;
+  font-size: var(--fs-12);
+  cursor: pointer;
+}
+
+.tts-part-save:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.tts-word {
+  align-self: flex-start;
+}
+
+/* Отмена синтеза идёт рядом со стартом, поэтому у неё нет собственного
+   отступа: обе кнопки стоят в одном потоке и меняют друг друга. */
+.tts-cancel[hidden],
+.tts-form[hidden],
+.tts-progress[hidden],
+.tts-start[hidden] {
+  display: none;
+}
+
 .file-preview {
   display: flex;
   flex-direction: column;
@@ -7612,6 +7832,14 @@ html.camera-live #galleryBtn {
   display: none;
 }
 
+/* На iPhone и iPad оба пути — камера и альбом — ведут в один системный лист
+   iOS, поэтому вторая кнопка там не нужна: остаётся одна «Фото» (класс
+   photo-sheet ставит app.js по проверке платформы). Правило действует и в
+   широком окне планшета, где раскладка ещё не телефонная. */
+html.photo-sheet #galleryBtn {
+  display: none;
+}
+
 /* ---------------------------- камера ноутбука ----------------------------
    Окно «Сфотографировать» на компьютере: живой кадр камеры ноутбука на тёмном
    поле 16:9, под ним «Фото / Видео» и выбор камеры, если их несколько. Кадр,
@@ -7866,6 +8094,18 @@ html.compact-input .composer {
 
 html.compact-input .composer-row {
   display: contents;
+}
+
+/* На iPhone и iPad альбома в ряду нет (одна кнопка «Фото» вместо камеры и
+   альбома), поэтому колонку «gal» убираем вместе с кнопкой: иначе между
+   кнопками остаётся пустая клетка и ряд читается с лишним зазором. */
+html.compact-input.photo-sheet .composer {
+  grid-template-columns: minmax(0, max-content) minmax(0, 1fr) auto auto auto;
+  grid-template-areas:
+    'strip strip strip strip strip'
+    'input input input input input'
+    'dict dict dict dict dict'
+    'think . photo file action';
 }
 
 html.compact-input #attachStrip {
@@ -8595,5 +8835,40 @@ html.compact-input .empty-title {
 
   .support-row-shot img {
     width: 120px;
+  }
+}
+
+/* ------------------------- озвучка: мелкие правки ------------------------- */
+
+/* Кнопки под готовой записью — один ряд с человеческими размерами: голый
+   `btn-quiet` без высоты превращался в подпись в рамке, по которой на телефоне
+   трудно попасть пальцем. */
+.tts-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.tts-actions .btn {
+  height: 38px;
+  padding: 0 14px;
+  border-radius: 10px;
+  font-size: var(--fs-13);
+}
+
+.tts-actions .tts-save {
+  border-color: var(--line-strong);
+  background: var(--layer-2);
+  color: var(--text);
+}
+
+/* На телефоне окно просмотра — целый лист, но для звука это пустое поле под
+   плеером: сжимаем лист до содержимого и держим у нижнего края. */
+@media (max-width: 560px) {
+  .modal-root.preview-open .modal.file-preview-modal.pv-kind-audio {
+    height: auto;
+    max-height: 88dvh;
+    margin-top: auto;
+    border-radius: var(--radius) var(--radius) 0 0;
   }
 }

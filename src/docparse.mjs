@@ -1,6 +1,6 @@
 import path from 'node:path';
-import zlib from 'node:zlib';
 import { readZip } from './zip.mjs';
+import { pdfExtract } from './pdf-text.mjs';
 
 const TEXT_EXT = new Set([
   'txt', 'md', 'markdown', 'csv', 'tsv', 'json', 'jsonl', 'yaml', 'yml', 'xml', 'html', 'htm',
@@ -195,136 +195,8 @@ function pptxText(buf) {
   return out.join('\n\n');
 }
 
-/* Текст из PDF: читаем потоки страниц и вытаскиваем строки из операторов Tj/TJ.
-   Разбор намеренно посимвольный и линейный. Регулярное выражение с вложенными
-   квантификаторами на большом потоке уходит в катастрофический перебор и
-   замораживает весь сервер — так уже случалось на обычном PDF. */
-const PDF_MAX_STREAMS = 400;
-const PDF_MAX_CONTENT = 4 * 1024 * 1024;
-const PDF_MAX_PIECES = 120000;
-/* Распакованный поток ограничиваем отдельно: маленький PDF может развернуться
-   в гигабайты, а распаковка синхронная и держит весь сервис. */
-const PDF_MAX_STREAM = 32 * 1024 * 1024;
-
-function pdfStreamTexts(buf) {
-  const raw = buf.toString('latin1');
-  const chunks = [];
-  let total = 0;
-  let from = 0;
-  while (chunks.length < PDF_MAX_STREAMS && total < PDF_MAX_CONTENT) {
-    const head = raw.indexOf('stream', from);
-    if (head < 0) break;
-    const tail = raw.indexOf('endstream', head + 6);
-    if (tail < 0) break;
-    let bodyStart = head + 6;
-    if (raw[bodyStart] === '\r') bodyStart += 1;
-    if (raw[bodyStart] === '\n') bodyStart += 1;
-    const body = buf.subarray(bodyStart, tail);
-    let text = '';
-    try {
-      text = zlib.inflateSync(body, { maxOutputLength: PDF_MAX_STREAM }).toString('latin1');
-    } catch {
-      try {
-        text = zlib.inflateRawSync(body, { maxOutputLength: PDF_MAX_STREAM }).toString('latin1');
-      } catch {
-        text = body.toString('latin1');
-      }
-    }
-    chunks.push(text);
-    total += text.length;
-    from = tail + 9;
-  }
-  return chunks.join('\n');
-}
-
-function pdfText(buf) {
-  const content = pdfStreamTexts(buf);
-  const pieces = [];
-  const limit = Math.min(content.length, PDF_MAX_CONTENT);
-  let i = 0;
-  while (i < limit && pieces.length < PDF_MAX_PIECES) {
-    const code = content.charCodeAt(i);
-    if (code === 0x28 /* ( */) {
-      /* Строковый литерал: учитываем вложенные скобки и экранирование. */
-      let depth = 1;
-      let value = '';
-      i += 1;
-      while (i < limit && depth > 0) {
-        const char = content[i];
-        if (char === '\\') {
-          const next = content[i + 1];
-          if (next >= '0' && next <= '7') {
-            let oct = '';
-            let k = i + 1;
-            while (k < limit && oct.length < 3 && content[k] >= '0' && content[k] <= '7') {
-              oct += content[k];
-              k += 1;
-            }
-            value += String.fromCharCode(parseInt(oct, 8) & 0xff);
-            i = k;
-            continue;
-          }
-          if (next === 'n') value += '\n';
-          else if (next === 'r') value += '\r';
-          else if (next === 't') value += '\t';
-          else if (next === '\n') {
-            /* перенос строки внутри литерала — просто продолжение */
-          } else if (next !== undefined) value += next;
-          i += next === undefined ? 1 : 2;
-          continue;
-        }
-        if (char === '(') depth += 1;
-        if (char === ')') {
-          depth -= 1;
-          if (depth === 0) {
-            i += 1;
-            break;
-          }
-        }
-        value += char;
-        i += 1;
-      }
-      pieces.push(value);
-      continue;
-    }
-    if (code === 0x54 /* T */) {
-      /* Операторы, которые переносят строку: T*, Td, TD. */
-      if (content.startsWith('T*', i)) {
-        pieces.push('\n');
-        i += 2;
-        continue;
-      }
-      if (content.startsWith('Td', i) || content.startsWith('TD', i)) {
-        pieces.push('\n');
-        i += 2;
-        continue;
-      }
-    }
-    i += 1;
-  }
-  let text = pieces.join('').replace(/[ \t]{2,}/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
-  // Кириллица в PDF часто кодируется через CMap: если латиница бессмысленна — оставляем как есть.
-  const printable = text.replace(/[^\p{L}\p{N}\s.,;:!?%()\-–—«»"']/gu, '');
-  if (printable.length < text.length * 0.5) text = printable;
-  return text;
-}
-
-/* Проверка «текст читается человеком». В PDF со встроенной таблицей символов
-   (CMap) байты строк не совпадают с буквами: получается мусор из символов
-   Latin-1 и управляющих кодов. Такой текст показывать нельзя — лучше честно
-   сказать «откройте файл в программе просмотра». */
-function pdfTextIsReadable(text) {
-  const chars = [...text];
-  if (!chars.length) return false;
-  let readable = 0;
-  for (const char of chars) {
-    const code = char.charCodeAt(0);
-    if ((code >= 32 && code < 127) || (code >= 0x400 && code <= 0x4ff)) readable += 1;
-    else if (char === '\n' || char === '\t' || char === '«' || char === '»' || char === '–' || char === '—') readable += 1;
-  }
-  return readable / chars.length >= 0.9;
-}
-
+/* Текст из PDF — в отдельном модуле: там структура файла, таблицы ToUnicode
+   и кодировки шрифтов. Здесь только подключаем его. */
 function rtfText(buf) {
   let text = decodeText(buf);
   text = text.replace(/\\'([0-9a-fA-F]{2})/g, (_, h) => String.fromCharCode(parseInt(h, 16)));
@@ -371,13 +243,14 @@ export function extractDocumentText(buf, name, mime = '', limits = {}) {
         text = pptxText(buf);
         break;
       case 'pdf': {
-        text = pdfText(buf);
-        if (!text || text.replace(/\s/g, '').length < 20) {
-          text = '';
-          warnings.push('В PDF не найден текстовый слой (возможно, это скан или фотографии страниц).');
-        } else if (!pdfTextIsReadable(text)) {
-          text = '';
-          warnings.push('Текст в PDF закодирован встроенным шрифтом — прочитать его внутри сервиса нельзя. Откройте файл в программе просмотра или скачайте.');
+        const extracted = pdfExtract(buf);
+        text = extracted.text;
+        if (!text) {
+          warnings.push(
+            extracted.reason === 'encoded'
+              ? 'Текст в PDF закодирован встроенным шрифтом — прочитать его внутри сервиса нельзя. Откройте файл в программе просмотра или скачайте.'
+              : 'В PDF не найден текстовый слой (возможно, это скан или фотографии страниц).',
+          );
         }
         break;
       }

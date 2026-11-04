@@ -526,6 +526,51 @@ try {
     JSON.stringify({ accept: deniedAccept, modal: deniedModalGone }));
   await deniedChooser.setFiles([]).catch(() => {});
   await denied.close();
+
+  /* iPhone: камера и альбом там ведут в один системный лист iOS («Медиатека /
+     Сделать снимок / Выбрать файлы»), открыть альбом сразу из страницы нельзя.
+     Поэтому в ряду остаётся одна кнопка «Фото» с картинкой вместо камеры, и она
+     открывает выбор фото без capture — иначе iOS позвала бы камеру, а альбома
+     в ряду уже нет. На Android и на компьютере обе кнопки остаются. */
+  const iphone = await browser.newContext({
+    viewport: { width: 390, height: 844 },
+    hasTouch: true,
+    isMobile: true,
+    userAgent:
+      'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1',
+  });
+  const iphoneLogin = await iphone.request.post(`${BASE}/api/login`, { data: { username: USER, password: PASS } });
+  if (!iphoneLogin.ok()) throw new Error(`вход с iPhone не удался: ${iphoneLogin.status()}`);
+  const iphonePage = await iphone.newPage();
+  await iphonePage.goto(BASE, { waitUntil: 'load' });
+  await iphonePage.waitForSelector('#photoBtn');
+  const iphoneRow = await iphonePage.evaluate(() => {
+    const shown = (id) => document.getElementById(id).getBoundingClientRect().width > 0;
+    const photo = document.getElementById('photoBtn');
+    return {
+      sheet: document.documentElement.classList.contains('photo-sheet'),
+      photo: shown('photoBtn'),
+      gallery: shown('galleryBtn'),
+      file: shown('fileBtn'),
+      title: photo.title,
+      /* Камера нарисована с корпусом от x=1,3, картинка — от x=1,7. */
+      frameX: photo.querySelector('svg rect')?.getAttribute('x'),
+      tops: ['thinkToggle', 'photoBtn', 'fileBtn', 'micBtn'].filter(shown).map((id) => Math.round(document.getElementById(id).getBoundingClientRect().top)),
+    };
+  });
+  ok('на iPhone вместо камеры и альбома одна кнопка «Фото»',
+    iphoneRow.sheet && iphoneRow.photo && !iphoneRow.gallery && iphoneRow.file, JSON.stringify(iphoneRow));
+  ok('подпись кнопки на iPhone называет оба пути',
+    iphoneRow.title === 'Фото — снимок или из галереи' && iphoneRow.frameX === '1.7', `${iphoneRow.title} / ${iphoneRow.frameX}`);
+  ok('ряд на iPhone после скрытия альбома ровный',
+    iphoneRow.tops.length === 4 && Math.max(...iphoneRow.tops) - Math.min(...iphoneRow.tops) < 2, iphoneRow.tops.join(' / '));
+  const iphoneChooser = iphonePage.waitForEvent('filechooser', { timeout: 5000 });
+  await iphonePage.click('#photoBtn');
+  const iphoneInput = await readInput(iphoneChooser);
+  ok('одно нажатие на iPhone открывает выбор фото без capture',
+    iphoneInput.accept === 'image/*' && !iphoneInput.capture, JSON.stringify(iphoneInput));
+  await iphoneChooser.then((chooser) => chooser.setFiles([])).catch(() => {});
+  await iphone.close();
 } finally {
   await browser.close();
 }

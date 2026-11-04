@@ -34,7 +34,24 @@ import {
   scheduleText,
 } from './src/dashboard.mjs';
 import { transcribeAudio } from './src/asr.mjs';
+import {
+  DEFAULT_RATE,
+  DEFAULT_VOICE,
+  MAX_TTS_CHARS,
+  RATE_CHOICES,
+  VOICE_CHOICES,
+  cancelJob,
+  getJob,
+  jobsFor,
+  planParts,
+  publicJob,
+  splitIntoParts,
+  startNarration,
+  voiceCatalog,
+} from './src/tts.mjs';
 import { detectKind, extractDocumentText, kindLabel } from './src/docparse.mjs';
+import { planNarrationFiles } from './src/narration-plan.mjs';
+import { writeNarrationWord } from './src/narration-word.mjs';
 import { previewDocument } from './src/docpreview.mjs';
 import { projectFilesBrief } from './src/filebrief.mjs';
 import { buildProjectContext } from './src/projectcontext.mjs';
@@ -851,7 +868,18 @@ const MIME = {
      уходили в браузер как octet-stream и скачивались вместо открытия. */
   '.mp4': 'video/mp4',
   '.webm': 'video/webm',
+  /* Озвучка документов: MP3 из сервиса и то, что человек принёс с собой. */
+  '.mp3': 'audio/mpeg',
+  '.m4a': 'audio/mp4',
+  '.wav': 'audio/wav',
+  '.ogg': 'audio/ogg',
+  '.oga': 'audio/ogg',
+  '.opus': 'audio/ogg',
 };
+
+/* Расширения, которые в приложении проигрываются: для них нужна поддержка
+   диапазонов, иначе телефон не даёт перематывать запись. */
+const MEDIA_EXT = new Set(['.mp3', '.m4a', '.wav', '.ogg', '.oga', '.opus', '.mp4', '.webm']);
 
 /* Страница из файла пользователя показывается в рамке и без доступа к сервису:
    sandbox в заголовке делает её происхождение «чужим» — cookie и API недоступны,
@@ -2298,6 +2326,9 @@ async function executeRun(run, job) {
       userName: user.displayName || user.username,
       userText,
       projectContext,
+      /* Озвучка, запущенная из чата инструментом, принадлежит этому человеку:
+         по ownerId её находят в /api/tts/jobs и показывает окно прогресса. */
+      ownerId: user.id,
       filesBrief,
       images: ctx.images,
       emit: stream.emit,
@@ -2859,6 +2890,51 @@ function sendFile(res, full, { download = false, name, head = false } = {}) {
   if (active) headers['Content-Security-Policy'] = PAGE_SANDBOX_CSP;
   res.writeHead(200, headers);
   if (head) return res.end();
+  fs.createReadStream(full).pipe(res);
+}
+
+/* Звук и видео отдаём с поддержкой диапазонов: без ответа 206 телефон не даёт
+   перематывать запись, а iOS отказывается играть файл, пока сервер не подтвердит
+   диапазоны. Остальные файлы идут прежним путём — им диапазоны не нужны. */
+function sendMediaFile(req, res, full, { name, download = false } = {}) {
+  const stat = fs.statSync(full);
+  if (!stat.isFile()) return sendError(res, 404, 'Не найдено');
+  const ext = path.extname(full).toLowerCase();
+  const fileName = name || path.basename(full);
+  const disposition = `${download ? 'attachment' : 'inline'}; filename*=UTF-8''${encodeURIComponent(fileName)}`;
+  const headers = {
+    'Content-Type': MIME[ext] || 'application/octet-stream',
+    'Content-Disposition': disposition,
+    'Accept-Ranges': 'bytes',
+    'Cache-Control': 'no-cache',
+    'X-Content-Type-Options': 'nosniff',
+  };
+  const size = stat.size;
+  const match = /^bytes=(\d*)-(\d*)$/.exec(String(req.headers.range || '').trim());
+  if (match && size > 0) {
+    const hasStart = match[1] !== '';
+    const hasEnd = match[2] !== '';
+    let start = hasStart ? Number(match[1]) : 0;
+    let end = hasEnd ? Number(match[2]) : size - 1;
+    if (!hasStart && hasEnd) {
+      /* «bytes=-5000» — последние пять килобайт: так плеер узнаёт длительность. */
+      start = Math.max(0, size - Number(match[2]));
+      end = size - 1;
+    }
+    start = Math.max(0, Math.min(start, size - 1));
+    end = Math.max(start, Math.min(end, size - 1));
+    if (Number.isFinite(start) && Number.isFinite(end)) {
+      res.writeHead(206, {
+        ...headers,
+        'Content-Length': end - start + 1,
+        'Content-Range': `bytes ${start}-${end}/${size}`,
+      });
+      if (req.method === 'HEAD') return res.end();
+      return fs.createReadStream(full, { start, end }).pipe(res);
+    }
+  }
+  res.writeHead(200, { ...headers, 'Content-Length': size });
+  if (req.method === 'HEAD') return res.end();
   fs.createReadStream(full).pipe(res);
 }
 
@@ -3459,10 +3535,108 @@ async function route(req, res) {
         try {
           const full = resolveSafe(workspace, rel);
           const download = url.searchParams.get('download') === '1';
+          if (MEDIA_EXT.has(path.extname(full).toLowerCase())) {
+            return sendMediaFile(req, res, full, { download, name: path.basename(full) });
+          }
           return sendFile(res, full, { download, name: path.basename(full) });
         } catch (error) {
           return sendError(res, 400, error.message);
         }
+      }
+      /* Озвучка документа: текст извлекается сразу (чтобы человек увидел отказ
+         «это скан, текста нет»), а синтез идёт в фоне и отдаёт MP3 рядом с
+         исходником — в той же папке, где лежит книга. */
+      if (parts[3] === 'tts' && parts.length === 4 && method === 'POST') {
+        const body = await readJsonBody(req);
+        const rel = String(body.path || '');
+        let full;
+        try {
+          full = resolveSafe(workspace, rel);
+        } catch {
+          return sendError(res, 400, 'Некорректный путь к файлу');
+        }
+        if (!fs.existsSync(full) || !fs.statSync(full).isFile()) return sendError(res, 404, 'Файл не найден');
+        const name = path.basename(full);
+        if (fs.statSync(full).size > 40 * 1024 * 1024) {
+          return sendError(res, 413, 'Файл больше 40 МБ — озвучьте его по частям');
+        }
+        const parsed = extractDocumentText(fs.readFileSync(full), name, '', { maxChars: MAX_TTS_CHARS + 1 });
+        const text = String(parsed.text || '').trim();
+        if (text.replace(/\s/g, '').length < 40) {
+          const reason = (parsed.warnings || [])[0] || 'В документе нет текста, который можно прочитать вслух.';
+          return sendError(res, 400, reason);
+        }
+        if (text.length > MAX_TTS_CHARS) {
+          return sendError(
+            res,
+            400,
+            `Документ ${text.length.toLocaleString('ru-RU')} знаков — больше потолка в ${MAX_TTS_CHARS.toLocaleString('ru-RU')}. ` +
+              'Разделите его на части и озвучьте по очереди.',
+          );
+        }
+        /* Книга отдаётся частями по ~30 минут звука плюс один Word с текстом:
+           слушать пять часов одним файлом неудобно, а искать нужное место в
+           нём — тем более. Части получают имена «… — часть 2 из 12.mp3». */
+        const chapterParts = splitIntoParts(text);
+        const files = planNarrationFiles(full, chapterParts.length);
+        const word = writeNarrationWord(files.word, path.basename(full, path.extname(full)), text);
+        const job = startNarration({
+          ownerId: user.id,
+          title: name,
+          text,
+          voice: String(body.voice || DEFAULT_VOICE),
+          rate: String(body.rate || DEFAULT_RATE),
+          outPath: files.parts[0].path,
+          parts: chapterParts.map((partText, index) => ({
+            text: partText,
+            outPath: files.parts[index].path,
+            label: files.parts[index].label,
+          })),
+          sourcePath: rel,
+          wordPath: files.word,
+          cacheDir: path.join(DATA_DIR, 'tts-cache'),
+        });
+        return sendJson(res, 200, {
+          job: publicJob(job),
+          plan: {
+            parts: chapterParts.length,
+            minutes: Math.round((text.length / 750) * 10) / 10,
+            word: { name: word.name, size: word.size },
+          },
+        });
+      }
+      /* Что получится из документа: сколько частей, сколько это звука и как
+         будут называться файлы. Нужен до старта — человек решает, устраивает ли
+         его 12 частей по полчаса, и видит, что Word с текстом тоже будет. */
+      if (parts[3] === 'tts-plan' && method === 'GET') {
+        const rel = url.searchParams.get('path') || '';
+        let full;
+        try {
+          full = resolveSafe(workspace, rel);
+        } catch {
+          return sendError(res, 400, 'Некорректный путь к файлу');
+        }
+        if (!fs.existsSync(full) || !fs.statSync(full).isFile()) return sendError(res, 404, 'Файл не найден');
+        const name = path.basename(full);
+        if (fs.statSync(full).size > 40 * 1024 * 1024) return sendError(res, 413, 'Файл больше 40 МБ — озвучьте его по частям');
+        const parsed = extractDocumentText(fs.readFileSync(full), name, '', { maxChars: MAX_TTS_CHARS + 1 });
+        const text = String(parsed.text || '').trim();
+        if (text.replace(/\s/g, '').length < 40) {
+          return sendJson(res, 200, {
+            ok: false,
+            reason: (parsed.warnings || [])[0] || 'В документе нет текста, который можно прочитать вслух.',
+          });
+        }
+        const plan = planParts(text);
+        const files = planNarrationFiles(full, plan.length);
+        return sendJson(res, 200, {
+          ok: true,
+          chars: text.length,
+          minutes: Math.round((text.length / 750) * 10) / 10,
+          parts: plan,
+          word: path.basename(files.word),
+          names: files.parts.map((part) => path.basename(part.path)),
+        });
       }
       if (parts[3] === 'file-preview' && method === 'GET') {
         /* Просмотр файла прямо в приложении. Сервер отдаёт не «плоский текст»,
@@ -3795,6 +3969,44 @@ async function route(req, res) {
           return sendError(res, 404, 'Не найдено');
         }
         return sendError(res, 404, 'Не найдено');
+      }
+      return sendError(res, 404, 'Не найдено');
+    }
+
+    /* Озвучка: голоса, состояние задания и готовый звук. Задание живёт в памяти
+       процесса — после перезапуска готовый MP3 остаётся файлом проекта, а
+       незавершённый синтез надо запустить заново. */
+    if (pathname === '/api/tts/voices' && method === 'GET') {
+      const live = await voiceCatalog();
+      return sendJson(res, 200, {
+        voices: VOICE_CHOICES,
+        rates: RATE_CHOICES,
+        defaults: { voice: DEFAULT_VOICE, rate: DEFAULT_RATE },
+        available: live.filter((item) => item.local === 'ru' || item.local === 'en').map((item) => item.name),
+      });
+    }
+    if (parts[1] === 'tts' && parts[2] === 'jobs') {
+      if (parts.length === 3 && method === 'GET') return sendJson(res, 200, { jobs: jobsFor(user.id) });
+      const job = getJob(parts[3], user.id);
+      if (!job) return sendError(res, 404, 'Озвучка не найдена');
+      if (parts.length === 4 && method === 'GET') return sendJson(res, 200, { job: publicJob(job) });
+      if (parts.length === 4 && method === 'DELETE') {
+        cancelJob(job.id, user.id);
+        return sendJson(res, 200, { job: publicJob(getJob(job.id, user.id)) });
+      }
+      if (parts[4] === 'audio' && method === 'GET') {
+        /* Части книги отдаются по номеру: ?part=3 — третий MP3. Без номера
+           отдаём первую готовую часть, чтобы старые ссылки не ломались. */
+        const wanted = Number(url.searchParams.get('part') || 0);
+        const file = job.files.find((item) => !wanted || item.index === wanted) || job.files[0];
+        const full = file && job.parts.find((part) => part.index === file.index)?.outPath;
+        if (!full || !fs.existsSync(full)) {
+          return sendError(res, 409, 'Озвучка ещё не готова');
+        }
+        return sendMediaFile(req, res, full, {
+          name: path.basename(full),
+          download: url.searchParams.get('download') === '1',
+        });
       }
       return sendError(res, 404, 'Не найдено');
     }

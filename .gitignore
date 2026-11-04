@@ -4,6 +4,9 @@ _backup/
 .tmp/
 .live-docs/
 .dsh-vision-router/
+# копия данных для локального предпросмотра и её следы работы
+.preview-data/
+.tts-probe/
 
 # зависимости (проект их не требует, но пусть не попадают)
 node_modules/

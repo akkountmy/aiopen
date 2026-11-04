@@ -351,6 +351,73 @@ try {
     ? ok('«Файл» берёт документы из «Файлов» телефона')
     : fail('файл', JSON.stringify(picked[2]));
 
+  // 2а-бис. iPhone: iOS и для камеры, и для альбома показывает один системный
+  //     лист «Медиатека / Сделать снимок / Выбрать файлы», открыть альбом сразу
+  //     из страницы нельзя. Поэтому в ряду одна кнопка «Фото» с картинкой
+  //     вместо камеры, и она зовёт выбор фото без capture: иначе iOS открыла бы
+  //     камеру, а альбома в ряду уже нет.
+  await cdp.send('Emulation.setUserAgentOverride', {
+    userAgent:
+      'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1',
+    platform: 'iPhone',
+  });
+  await goto(BASE + '/');
+  const iphoneReady = await waitFor(`document.documentElement.classList.contains('photo-sheet')`);
+  iphoneReady
+    ? ok('на iPhone включается раскладка «одна кнопка Фото»')
+    : fail('класс photo-sheet на iPhone', 'не появился');
+  const iphone = await evaluate(`(() => {
+    const q = (selector) => document.querySelector(selector);
+    const shown = (id) => document.getElementById(id).getBoundingClientRect().width > 0;
+    const photo = document.getElementById('photoBtn');
+    const tops = ['thinkToggle', 'photoBtn', 'fileBtn', 'micBtn']
+      .filter(shown)
+      .map((id) => Math.round(document.getElementById(id).getBoundingClientRect().top));
+    return {
+      photo: shown('photoBtn'),
+      gallery: shown('galleryBtn'),
+      file: shown('fileBtn'),
+      title: photo.title,
+      aria: photo.getAttribute('aria-label'),
+      /* Камера нарисована в сетке 20×20 с корпусом от x=1,3, картинка — от
+         x=1,7: по этому и видно, какой значок стоит в кнопке. */
+      frameX: q('#photoBtn svg rect')?.getAttribute('x'),
+      tops,
+      overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    };
+  })()`);
+  iphone.photo && !iphone.gallery && iphone.file
+    ? ok('на iPhone в ряду одна кнопка «Фото», альбома нет')
+    : fail('кнопки на iPhone', JSON.stringify({ photo: iphone.photo, gallery: iphone.gallery, file: iphone.file }));
+  iphone.title === 'Фото — снимок или из галереи' && iphone.aria === iphone.title
+    ? ok('подпись кнопки называет оба пути: снимок или галерея')
+    : fail('подпись кнопки на iPhone', `${iphone.title} / ${iphone.aria}`);
+  iphone.frameX === '1.7' ? ok('значок кнопки — картинка, а не камера') : fail('значок на iPhone', String(iphone.frameX));
+  iphone.tops.length === 4 && Math.max(...iphone.tops) - Math.min(...iphone.tops) < 2
+    ? ok('ряд после скрытия альбома не разъехался', iphone.tops.join(' / '))
+    : fail('ряд на iPhone', JSON.stringify(iphone.tops));
+  iphone.overflow <= 0 ? ok('на iPhone нет горизонтальной прокрутки') : fail('переполнение на iPhone', `${iphone.overflow}px`);
+  await evaluate(`(() => {
+    window.__picked = [];
+    const proto = HTMLInputElement.prototype;
+    const original = proto.click;
+    proto.click = function () {
+      if (this.id === 'fileInput') {
+        window.__picked.push({ accept: this.accept, capture: this.getAttribute('capture'), multiple: this.multiple });
+        return;
+      }
+      return original.call(this);
+    };
+    return true;
+  })()`);
+  await evaluate(`document.getElementById('photoBtn').click(); true`);
+  const iphonePicked = await evaluate(`JSON.stringify(window.__picked || [])`).then((text) => JSON.parse(text));
+  iphonePicked.length === 1 && iphonePicked[0].accept === 'image/*' && !iphonePicked[0].capture
+    ? ok('одно нажатие на iPhone открывает выбор фото без камеры')
+    : fail('выбор фото на iPhone', JSON.stringify(iphonePicked));
+  /* Возвращаем настольный UA: дальше проверки компьютера. */
+  await cdp.send('Emulation.setUserAgentOverride', { userAgent: '' });
+
   // 2б. на компьютере ряд остаётся одной линией, но кнопки собраны справа от
   //     поля: «Рассуждение», «Сфотографировать», «Файл», «Aa» и действие.
   //     Альбома нет — он открывал тот же проводник, что и «Файл».
@@ -419,7 +486,11 @@ try {
   voice.exists && voice.hidden === true && voice.ariaHidden === 'true'
     ? ok('подсказка удержания спрятана, пока микрофон не нажат')
     : fail('слой подсказки удержания', JSON.stringify(voice));
-  voice.hint === 'Отпустите — текст вставится. Вверх — отмена'
+  /* Подсказка живёт в двух видах: в разметке — длинная (её видно до первого
+     удержания), а при самом удержании app.js ставит короткую. Обе говорят одно:
+     отпустишь — текст вставится, сдвинешь вверх — отмена. */
+  const holdHints = ['Отпустите — текст вставится. Вверх — отмена', 'Отпустите, чтобы отправить, сдвиньте вверх для отмены'];
+  holdHints.includes(voice.hint)
     ? ok('подсказка удержания объясняет вставку и отмену')
     : fail('текст подсказки удержания', voice.hint);
   voice.pointerEvents === 'none'
@@ -535,8 +606,8 @@ try {
     ? ok('дашборд закрывается, ящик убран')
     : fail('дашборд не закрылся');
 
-  // 3.2. Значки в шапке нарисованы одинаково: «Дашборд», профиль, тема и папка
-  //      одного размера. Контурные — одной толщины 2 px. Штрих считается в
+  // 3.2. Значки в шапке нарисованы одинаково: профиль, поддержка, «Дашборд»,
+  //      тема и папка — одного размера. Контурные — одной толщины 2 px. Штрих считается в
   //      экранных пикселях (vector-effect: non-scaling-stroke), поэтому 2 px
   //      одинаковы и на 22 px, и на 24 px. Папка — исключение по заливке: это
   //      та же раскрытая папка, что в заголовке панели «Файлы проекта».
@@ -553,7 +624,9 @@ try {
   const lineIcons = headerIcons.filter((icon) => icon.id !== 'filesBtn');
   const lineStrokes = [...new Set(lineIcons.map((icon) => icon.stroke))];
   const lineScaling = [...new Set(lineIcons.map((icon) => icon.scaling))];
-  headerIcons.length === 4 && iconSizes.length === 1 && lineIcons.length === 3 && lineStrokes.length === 1 &&
+  /* В шапке справа пять значков: профиль, поддержка, дашборд, тема и папка.
+     Папка залитая, поэтому толщину штриха сверяем по четырём контурным. */
+  headerIcons.length === 5 && iconSizes.length === 1 && lineIcons.length === 4 && lineStrokes.length === 1 &&
   lineStrokes[0] === '2px' && lineScaling.length === 1 && lineScaling[0] === 'non-scaling-stroke'
     ? ok('значки шапки одного размера, контурные — одной толщины', `${headerIcons.map((icon) => `${icon.id}:${icon.size}`).join(' / ')}, штрих ${lineStrokes[0]} без масштабирования`)
     : fail('значки шапки разной толщины', JSON.stringify(headerIcons));

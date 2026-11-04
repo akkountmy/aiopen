@@ -7,8 +7,12 @@ import { checkDocument, formatCheckReport } from './doccheck.mjs';
 import { memoryToolReply } from './memory.mjs';
 import { skillBody, skillIds } from './skills.mjs';
 import { detectKind, extractDocumentText } from './docparse.mjs';
+import { DEFAULT_RATE, DEFAULT_VOICE, MAX_TTS_CHARS, PART_MINUTES, splitIntoParts, startNarration } from './tts.mjs';
+import { planNarrationFiles } from './narration-plan.mjs';
+import { writeNarrationWord } from './narration-word.mjs';
 import { analyzeData, formatAnalysis } from './analysis.mjs';
 import { createDocumentPdf, createPresentationPdf } from './pdf.mjs';
+import { createDrawing } from './drawing.mjs';
 import { docEngines, docIssues, makePdf, makePresentation, makeWord, makeWorkbook } from './doc/index.mjs';
 import { imageInfo } from './doc/image-info.mjs';
 import { describeImage } from './vision.mjs';
@@ -848,6 +852,27 @@ export const TOOL_DEFS = [
   {
     type: 'function',
     function: {
+      name: 'narrate_document',
+      description:
+        'Озвучить документ проекта нейроголосом: книга или отчёт превращаются в несколько MP3-частей по ~30 минут и один Word с текстом — файлы появляются в разделе «Файлы проекта». Синтез идёт в фоне минутами, инструмент возвращает номер задания сразу. Используй, когда просят «озвучь», «сделай аудиокнигу», «синтезируй речь», «пусть можно послушать».',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Путь к документу в проекте, например «Обзор.pdf».' },
+          voice: {
+            type: 'string',
+            description: 'Голос: ru-RU-SvetlanaNeural (женский, спокойный) или ru-RU-DmitryNeural (мужской, низкий).',
+          },
+          rate: { type: 'string', description: 'Темп: 0.9 медленнее, 1 обычный, 1.15 быстрее.' },
+          minutes: { type: 'number', description: 'Длина одной части в минутах, по умолчанию 30.' },
+        },
+        required: ['path'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'read_document',
       description:
         'Извлечь текст из документа проекта: DOCX, XLSX, PPTX, PDF, CSV, RTF, HTML, TXT. Используй для приложенных файлов и любых документов в проекте.',
@@ -1494,6 +1519,28 @@ export const TOOL_DEFS = [
   {
     type: 'function',
     function: {
+      name: 'create_drawing',
+      description:
+        'Создать чертёж, план или схему файлом: принимает готовый SVG (или HTML-страницу) и печатает его в PDF по формату листа A4–A0 и/или PNG. Используй для «нарисуй план», «чертёж», «схема», «план квартиры», «развёртка», «аксонометрия», «план потолка», «план электрики», когда нужен файл-лист с рамкой и штампом. Сначала соберите SVG (координаты в мм, рамка и штамп внутри SVG), затем отдайте его здесь.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Имя файла, например «План квартиры.pdf». Расширение задаёт основной формат.' },
+          svg: { type: 'string', description: 'Содержимое SVG целиком (тег <svg> с xmlns и viewBox).' },
+          html: { type: 'string', description: 'Готовая HTML-страница вместо SVG (альтернатива svg).' },
+          sheet: { type: 'string', enum: ['A4', 'A3', 'A2', 'A1', 'A0'], description: 'Формат листа, по умолчанию A3.' },
+          landscape: { type: 'boolean', description: 'Альбомная ориентация (для A3 и больше по умолчанию да).' },
+          formats: { type: 'array', items: { type: 'string', enum: ['pdf', 'png', 'svg', 'all'] }, description: 'Что создать: pdf, png, svg или all. По умолчанию — по расширению path.' },
+          dpi: { type: 'number', description: 'Разрешение PNG в dpi, по умолчанию 150.' },
+          title: { type: 'string', description: 'Заголовок вкладки/документа.' },
+        },
+        required: ['path'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'remember',
       description:
         'Запомнить устойчивое предпочтение или правило пользователя навсегда (между диалогами). Пиши одной короткой фразой, например: «документы называет коротко и с расширением». Не запоминай содержимое текущей задачи и то, что уже лежит в файлах проекта.',
@@ -1633,6 +1680,7 @@ export const TOOL_LABELS = {
   move_path: 'Перемещение',
   find_in_files: 'Поиск по файлам',
   read_document: 'Разбор документа',
+  narrate_document: 'Озвучка документа',
   analyze_data: 'Анализ данных',
   analyze_image: 'Распознавание изображения',
   web_search: 'Поиск в интернете',
@@ -1650,6 +1698,7 @@ export const TOOL_LABELS = {
   create_word: 'Создание Word',
   create_pptx: 'Создание презентации',
   create_pdf: 'Создание PDF',
+  create_drawing: 'Чертёж',
   remember: 'Память',
   use_skill: 'Навык',
   check_document: 'Проверка файла',
@@ -1676,6 +1725,7 @@ export function toolSummary(name, args) {
       return [String(args.action || 'list'), args.id || args.area || args.query || ''].filter(Boolean).join(' · ');
     case 'read_file':
     case 'read_document':
+    case 'narrate_document':
     case 'analyze_image':
     case 'delete_path':
       return args.path || '';
@@ -1684,6 +1734,7 @@ export function toolSummary(name, args) {
     case 'create_word':
     case 'create_pptx':
     case 'create_pdf':
+    case 'create_drawing':
       return args.path || '';
     case 'move_path':
       return `${args.from || ''} → ${args.to || ''}`;
@@ -1766,6 +1817,8 @@ const WRITE_TARGETS = {
   create_word: ['path'],
   create_pptx: ['path'],
   create_pdf: ['path'],
+  create_drawing: ['path'],
+  narrate_document: ['path'],
   check_page: ['screenshot'],
   /* Полигон пишет прогон туда, куда сказали: подчинённая папка субагента обязательна. */
   legal_task: ['dir'],
@@ -1997,8 +2050,68 @@ async function executeToolInner(name, args, ctx) {
       walk(base);
       return { text: results.length ? results.join('\n') : 'Ничего не найдено.', meta: { count: results.length } };
     }
-    case 'read_document': {
+    case 'narrate_document': {
+      /* Озвучка идёт минутами, а ход агента ограничен: инструмент только
+         готовит файлы и ставит задание в очередь, синтез продолжается сам. */
       const full = assertInside(root, resolveSafe(root, args.path));
+      const stat = fs.statSync(full);
+      if (!stat.isFile()) throw new Error('Это не файл');
+      if (stat.size > LIMITS.maxParseBytes) {
+        throw new Error(`Файл ${formatBytes(stat.size)} больше предела разбора (${formatBytes(LIMITS.maxParseBytes)}).`);
+      }
+      const parsed = extractDocumentText(fs.readFileSync(full), args.path, '', { maxChars: MAX_TTS_CHARS + 1 });
+      const text = String(parsed.text || '').trim();
+      if (text.replace(/\s/g, '').length < 40) {
+        return {
+          text: `Озвучить не получится: ${(parsed.warnings || [])[0] || 'в документе нет текста.'}`,
+          meta: { path: args.path, jobId: '', files: [] },
+        };
+      }
+      if (text.length > MAX_TTS_CHARS) {
+        throw new Error(
+          `Документ ${text.length.toLocaleString('ru-RU')} знаков — больше потолка озвучки (${MAX_TTS_CHARS.toLocaleString('ru-RU')}). Разделите книгу на тома и озвучьте по очереди.`,
+        );
+      }
+      const minutes = Math.min(90, Math.max(5, Number(args.minutes) || PART_MINUTES));
+      const chapters = splitIntoParts(text, { minutes });
+      const files = planNarrationFiles(full, chapters.length);
+      const word = writeNarrationWord(files.word, path.basename(full, path.extname(full)), text);
+      const job = startNarration({
+        ownerId: ctx?.ownerId || null,
+        title: path.basename(full),
+        text,
+        voice: String(args.voice || DEFAULT_VOICE),
+        rate: String(args.rate || DEFAULT_RATE),
+        outPath: files.parts[0].path,
+        parts: chapters.map((partText, index) => ({
+          text: partText,
+          outPath: files.parts[index].path,
+          label: files.parts[index].label,
+        })),
+        wordPath: files.word,
+        cacheDir: path.join(DATA_DIR, 'tts-cache'),
+      });
+      const total = Math.round((text.length / 750) * 10) / 10;
+      const lines = [
+        `Озвучка запущена в фоне: «${path.basename(full)}», ${text.length.toLocaleString('ru-RU')} знаков ≈ ${Math.round(total)} мин звука.`,
+        chapters.length > 1
+          ? `Получится ${chapters.length} частей по ~${Math.round(total / chapters.length)} мин и Word с текстом.`
+          : `Получится один MP3 на ~${Math.round(total)} мин и Word с текстом.`,
+        `Файлы появятся в разделе «Файлы проекта»: ${files.parts.map((part) => path.basename(part.path)).join(', ')}, ${word.name}.`,
+        'Проверить готовность: tts_status (или список файлов проекта).',
+      ];
+      return {
+        text: lines.join('\n'),
+        meta: {
+          path: args.path,
+          jobId: job.id,
+          parts: chapters.length,
+          word: word.name,
+          files: [...files.parts.map((part) => path.basename(part.path)), word.name],
+        },
+      };
+    }
+    case 'read_document': {
       const stat = fs.statSync(full);
       if (!stat.isFile()) throw new Error('Это не файл');
       /* Разбор документа — работа в памяти на сотни мегабайт: у общего сервиса
@@ -2381,6 +2494,37 @@ async function executeToolInner(name, args, ctx) {
       return {
         text: `PDF создан: ${rel} (${kind}, ${pages} стр., ${Math.max(1, Math.round(buf.length / 1024))} КБ)\n${formatCheckReport(check)}`,
         meta: { path: rel, created: true, pages, engine, layout, check: { ok: check.ok, errors: check.errors, warnings: check.warnings } },
+      };
+    }
+    case 'create_drawing': {
+      const rel = String(args.path || 'чертёж.pdf');
+      ensureFreeSpace(LIMITS.minFreeBytes);
+      let out;
+      try {
+        out = await createDrawing(args, { root });
+      } catch (error) {
+        /* Без браузера чертёж всё равно полезен: отдаём SVG и честную причину. */
+        const message = String(error?.message || error);
+        if (!/браузер|Без браузера|запускается/i.test(message)) throw error;
+        const svgRel = rel.replace(/\.(pdf|png)$/i, '') + '.svg';
+        if (args.svg) {
+          const svgFull = assertInside(root, resolveSafe(root, svgRel));
+          ensureDirFor(svgFull);
+          fs.writeFileSync(svgFull, String(args.svg), 'utf8');
+          return {
+            text: `Браузер недоступен (${message}), поэтому PDF/PNG не собраны. Черновик сохранён как SVG: ${svgRel} — его можно открыть и распечатать вручную.`,
+            meta: { path: svgRel, created: true, engine: '', fallback: 'svg' },
+          };
+        }
+        throw new Error(`Чертёж не собран: ${message}`);
+      }
+      const writtenRel = Object.fromEntries(Object.entries(out.written).map(([key, file]) => [key, path.relative(root, file).replace(/\\/g, '/')]));
+      const parts = Object.entries(writtenRel).map(([key, file]) => `${key.toUpperCase()}: ${file} (${Math.max(1, Math.round((key === 'pdf' ? out.bytes?.pdf : out.bytes?.png || 0) / 1024))} КБ)`);
+      const pdfRel = writtenRel.pdf || '';
+      const check = pdfRel ? await checkDocument(path.resolve(root, pdfRel)).catch(() => null) : null;
+      return {
+        text: `Чертёж создан — ${parts.join(', ')}\nЛист ${out.sheet}${out.landscape ? ' (альбомный)' : ''}, движок: ${out.engine || 'без рендера'}${check ? `\n${formatCheckReport(check)}` : ''}`,
+        meta: { path: rel, created: true, files: writtenRel, sheet: out.sheet, landscape: out.landscape, engine: out.engine, check: check ? { ok: check.ok, errors: check.errors, warnings: check.warnings } : null },
       };
     }
     case 'remember': {

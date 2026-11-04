@@ -28,6 +28,8 @@
     "test:ui-swipe": "node test/ui-swipe.mjs",
     "test:ui-support": "node test/ui-support.mjs",
     "test:ui-version": "node test/ui-version.mjs",
+    "test:tts": "node test/tts.mjs",
+    "test:ui-tts": "node test/tts-ui.mjs",
     "test:attach-shrink": "node test/attach-shrink.mjs",
     "test:reasoning": "node --test test/reasoning.mjs",
     "test:browser": "node test/browser.mjs",
@@ -45,7 +47,8 @@
     "puppeteer-core": "^24.43.1",
     "turndown": "^7.2.4",
     "turndown-plugin-gfm": "^1.0.2",
-    "web-push": "^3.6.7"
+    "web-push": "^3.6.7",
+    "ws": "^8.22.0"
   },
   "optionalDependencies": {
     "@sparticuz/chromium": "143.0.4"
