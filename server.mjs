@@ -42,6 +42,7 @@ import {
   RATE_CHOICES,
   VOICE_CHOICES,
   cancelJob,
+  choosePartMinutes,
   getJob,
   jobsFor,
   planParts,
@@ -3578,9 +3579,13 @@ async function route(req, res) {
         /* Книга отдаётся частями по ~30 минут звука плюс один Word с текстом:
            слушать пять часов одним файлом неудобно, а искать нужное место в
            нём — тем более. Части получают имена «… — часть 2 из 12.mp3».
-           Длину части можно задать в body.minutes (5..90) — так удобнее, если
-           документ будут слушать короткими подходами. */
-        const partMinutes = Math.min(90, Math.max(5, Number(body.minutes) || PART_MINUTES));
+           Длину части человек не выбирает: её задаёт структура самой книги
+           (choosePartMinutes — короткие главы собираются, длинные режутся),
+           а body.minutes остаётся для вызова из чата, где решение принимает
+           модель по оглавлению. */
+        const partMinutes = Number(body.minutes) > 0
+          ? Math.min(90, Math.max(5, Number(body.minutes)))
+          : choosePartMinutes(text);
         const chapterParts = splitIntoParts(text, { minutes: partMinutes });
         const files = claimNarrationFiles(full, chapterParts.length, { root: workspace });
         const word = writeNarrationWord(files.word, path.basename(full, path.extname(full)), text);
@@ -3605,6 +3610,7 @@ async function route(req, res) {
           plan: {
             parts: chapterParts.length,
             minutes: Math.round((text.length / 750) * 10) / 10,
+            partMinutes,
             word: { name: word.name, size: word.size },
           },
         });
@@ -3631,13 +3637,15 @@ async function route(req, res) {
             reason: (parsed.warnings || [])[0] || 'В документе нет текста, который можно прочитать вслух.',
           });
         }
-        const planMinutes = Math.min(90, Math.max(5, Number(url.searchParams.get('minutes')) || PART_MINUTES));
+        const requested = Number(url.searchParams.get('minutes')) || 0;
+        const planMinutes = requested > 0 ? Math.min(90, Math.max(5, requested)) : choosePartMinutes(text);
         const plan = planParts(text, { minutes: planMinutes });
         const files = planNarrationFiles(full, plan.length);
         return sendJson(res, 200, {
           ok: true,
           chars: text.length,
           minutes: Math.round((text.length / 750) * 10) / 10,
+          partMinutes: planMinutes,
           parts: plan,
           word: path.basename(files.word),
           names: files.parts.map((part) => path.basename(part.path)),

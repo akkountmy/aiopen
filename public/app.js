@@ -4907,22 +4907,9 @@ async function openNarration(item) {
   rateRow.appendChild(rateSelect);
   form.appendChild(rateRow);
 
-  /* Длина части: дробление книги — дело вкуса, а не константа в коде. Полчаса
-     по умолчанию, но слушают по-разному: в дороге удобны 15 минут, перед сном —
-     час. Число частей пересчитывается сразу, до старта. */
-  const partRow = el('label', 'tts-row');
-  partRow.appendChild(el('span', 'tts-label', 'Часть'));
-  const partSelect = el('select', 'tts-select');
-  partSelect.setAttribute('aria-label', 'Длина части');
-  let partChoice = 30;
-  for (const minutes of [15, 30, 45, 60]) {
-    const option = el('option', '', minutes === 30 ? 'Полчаса' : `${minutes} минут`);
-    option.value = String(minutes);
-    if (minutes === 30) option.selected = true;
-    partSelect.appendChild(option);
-  }
-  partRow.appendChild(partSelect);
-  form.appendChild(partRow);
+  /* Длину части не выбирают вручную: она следует за структурой самой книги —
+     короткие главы собираются в получасовые части, глава на 25–45 минут идёт
+     целиком, простыня режется внутри. Итог до старта показывает строка плана. */
   box.appendChild(form);
 
   const start = el('button', 'btn btn-primary tts-start');
@@ -5150,7 +5137,7 @@ async function openNarration(item) {
     try {
       const { job } = await api(`/api/projects/${filesProjectId()}/tts`, {
         method: 'POST',
-        body: { path: item.path, voice: voiceSelect.value, rate: rateSelect.value, minutes: chosenMinutes() },
+        body: { path: item.path, voice: voiceSelect.value, rate: rateSelect.value },
       });
       progress.hidden = false;
       paint(job);
@@ -5258,16 +5245,14 @@ async function openNarration(item) {
 
   /* Сколько будет частей и сколько это звука. Ответ приходит через секунду-
      две (текст книги разбирается заново), поэтому строка сначала честно
-     говорит, что считаем. Пересчитываем при смене длины части. */
+     говорит, что считаем. */
   let planRequest = 0;
   const loadPlan = async () => {
     const request = (planRequest += 1);
     planLine.textContent = 'Считаю объём и части…';
     try {
-      const plan = await api(
-        `/api/projects/${filesProjectId()}/tts-plan?path=${encodeURIComponent(item.path)}&minutes=${partChoice}`,
-      );
-      /* Пока считали, человек мог выбрать другую длину — старый ответ не нужен. */
+      const plan = await api(`/api/projects/${filesProjectId()}/tts-plan?path=${encodeURIComponent(item.path)}`);
+      /* Новая загрузка плана отменяет старую: ответ, пришедший позже, не нужен. */
       if (request !== planRequest) return;
       if (!plan.ok) {
         planLine.textContent = plan.reason || 'Из этого файла не читается текст — озвучить не получится.';
@@ -5279,28 +5264,13 @@ async function openNarration(item) {
       const longest = Math.round(Math.max(...plan.parts.map((part) => Number(part.minutes) || 0)));
       planLine.textContent =
         plan.parts.length > 1
-          ? `${plan.chars.toLocaleString('ru-RU')} знаков ≈ ${totalHuman} звука. Получится ${plan.parts.length} частей до ${longest} мин и Word «${plan.word}» с текстом.`
+          ? `${plan.chars.toLocaleString('ru-RU')} знаков ≈ ${totalHuman} звука. Получится ${plan.parts.length} частей по главам (до ${longest} мин) и Word «${plan.word}» с текстом.`
           : `${plan.chars.toLocaleString('ru-RU')} знаков ≈ ${totalHuman} звука. Получится один MP3 на ${longest} мин и Word «${plan.word}» с текстом.`;
     } catch (error) {
       if (request !== planRequest) return;
       planLine.textContent = `Части не рассчитались (${error.message}) — озвучка всё равно работает.`;
     }
   };
-
-  /* Что выбрано сейчас. Читаем у самого списка, а не из переменной: даже если
-     браузер не прислал change (автозаполнение, программная установка значения),
-     озвучка пойдёт с той длиной, которую человек видит на экране. */
-  const chosenMinutes = () => Math.min(90, Math.max(5, Number(partSelect.value) || 30));
-
-  partSelect.addEventListener('change', () => {
-    partChoice = chosenMinutes();
-    loadPlan();
-  });
-  partSelect.addEventListener('input', () => {
-    if (chosenMinutes() === partChoice) return;
-    partChoice = chosenMinutes();
-    loadPlan();
-  });
 
   await loadPlan();
 }

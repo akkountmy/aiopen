@@ -7,7 +7,7 @@ import { checkDocument, formatCheckReport } from './doccheck.mjs';
 import { memoryToolReply } from './memory.mjs';
 import { skillBody, skillIds } from './skills.mjs';
 import { detectKind, extractDocumentText } from './docparse.mjs';
-import { DEFAULT_RATE, DEFAULT_VOICE, MAX_TTS_CHARS, PART_MINUTES, splitIntoParts, startNarration } from './tts.mjs';
+import { DEFAULT_RATE, DEFAULT_VOICE, MAX_TTS_CHARS, PART_MINUTES, choosePartMinutes, splitIntoParts, startNarration } from './tts.mjs';
 import { claimNarrationFiles } from './narration-plan.mjs';
 import { writeNarrationWord } from './narration-word.mjs';
 import { analyzeData, formatAnalysis } from './analysis.mjs';
@@ -864,7 +864,11 @@ export const TOOL_DEFS = [
             description: 'Голос: ru-RU-SvetlanaNeural (женский, спокойный) или ru-RU-DmitryNeural (мужской, низкий).',
           },
           rate: { type: 'string', description: 'Темп: 0.9 медленнее, 1 обычный, 1.15 быстрее.' },
-          minutes: { type: 'number', description: 'Длина одной части в минутах, по умолчанию 30.' },
+          minutes: {
+            type: 'number',
+            description:
+              'Необязательно: длина одной части в минутах (5..90). Если не указывать, длина выводится из глав книги — короткие главы собираются, длинные режутся.',
+          },
         },
         required: ['path'],
       },
@@ -2072,7 +2076,11 @@ async function executeToolInner(name, args, ctx) {
           `Документ ${text.length.toLocaleString('ru-RU')} знаков — больше потолка озвучки (${MAX_TTS_CHARS.toLocaleString('ru-RU')}). Разделите книгу на тома и озвучьте по очереди.`,
         );
       }
-      const minutes = Math.min(90, Math.max(5, Number(args.minutes) || PART_MINUTES));
+      /* Длину части модель выбирает по самой книге (её главам), а не спрашивает
+         человека: если в вызове minutes нет — смотрим, как нарезан документ. */
+      const minutes = Number(args.minutes) > 0
+        ? Math.min(90, Math.max(5, Number(args.minutes)))
+        : choosePartMinutes(text);
       const chapters = splitIntoParts(text, { minutes });
       const files = claimNarrationFiles(full, chapters.length, { root });
       const word = writeNarrationWord(files.word, path.basename(full, path.extname(full)), text);

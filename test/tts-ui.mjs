@@ -288,21 +288,31 @@ try {
         fail('окно озвучки', 'не открылось');
         continue;
       }
-      await sleep(600);
+      /* Список голосов приходит вторым запросом: сначала окно показывает
+         запасные два голоса, потом подменяет их каталогом с сервера. Ждём
+         подмену, иначе проверка ловит запасной список и зря падает. */
+      await waitFor(
+        `(() => {
+           const modal = document.querySelector('#modalRoot .modal.tts-modal');
+           const voices = modal && modal.querySelector('select.tts-select');
+           return Boolean(voices && voices.options.length >= 4);
+         })()`,
+        5000,
+      );
       const controls = await evaluate(`(() => {
         const modal = document.querySelector('#modalRoot .modal.tts-modal');
         const selects = [...modal.querySelectorAll('select.tts-select')];
         const voices = selects[0] ? [...selects[0].options].map((option) => ({ id: option.value, label: option.textContent })) : [];
         const rates = selects[1] ? [...selects[1].options].map((option) => option.textContent) : [];
         const start = modal.querySelector('.tts-start');
-        const hint = modal.querySelector('.tts-hint');
+        const hints = [...modal.querySelectorAll('.tts-hint')].map((node) => node.textContent.trim());
         const rect = modal.getBoundingClientRect();
         return {
           voices,
           rates,
           startLabel: start ? start.textContent.trim() : '',
           startW: start ? Math.round(start.getBoundingClientRect().width) : 0,
-          hint: hint ? hint.textContent.trim() : '',
+          hint: hints[hints.length - 1] || '',
           width: Math.round(rect.width),
           right: Math.round(rect.right),
           inner: window.innerWidth,
@@ -325,37 +335,25 @@ try {
         : fail('окно шире экрана', JSON.stringify({ width: controls.width, inner: controls.inner, overflow: controls.overflow }));
       await shot('tts-390-form.png');
 
-      /* Длина части: список есть, и смена сразу пересчитывает план — до старта
-         человек видит, сколько файлов получится. Признак пересчёта — строка на
-         мгновение честно пишет «Считаю объём и части…»: у короткого документа
-         любой вариант даёт один MP3, поэтому сравнивать сам текст плана нельзя. */
-      const partCheck = await evaluate(`(async () => {
+      /* Длина части не спрашивается у человека: её задаёт структура книги,
+         и окно лишь показывает готовый план. Значит, в форме ровно два
+         списка (голос и темп), а строка плана говорит про «части по главам». */
+      const planCheck = await evaluate(`(async () => {
         const modal = document.querySelector('#modalRoot .modal.tts-modal');
         const selects = [...modal.querySelectorAll('select.tts-select')];
-        const part = selects[2];
         const line = modal.querySelector('.tts-hint');
-        if (!part || !line) return { found: false };
-        const labels = [...part.options].map((option) => option.textContent.trim());
-        const atThirty = line.textContent.trim();
-        part.value = '15';
-        part.dispatchEvent(new Event('change', { bubbles: true }));
-        const counting = line.textContent.trim();
-        await new Promise((done) => setTimeout(done, 1600));
-        const atFifteen = line.textContent.trim();
-        part.value = '30';
-        part.dispatchEvent(new Event('change', { bubbles: true }));
-        await new Promise((done) => setTimeout(done, 1600));
-        return { found: true, labels, atThirty, counting, atFifteen, back: line.textContent.trim() };
+        for (let attempt = 0; attempt < 40; attempt += 1) {
+          if (line && /знаков/.test(line.textContent)) break;
+          await new Promise((done) => setTimeout(done, 150));
+        }
+        return { found: true, selects: selects.length, line: (line ? line.textContent : '').trim() };
       })()`);
-      partCheck.found && partCheck.labels.length === 4 && partCheck.labels.includes('Полчаса')
-        ? ok('длина части выбирается', partCheck.labels.join(' / '))
-        : fail('список длины части', JSON.stringify(partCheck));
-      /Считаю/.test(partCheck.counting || '')
-        ? ok('смена длины пересчитывает план')
-        : fail('пересчёт плана при смене длины', JSON.stringify(partCheck));
-      partCheck.found && /знаков/.test(partCheck.atFifteen || '') && /знаков/.test(partCheck.back || '')
-        ? ok('план на месте после пересчёта', partCheck.atFifteen.slice(0, 60))
-        : fail('план после пересчёта', JSON.stringify(partCheck));
+      planCheck.found && planCheck.selects === 2
+        ? ok('длину части не выбирают вручную', 'в окне только голос и темп')
+        : fail('в окне лишний выбор длины', JSON.stringify(planCheck));
+      /знаков/.test(planCheck.line || '') && /(по главам|один MP3)/.test(planCheck.line || '')
+        ? ok('план собран по главам книги', planCheck.line.slice(0, 90))
+        : fail('план частей', JSON.stringify(planCheck));
 
       /* 3. Пустой файл: синтез не начинается, а причина видна в окне.
             Пустой файл лежит в соседнем проекте, поэтому сначала переключаемся

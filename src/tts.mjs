@@ -687,9 +687,12 @@ export function estimateNarration(text) {
 export const PART_MINUTES = 30;
 const CHARS_PER_MINUTE = 750;
 
-/** Заголовок раздела: короткая строка без точки в конце, капсом или с ключевым словом. */
+/* Заголовок раздела: короткая строка без точки в конце, капсом или с ключевым
+   словом. Границу слова задаём явно: `\b` в JavaScript считает словесными
+   только латиницу с цифрами, поэтому после «глава» кириллица границы не даёт
+   и заголовки не находились вовсе — части резались по предложениям. */
 const HEADING_RE =
-  /^(глава|часть|раздел|приложение|введение|заключение|содержание|предисловие|послесловие|итоги|методика|обзор|резюме)\b/i;
+  /^(глава|часть|раздел|приложение|введение|заключение|содержание|оглавление|предисловие|послесловие|итоги|выводы|методика|обзор|резюме)(?=$|\s|[:.,;—–-])/i;
 
 function isHeading(line) {
   const value = line.trim();
@@ -703,18 +706,11 @@ function isHeading(line) {
 }
 
 /**
- * Режет документ на части по ~30 минут звука, стараясь рвать по границам
- * разделов: слушателю важно начинать часть с заголовка, а не с середины фразы.
- * Возвращает массив строк — по одной на часть. Одна часть — когда документ
- * короче целевого размера.
+ * Блоки документа: заголовок вместе со следующим за ним текстом до следующего
+ * заголовка. Так часть не начинается посреди главы, если глава помещается
+ * в часть.
  */
-export function splitIntoParts(raw, { minutes = PART_MINUTES } = {}) {
-  const text = normalizeText(raw);
-  if (!text) return [];
-  const target = Math.max(3000, Math.round(minutes * CHARS_PER_MINUTE));
-
-  /* Блоки: заголовок вместе со следующим за ним текстом до следующего заголовка.
-     Так часть не начинается посреди главы, если глава помещается в часть. */
+function splitBlocks(text) {
   const lines = text.split('\n');
   const blocks = [];
   let current = [];
@@ -728,6 +724,42 @@ export function splitIntoParts(raw, { minutes = PART_MINUTES } = {}) {
     current.push(line);
   }
   pushBlock();
+  return blocks;
+}
+
+/**
+ * Какой длине части соответствует сама книга, без вопросов человеку.
+ * Смотрим на главы: короткие (до 20 минут) собираем в получасовые части —
+ * иначе получается десяток файлов по пять минут; главы по 20–45 минут
+ * отдаём целиком, по главе на файл; глава длиннее 45 минут режется внутри
+ * по предложениям, потому что час в наушниках — это уже не «часть».
+ * Документ без заголовков (PDF-выгрузка, договор) режется по полчаса.
+ */
+export function choosePartMinutes(raw) {
+  const text = normalizeText(raw);
+  if (!text) return PART_MINUTES;
+  const minutes = splitBlocks(text).map((block) => block.length / CHARS_PER_MINUTE);
+  if (minutes.length <= 1) return PART_MINUTES;
+  const total = minutes.reduce((sum, value) => sum + value, 0);
+  if (total <= PART_MINUTES * 0.8) return PART_MINUTES;
+  const sorted = [...minutes].sort((left, right) => left - right);
+  const median = sorted[Math.floor(sorted.length / 2)];
+  if (median < 20) return PART_MINUTES;
+  return Math.min(45, Math.max(20, Math.round(median)));
+}
+
+/**
+ * Режет документ на части по ~30 минут звука, стараясь рвать по границам
+ * разделов: слушателю важно начинать часть с заголовка, а не с середины фразы.
+ * Возвращает массив строк — по одной на часть. Одна часть — когда документ
+ * короче целевого размера.
+ */
+export function splitIntoParts(raw, { minutes = PART_MINUTES } = {}) {
+  const text = normalizeText(raw);
+  if (!text) return [];
+  const target = Math.max(3000, Math.round(minutes * CHARS_PER_MINUTE));
+
+  const blocks = splitBlocks(text);
 
   const parts = [];
   let pack = [];

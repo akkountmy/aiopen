@@ -136,6 +136,35 @@ async function upload(name, content) {
     ok('загрузка отрывка');
   });
 
+  await test('длину части задаёт книга, а не человек', async () => {
+    /* Три главы примерно по 25 минут звука. Окно длину не спрашивает: сервер
+       берёт её из глав — такая глава идёт целиком, значит частей три. План
+       считается без синтеза, поэтому проверка быстрая. */
+    const chapter = (number) => `\n\nГлава ${number}\n\n${'Предложение про рынок лизинга и его участников. '.repeat(440)}`;
+    const book = [chapter('первая'), chapter('вторая'), chapter('третья')].join('\n');
+    await upload('Книга из глав.txt', book);
+    const { data } = await call(`/api/projects/${projectId}/tts-plan?path=${encodeURIComponent('Книга из глав.txt')}`);
+    if (!data.ok) throw new Error(`план не построен: ${data.reason || 'без причины'}`);
+    if (!(data.partMinutes >= 20 && data.partMinutes <= 45)) {
+      throw new Error(`длина части выбрана мимо глав: ${data.partMinutes} мин`);
+    }
+    if (data.parts.length !== 3) throw new Error(`ожидалось 3 части по главам, получилось ${data.parts.length}`);
+    if (!data.names.every((name) => name.startsWith('Книга из глав — часть '))) {
+      throw new Error(`имена частей: ${data.names.join(' | ')}`);
+    }
+    ok('длину части задаёт книга, а не человек', `${data.partMinutes} мин, частей ${data.parts.length}`);
+  });
+
+  await test('явная длина части ещё работает', async () => {
+    /* Модель в чате и скрипты могут задать длину сами — сервер обязан её принять. */
+    const { data } = await call(
+      `/api/projects/${projectId}/tts-plan?path=${encodeURIComponent('Книга из глав.txt')}&minutes=15`,
+    );
+    if (data.partMinutes !== 15) throw new Error(`ожидалось 15 мин, получено ${data.partMinutes}`);
+    if (data.parts.length < 3) throw new Error(`на 15-минутные части текст не разбился: ${data.parts.length}`);
+    ok('явная длина части ещё работает', `${data.partMinutes} мин, частей ${data.parts.length}`);
+  });
+
   await test('отказ на пустом тексте', async () => {
     await upload('пусто.txt', '   \n\n  ');
     const { data } = await call(`/api/projects/${projectId}/tts`, {
