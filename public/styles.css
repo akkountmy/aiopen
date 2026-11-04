@@ -2187,6 +2187,21 @@ html.kb-open .scroll-jump {
   line-height: var(--lh-14);
 }
 
+/* Подпись экономии у сжатого вложения: «3,4 МБ → 0,4 МБ (−88 %)». Приглушённый
+   зелёный, чтобы её не путали с ошибкой; на узком экране она прячется, потому что
+   размер уже показан рядом и разбирать две цифры в строке незачем. */
+.file-chip .fc-note {
+  color: var(--green, #3fae6a);
+  font-size: var(--fs-11);
+  flex: none;
+  line-height: var(--lh-14);
+  opacity: 0.85;
+}
+
+@media (max-width: 430px) {
+  .file-chip .fc-note { display: none; }
+}
+
 .file-chip .fc-status {
   color: var(--amber);
   font-size: var(--fs-11);
@@ -8041,5 +8056,544 @@ html.compact-input .empty-title {
 
   html.compact-input #thinkToggle {
     padding: 0 10px;
+  }
+}
+
+/* ------------------------------- поддержка -------------------------------
+   Кнопка «Поддержка» в шапке (слева от «Дашборда»), окно обращения и блок
+   «Сообщения от пользователя» в кабинете администратора. Кнопка повторяет
+   вид соседних значков: та же коробка 34 px и та же иконка 20 px со штрихом 2
+   (всё это задано общими правилами .topbar), поэтому здесь только точка
+   отсчёта для счётчика. */
+.support-btn {
+  position: relative;
+}
+
+/* Счётчик непрочитанных. Стоит на углу кнопки, а не внутри значка: иначе он
+   перекрывал бы гарнитуру, а так виден и на 34 px, и на 40 px (телефон). */
+.support-badge {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--danger);
+  color: #fff;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0;
+  pointer-events: none;
+}
+
+.support-badge[hidden] {
+  display: none !important;
+}
+
+/* Та же цифра рядом с текстом — в меню профиля и в заголовке блока кабинета. */
+.support-badge.inline {
+  position: static;
+  height: 16px;
+  min-width: 16px;
+  padding: 0 5px;
+  font-size: 11px;
+}
+
+.menu-badge {
+  margin-left: auto;
+  min-width: 18px;
+  height: 16px;
+  padding: 0 5px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: var(--danger);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+/* --- окно обращения --- */
+.support {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* Ссылка в кабинет — только у администратора: из окна поддержки видно, куда
+   приходят обращения. */
+.support-admin-link {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  background: var(--layer-2);
+  border-radius: var(--radius-sm);
+  color: var(--text-2);
+  font-size: var(--fs-13);
+  cursor: pointer;
+  line-height: var(--lh-20);
+}
+
+.support-admin-link svg {
+  width: 15px;
+  height: 15px;
+  flex: none;
+  color: var(--text-4);
+}
+
+.support-admin-link:hover {
+  background: var(--layer-hover);
+  color: var(--text);
+}
+
+.support-admin-link .support-badge.inline {
+  margin-left: auto;
+}
+
+.support-kinds {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.support-kind {
+  height: 28px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  background: transparent;
+  border-radius: 999px;
+  color: var(--text-3);
+  font-size: var(--fs-13);
+  cursor: pointer;
+  line-height: var(--lh-20);
+  transition: background 0.14s ease, color 0.14s ease, border-color 0.14s ease;
+}
+
+.support-kind:hover {
+  background: var(--layer-hover);
+  color: var(--text);
+}
+
+.support-kind.active {
+  border-color: transparent;
+  background: var(--accent-fill);
+  color: #fff;
+}
+
+.support-hint {
+  margin: -4px 0 0;
+  font-size: var(--fs-12);
+  line-height: var(--lh-18);
+  color: var(--text-4);
+}
+
+.support-text {
+  width: 100%;
+  min-height: 104px;
+  padding: 10px 12px;
+  background: var(--layer-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--fs-14);
+  line-height: var(--lh-22);
+  resize: vertical;
+  outline: none;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.support-text:focus {
+  border-color: rgba(86, 134, 254, 0.55);
+  background: var(--layer-3);
+}
+
+.support-text::placeholder {
+  color: var(--text-4);
+}
+
+.support-counter {
+  margin: -6px 0 0;
+  text-align: right;
+  font-size: 11px;
+  color: var(--text-4);
+  line-height: var(--lh-16);
+}
+
+.support-attach {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.support-pick {
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  color: var(--text-2);
+  font-size: var(--fs-13);
+  line-height: var(--lh-20);
+}
+
+.support-pick svg {
+  width: 15px;
+  height: 15px;
+  flex: none;
+}
+
+/* Настоящий input остаётся в разметке (он фокусируется с клавиатуры и его
+   открывает кнопка), но в глазах не занимает места. */
+.support-file {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.support-attach-hint {
+  font-size: var(--fs-12);
+  color: var(--text-4);
+  line-height: var(--lh-18);
+}
+
+.support-shot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--layer-2);
+}
+
+.support-shot img {
+  width: 64px;
+  height: 48px;
+  object-fit: cover;
+  border-radius: 4px;
+  border: 1px solid var(--line);
+  display: block;
+  flex: none;
+}
+
+.support-shot-meta {
+  flex: 1;
+  min-width: 0;
+}
+
+.support-shot-name {
+  font-size: var(--fs-13);
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.support-shot-size {
+  font-size: var(--fs-12);
+  color: var(--text-4);
+  line-height: var(--lh-16);
+}
+
+.support-shot-remove {
+  width: 28px;
+  height: 28px;
+  flex: none;
+  color: var(--text-3);
+}
+
+.support-shot-remove svg {
+  width: 14px;
+  height: 14px;
+}
+
+.support-preview:empty {
+  display: none;
+}
+
+/* Мои обращения под формой: что уже отправлено и на каком это этапе. */
+.support-history {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 2px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+.support-history:empty {
+  display: none;
+}
+
+.support-history-title {
+  font-size: var(--fs-12);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-4);
+  line-height: var(--lh-16);
+}
+
+.support-history-row {
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--layer-2);
+}
+
+.support-history-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.support-history-when {
+  margin-left: auto;
+  font-size: var(--fs-12);
+  color: var(--text-4);
+  line-height: var(--lh-16);
+}
+
+.support-history-text {
+  margin-top: 4px;
+  font-size: var(--fs-13);
+  line-height: var(--lh-20);
+  color: var(--text-2);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.support-history-shot {
+  display: inline-block;
+  margin-top: 6px;
+  font-size: var(--fs-12);
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.support-history-shot:hover {
+  text-decoration: underline;
+}
+
+.support-kind-chip {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 7px;
+  border-radius: 999px;
+  background: var(--layer-3);
+  color: var(--text-3);
+  font-size: 11px;
+  line-height: 1;
+}
+
+.support-status {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 7px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--text-4);
+  font-size: 11px;
+  line-height: 1;
+}
+
+.support-status.new {
+  border-color: rgba(86, 134, 254, 0.45);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.support-status.read {
+  border-color: var(--line-strong);
+  color: var(--text-3);
+}
+
+.support-status.done {
+  border-color: rgba(78, 209, 126, 0.4);
+  color: var(--success);
+}
+
+/* --- блок администратора --- */
+.support-admin {
+  margin-bottom: 4px;
+  border-radius: var(--radius-md);
+  transition: background 0.3s ease, box-shadow 0.3s ease;
+}
+
+/* Пришли из уведомления: блок коротко подсвечивается, чтобы его не искали. */
+.support-admin.flash {
+  background: rgba(86, 134, 254, 0.07);
+  box-shadow: 0 0 0 1px rgba(86, 134, 254, 0.3);
+}
+
+.support-admin-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.support-admin-title .support-badge.inline {
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.support-admin-all {
+  display: flex;
+  justify-content: flex-end;
+  margin: -2px 0 8px;
+}
+
+.support-admin .muted {
+  margin: 0 0 8px;
+  font-size: var(--fs-12);
+  line-height: var(--lh-18);
+  color: var(--text-4);
+}
+
+.support-admin-all .btn {
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  color: var(--text-2);
+  font-size: var(--fs-12);
+}
+
+/* Строка обращения — та же карточка, что у запросов на тяжёлые задачи, но
+   текст переносится целиком: это письмо, а не название. */
+.approval.support-row {
+  align-items: flex-start;
+  border-color: var(--line);
+  background: var(--layer-2);
+}
+
+.approval.support-row.is-new {
+  border-color: rgba(86, 134, 254, 0.35);
+  background: rgba(86, 134, 254, 0.06);
+}
+
+.approval .support-row-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  overflow: visible;
+  white-space: normal;
+}
+
+.support-row-user {
+  font-size: var(--fs-13);
+  color: var(--text);
+  font-weight: 500;
+}
+
+.support-row-text {
+  margin-top: 4px;
+  font-size: var(--fs-13);
+  line-height: var(--lh-20);
+  color: var(--text-2);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.support-row-contact {
+  color: var(--text-3);
+}
+
+.support-row-shot {
+  display: inline-block;
+  margin-top: 8px;
+  line-height: 0;
+}
+
+.support-row-shot img {
+  width: 160px;
+  max-width: 100%;
+  height: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  display: block;
+}
+
+.approval.support-row .ap-actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  flex-direction: column;
+  align-items: stretch;
+}
+
+/* На телефоне поле текста не мельче 16 px: иначе iOS приближает страницу при
+   фокусе и окно выглядит «увеличенным» (то же правило, что у поля задания в
+   дашборде). Ручку изменения размера пальцем не поймать — убираем её, высота
+   задана заранее, длинный текст листается внутри поля. Кнопки прикрепления и
+   удаления скриншота поднимаем до удобного пальцу размера. */
+@media (max-width: 860px) {
+  .support-admin-link {
+    height: 40px;
+  }
+
+  .support-kind {
+    height: 32px;
+    padding: 0 14px;
+  }
+
+  .support-text {
+    min-height: 120px;
+    font-size: max(16px, var(--fs-14));
+    resize: none;
+  }
+
+  .support-pick {
+    height: 36px;
+  }
+
+  .support-shot img {
+    width: 56px;
+    height: 42px;
+  }
+
+  .support-shot-remove {
+    width: 34px;
+    height: 34px;
+  }
+
+  /* В узком листе подпись под заголовком переносится, а не обрывается
+     многоточием: это единственное объяснение, зачем открылось окно. */
+  .support-modal .modal-sub {
+    white-space: normal;
+    overflow: visible;
+  }
+}
+
+/* На телефоне действия уходят под текст: рядом с письмом три кнопки не
+   помещаются и выдавливали бы сам текст. */
+@media (max-width: 640px) {
+  .approval.support-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .approval.support-row .ap-actions {
+    flex-direction: row;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+  }
+
+  .support-row-shot img {
+    width: 120px;
   }
 }

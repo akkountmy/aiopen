@@ -13,7 +13,7 @@ process.env.DSH_DATA_DIR = tmpRoot;
 process.env.DSH_HOME = tmpRoot;
 
 const { MEMORY_LIMITS, memoryPromptText, memoryToolReply, normalizeFact } = await import('../src/memory.mjs');
-const { listSkills, skillBody, skillsPromptText } = await import('../src/skills.mjs');
+const { listSkills, skillBody, skillsPromptText, skillIds } = await import('../src/skills.mjs');
 const { checkDocument, formatCheckReport } = await import('../src/doccheck.mjs');
 const { TOOL_DEFS, executeTool } = await import('../src/tools.mjs');
 const { systemPrompt } = await import('../src/prompt.mjs');
@@ -52,11 +52,16 @@ test('навыки: каталог в промпте короткий и пер�
   const text = skillsPromptText();
   assert.match(text, /office-docx/);
   assert.match(text, /use_skill/);
-  /* Планка ловит раздувание каталога, а не рост числа навыков: их стало 27
-     (добавились строительные), и при описании до 300 знаков каталог занимает
-     около 7,5 тыс. знаков. Предел в 8 тыс. — это ~295 знаков на навык, то есть
-     по-прежнему короткая справка, а не простыня. */
-  assert.ok(text.length < 8000, `каталог навыков раздулся: ${text.length} знаков`);
+  /* Планка ловит раздувание каталога, а не рост числа навыков: описание в
+     src/skills.mjs уже обрезано до 240 знаков, поэтому каталог растёт ровно на
+     навык — 45 навыков дают ~11 тыс. знаков, и это норма. Краснеть тест должен
+     на простыне: когда в среднем на навык уходит больше 300 знаков. */
+  const ids = skillIds();
+  const perSkill = Math.round(text.length / ids.length);
+  assert.ok(
+    perSkill < 300,
+    `каталог навыков раздулся: ${perSkill} знаков на навык (${text.length} знаков на ${ids.length} навыков)`
+  );
 });
 
 test('навыки: структура и наглядность ответа в диалоге', () => {

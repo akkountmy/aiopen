@@ -6,6 +6,7 @@ import {
   ADMIN,
   BILLING,
   BUDGET,
+  CAPACITY,
   DATA_DIR,
   DEVICE,
   DEVICE_KINDS,
@@ -16,6 +17,7 @@ import {
   SECURITY,
   SESSION,
   SIGNUP,
+  SUPPORT_DIR,
   TRUST_PROXY,
   chargeUsd,
   ensureDirs,
@@ -39,7 +41,7 @@ import { buildProjectContext } from './src/projectcontext.mjs';
 import { renderTaskState } from './src/taskstate.mjs';
 import { BACKUP_DEFAULTS, backupsDir, listBackups, snapshotState, startAutoBackup } from './src/backup.mjs';
 import { docEngines } from './src/doc/index.mjs';
-import { approvalMessage, notifyAdmin, suspicionMessage } from './src/notify.mjs';
+import { approvalMessage, notifyAdmin, supportMessage, supportPushText, suspicionMessage } from './src/notify.mjs';
 import { issueOpenLink, resolveOpenLink, asciiFileName, OPEN_PREFIX } from './src/openlink.mjs';
 import { clearPresence, isUserActive, touchPresence } from './src/presence.mjs';
 import { proofreadText } from './src/proofread.mjs';
@@ -99,9 +101,12 @@ import { webSearch, fetchUrl, assertPublicUrl, assertResolvesPublic } from './sr
 import { browserStatus } from './src/browser.mjs';
 import { ensureObscura, obscuraConfigured, obscuraInfo } from './src/obscura.mjs';
 import { describeTrim } from './src/trim.mjs';
+import { squeezeStaleContext, startContextCompactor } from './src/contextkeep.mjs';
 import { describeProfile } from './src/model.mjs';
 import { describeReview } from './src/review.mjs';
 import { recordQuality, qualityRecord, readQuality, summarizeQuality, formatQuality, kindLabel as qualityKindLabel } from './src/quality.mjs';
+import { BusyError, createGate, createLoopMonitor, memoryStats } from './src/capacity.mjs';
+import { attachText, storeAttachText } from './src/attachtext.mjs';
 
 ensureDirs();
 store.init({ adminUsername: ADMIN.username, adminPassword: ADMIN.password });
@@ -111,10 +116,18 @@ const loginUserHits = new RateLimiter({ windowMs: SECURITY.loginWindowMs, max: S
 const transcribeHits = new RateLimiter({ windowMs: 60 * 60 * 1000, max: 120 });
 const proofreadHits = new RateLimiter({ windowMs: 60 * 60 * 1000, max: 240 });
 const signupHits = new RateLimiter({ windowMs: 60 * 60 * 1000, max: SIGNUP.maxPerIpPerHour });
+/* Обращения в поддержку: десять в час на аккаунт. Потолок не для того, чтобы
+   кого-то ограничивать, а чтобы случайный сбой клиента не завалил кабинет
+   администратора сотней одинаковых сообщений. */
+const supportHits = new RateLimiter({ windowMs: 60 * 60 * 1000, max: 10 });
+/* Отправка сообщений: шестьдесят за десять минут на аккаунт. Порог заведомо
+   выше живой работы (человек столько не пишет), но останавливает скрипт,
+   который ставит в очередь сотни задач и занимает все места сервиса. */
+const messageHits = new RateLimiter({ windowMs: 10 * 60 * 1000, max: CAPACITY.messagesPerUser });
 /* Идущие ответы: ключ — «пользователь:диалог». Один и тот же диалог не может
    генерироваться дважды (иначе сообщения перепутаются), но разные диалоги
-   считаются независимо — так ноутбук и телефон работают параллельно. Потолка на
-   аккаунт нет: LIMITS.agentConcurrencyPerUser = 0 значит «сколько угодно». */
+   считаются независимо — так ноутбук и телефон работают параллельно. Потолок
+   на аккаунт — LIMITS.agentConcurrencyPerUser (по умолчанию три). */
 const runningChats = new Set();
 const runningByUser = new Map();
 const attachmentQueue = new Set();
@@ -125,9 +138,52 @@ const attachmentQueue = new Set();
    перезагрузить, уйти в другой проект, открыть диалог с телефона — при
    возвращении клиент получает готовый снимок и продолжает живой поток.
    Останавливает задачу только человек (кнопка «Стоп») или конец работы агента. */
-/* Сколько держим завершённый запуск для позднего переподключения. */
-const RUN_KEEP_MS = 15 * 60 * 1000;
+/* Сколько держим завершённый запуск для позднего переподключения. Три минуты:
+   этого хватает перезагрузить вкладку или вернуться с другого диалога, а память
+   не копит полные тексты ответов за прошлый час. */
+const RUN_KEEP_MS = 3 * 60 * 1000;
+/* Сколько символов ответа держим в памяти прогона. Двести тысяч — это втрое
+   больше самого длинного реального ответа агента; переподключение отдаёт
+   последние двадцать тысяч (см. attachRun), поэтому копия целиком не нужна. */
+const RUN_TEXT_KEEP = 200000;
 const runs = new Map();
+
+/* Вход в работу: общий семафор прогонов. Он защищает контейнер, а не человека:
+   в одном процессе живут Chromium, Python и истории диалогов, поэтому
+   одновременных ответов не может быть сколько угодно. Запрос, которому не
+   хватило места, коротко ждёт в очереди и получает понятный отказ, если места
+   так и не появилось (см. src/capacity.mjs). */
+const runGate = createGate({
+  limit: CAPACITY.maxRuns,
+  waitMs: CAPACITY.runWaitMs,
+  maxWaiting: CAPACITY.maxWaiting,
+});
+const loopMonitor = createLoopMonitor();
+
+/* Место для нового ответа на HTTP-пути. Возвращает { slot } или { rejected: true }
+   (тогда ответ человеку уже отправлен). Слот передаётся в createRun, а
+   возвращает его finishRun — на любом исходе. */
+async function acquireRunSlotOrReject(res) {
+  if (!(CAPACITY.maxRuns > 0)) return { slot: null };
+  const abortWait = new AbortController();
+  const onClose = () => abortWait.abort();
+  res.on('close', onClose);
+  try {
+    return { slot: await runGate.acquire({ signal: abortWait.signal }) };
+  } catch (error) {
+    if (!(error instanceof BusyError)) throw error;
+    const seconds = Math.max(1, Math.round((error.retryAfterMs || 5000) / 1000));
+    sendError(
+      res,
+      503,
+      `Сервис сейчас загружен: одновременно идёт предел ответов. Место освободится в течение минуты — повторите через ${seconds} с, задача не потеряется.`,
+      { 'Retry-After': String(seconds) },
+    );
+    return { slot: null, rejected: true };
+  } finally {
+    res.off('close', onClose);
+  }
+}
 const runByChat = new Map();
 const chatRunKey = (userId, chatId) => `${userId}:${chatId}`;
 
@@ -167,7 +223,7 @@ function activeRunsFor(userId) {
     .map(publicRun);
 }
 
-function createRun({ user, project, chat, attempts = 0 }) {
+function createRun({ user, project, chat, attempts = 0, release = null }) {
   const run = {
     id: uid('run_'),
     userId: user.id,
@@ -189,7 +245,46 @@ function createRun({ user, project, chat, attempts = 0 }) {
     budget: null,
     subscribers: new Set(),
     controller: new AbortController(),
+    /* Место в общем семафоре прогонов: finishRun обязан его вернуть, иначе
+       после одного зависшего ответа сервис навсегда решит, что места нет. */
+    release: typeof release === 'function' ? release : null,
+    stoppedBy: '',
+    watchdog: null,
+    deadlineMs: CAPACITY.runMaxMs > 0 ? Date.now() + CAPACITY.runMaxMs : 0,
   };
+  /* Часы задачи. Счётчики шагов не спасают от зависшего соединения с моделью:
+     без потолка по времени такой прогон держит место и диалог вечно, а сервис
+     постепенно упирается в «занято». По часам рвём работу и честно говорим
+     человеку, что случилось. */
+  if (run.deadlineMs) {
+    /* setTimeout принимает задержку, а не момент: 45 минут в миллисекундах не
+       влезают в 32 бита, и Node молча ставит 1 мс — задача обрывалась бы сразу
+       после старта. Поэтому считаем остаток, а не абсолютное время. */
+    const left = Math.max(1000, run.deadlineMs - Date.now());
+    run.watchdog = setTimeout(() => {
+      if (run.status !== 'running') return;
+      run.stoppedBy = 'timeout';
+      console.error(`[capacity] run ${run.id} превысил потолок ${Math.round(CAPACITY.runMaxMs / 60000)} мин — останавливаю`);
+      try {
+        run.controller.abort();
+      } catch {
+        /* нечего отменять — ниже всё равно закроем прогон */
+      }
+      /* Если модель не отдала управление даже после abort (зависший fetch без
+         таймаута, чужой процесс), закрываем прогон принудительно: место и
+         диалог важнее, чем надежда на аккуратный catch. */
+      const force = setTimeout(() => {
+        if (run.status !== 'running') return;
+        try {
+          finishRun(run, 'error');
+        } catch (error) {
+          console.error('[capacity]', error?.message || error);
+        }
+      }, 20000);
+      force.unref?.();
+    }, left);
+    run.watchdog.unref?.();
+  }
   runs.set(run.id, run);
   runByChat.set(chatRunKey(user.id, chat.id), run);
   runningChats.add(chatRunKey(user.id, chat.id));
@@ -247,8 +342,19 @@ function enqueueChatTask(chat, job) {
   return item;
 }
 
-function startQueuedRun(chat, user, project, item) {
-  const run = createRun({ user, project, chat });
+async function startQueuedRun(chat, user, project, item) {
+  /* Очередь диалога не обходит общий потолок: иначе сто человек с очередями
+     снова получили бы сто одновременных ответов. Места нет — задача остаётся
+     в очереди, и её поднимет повтор через двадцать секунд. */
+  let slot = null;
+  if (CAPACITY.maxRuns > 0) {
+    try {
+      slot = await runGate.acquire({ waitMs: 0 });
+    } catch {
+      return null;
+    }
+  }
+  const run = createRun({ user, project, chat, release: slot });
   void executeRun(run, {
     text: item.text,
     attachmentIds: item.attachmentIds || [],
@@ -256,6 +362,43 @@ function startQueuedRun(chat, user, project, item) {
     isFirstMessage: chat.messages.length === 0,
   });
   return run;
+}
+
+/* Запуск следующей задачи из очереди диалога. Отдельной функцией, потому что
+   вызывается из двух мест: после завершения ответа и повтором, когда места в
+   семафоре не нашлось. */
+function pumpChatQueue(chat, user, project) {
+  if (liveRunForChat(user.id, chat.id)) return;
+  if (!Array.isArray(chat.queue) || !chat.queue.length) return;
+  /* Нет средств или висит запрос на подтверждение — очередь ждёт человека:
+     молча тратить деньги или обходить подтверждение нельзя. */
+  if (user.role !== 'admin' && (Number(user.creditUsd || 0) <= 0 || store.pendingApprovalFor(project.id))) return;
+  const item = chat.queue.shift();
+  store.saveChat(chat.id, chatFilePayload(chat));
+  void startQueuedRun(chat, user, project, item).then((run) => {
+    if (run) return;
+    /* Места не было: возвращаем задачу на своё место и пробуем снова, когда
+       кто-то освободит слот. Ничего не теряется и человеку не нужно ничего
+       нажимать. */
+    const fresh = store.getChat(chat.id, user.id);
+    if (!fresh) return;
+    if (!Array.isArray(fresh.queue)) fresh.queue = [];
+    fresh.queue.unshift(item);
+    store.saveChat(fresh.id, chatFilePayload(fresh));
+    const timer = setTimeout(() => {
+      try {
+        const again = store.getChat(chat.id, user.id);
+        if (!again) return;
+        const againProject = store.getProject(again.projectId, user.id);
+        const againUser = store.getUser(user.id);
+        if (!againProject || !againUser) return;
+        pumpChatQueue(again, againUser, againProject);
+      } catch (error) {
+        console.error('[queue]', error?.message || error);
+      }
+    }, 20000);
+    timer.unref?.();
+  });
 }
 
 /* Следующая задача из очереди стартует сама, когда предыдущая закончилась
@@ -266,18 +409,12 @@ function startNextQueuedRun(previous, status) {
   previous.queueStarted = true;
   const timer = setTimeout(() => {
     try {
-      if (liveRunForChat(previous.userId, previous.chatId)) return;
       const chat = store.getChat(previous.chatId, previous.userId);
-      if (!chat || !Array.isArray(chat.queue) || !chat.queue.length) return;
+      if (!chat) return;
       const project = store.getProject(chat.projectId, previous.userId);
       const user = store.getUser(previous.userId);
       if (!project || !user) return;
-      /* Нет средств или висит запрос на подтверждение — очередь ждёт человека:
-         молча тратить деньги или обходить подтверждение нельзя. */
-      if (user.role !== 'admin' && (Number(user.creditUsd || 0) <= 0 || store.pendingApprovalFor(project.id))) return;
-      const item = chat.queue.shift();
-      store.saveChat(chat.id, chatFilePayload(chat));
-      startQueuedRun(chat, user, project, item);
+      pumpChatQueue(chat, user, project);
     } catch (error) {
       console.error('[queue]', error?.message || error);
     }
@@ -291,7 +428,11 @@ function publishRun(run, data) {
   if (run.status !== 'running' && data.type !== 'end') return;
   run.seq += 1;
   const event = { ...data, runId: run.id };
-  if (data.type === 'delta') run.text += data.text || '';
+  if (data.type === 'delta') {
+    /* Текст ответа держим с потолком: при переподключении он уходит снимком, и
+       держать в памяти мегабайты незачем. Полная версия уже на диске. */
+    run.text = run.text.length > RUN_TEXT_KEEP ? (run.text + (data.text || '')).slice(-RUN_TEXT_KEEP) : run.text + (data.text || '');
+  }
   else if (data.type === 'reasoning') run.reasoning = (run.reasoning + (data.text || '')).slice(-24000);
   else if (data.type === 'tool') {
     const known = run.tools.find((tool) => tool.id === data.id);
@@ -360,6 +501,10 @@ function attachRun(res, run) {
 
 function finishRun(run, status) {
   if (run.status !== 'running') return;
+  if (run.watchdog) {
+    clearTimeout(run.watchdog);
+    run.watchdog = null;
+  }
   publishRun(run, { type: 'end', status });
   run.status = status;
   run.finishedMs = Date.now();
@@ -368,6 +513,18 @@ function finishRun(run, status) {
   const left = (runningByUser.get(run.userId) || 1) - 1;
   if (left > 0) runningByUser.set(run.userId, left);
   else runningByUser.delete(run.userId);
+  /* Место в общем семафоре возвращаем ровно один раз: сам release защищён от
+     повторного вызова, а здесь важно, чтобы он случился на любом исходе —
+     завершение, ошибка, «Стоп», потолок времени, принудительное закрытие. */
+  if (run.release) {
+    const release = run.release;
+    run.release = null;
+    try {
+      release();
+    } catch (error) {
+      console.error('[capacity]', error?.message || error);
+    }
+  }
   run.subscribers.clear();
   store.setChatRunning(run.chatId, null);
   const timer = setTimeout(() => {
@@ -388,13 +545,17 @@ function finishRun(run, status) {
    перезапускалась бесконечно. После исчерпания попыток в диалоге остаётся
    честное сообщение — и только тогда человека просят продолжить вручную. */
 const RESUME_MAX_ATTEMPTS = 10;
-/* Старые пометки о перезапуске не воскрешаем бесконечно: задача недельной
-   давности уже не та, что была, и тратить на неё деньги без спроса нельзя.
-   Но и суток мало: выкладка или длинный сбой не должны терять работу. */
-const RESUME_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+/* Контекст не истекает по возрасту: пометку о перезапуске поднимаем, сколько бы
+   времени ни прошло. Раньше здесь стоял недельный предел — из-за него работа
+   человека пропадала из-за одной даты, хотя всё сделанное лежало на диске.
+   Возраст заменён сжатием: старый контекст перед продолжением сворачивается в
+   конспект (src/contextkeep.mjs), поэтому давняя задача стоит столько же
+   токенов, сколько свежая. */
 /* Как часто сохранять историю идущей задачи. Компромисс: потерять при сбое
-   успевают несколько секунд работы, а диск не переписывается на каждый токен. */
-const PROGRESS_SAVE_MS = 8000;
+   успевают десяток секунд работы, а диск не переписывается на каждый токен.
+   При полусотне одновременных задач каждый лишний сброс на диск — это мегабайты
+   JSON и заметная работа для единственного процесса. */
+const PROGRESS_SAVE_MS = 20000;
 const resumingChats = new Set();
 
 function chatFilePayload(chat) {
@@ -457,8 +618,6 @@ function resumableTurn(chat) {
   if (last.role !== 'assistant' || !last.interrupted || last.resumeFailed) return null;
   const text = String(last.error || last.content || '');
   if (!/перезапуск/i.test(text)) return null;
-  const at = Date.parse(last.at || '') || 0;
-  if (at && Date.now() - at > RESUME_MAX_AGE_MS) return null;
   const prev = messages[messages.length - 2];
   if (prev?.role !== 'user') return null;
   return { user: prev, drop: true };
@@ -522,9 +681,9 @@ function repairInterruptedHistory(chat) {
   return missing.length;
 }
 
-/* Запуск продолжения. Возвращает true, если новая работа действительно
-   началась. Вызывается и при старте сервиса, и при входе человека — повторно
-   задача не запустится: живую работу отсекает runByChat. */
+/* Давний контекст сворачивается в конспект перед продолжением — это и есть
+   «раз в месяц» на стороне задачи. Само сжатие живёт в src/contextkeep.mjs:
+   тот же приём раз в сутки применяется и к диалогам, которых давно нет. */
 function resumeChat(meta, user, source = 'startup') {
   if (resumingChats.has(meta.id)) return false;
   if (liveRunForChat(user.id, meta.id)) return false;
@@ -555,16 +714,16 @@ function resumeChat(meta, user, source = 'startup') {
   /* За задачу, прерванную до появления счётчика, считаем одну попытку. */
   const attempts = meta.running ? (Number(meta.running.attempts) || 0) + 1 : 1;
   const since = Date.parse(meta.running?.startedAt || turn.user.at || '') || 0;
-  const tooOld = Boolean(since) && Date.now() - since > RESUME_MAX_AGE_MS;
-  if (attempts > RESUME_MAX_ATTEMPTS || tooOld) {
+  /* Возраст больше не отменяет задачу: контекст хранится всегда. Ограничение
+     осталось одно — число подряд идущих попыток, иначе задача, которая сама
+     роняет процесс, перезапускалась бы бесконечно. */
+  if (attempts > RESUME_MAX_ATTEMPTS) {
     store.setChatRunning(meta.id, null);
     if (turn.drop) chat.messages.pop();
     chat.messages.push({
       role: 'assistant',
       content: '',
-      error: tooOld
-        ? 'Задача была прервана слишком давно, поэтому автоматически продолжать её я не стал. Напишите «продолжи» — и я подхвачу её с сохранённого места.'
-        : `Задача прерывалась уже ${RESUME_MAX_ATTEMPTS} раза подряд. Автоматически продолжать её не буду, чтобы не зациклиться. Напишите «продолжи» — и я подхвачу её с сохранённого места.`,
+      error: `Задача прерывалась уже ${RESUME_MAX_ATTEMPTS} раза подряд. Автоматически продолжать её не буду, чтобы не зациклиться. Напишите «продолжи» — и я подхвачу её с сохранённого места.`,
       interrupted: true,
       resumeFailed: true,
       at: nowIso(),
@@ -580,7 +739,21 @@ function resumeChat(meta, user, source = 'startup') {
     /* Пометку прежней версии убрали — фиксируем это до запуска, чтобы при
        следующем сбое вопрос снова был последним сообщением. */
     if (turn.drop) store.saveChat(chat.id, chatFilePayload(chat));
-    const run = createRun({ user, project, chat, attempts });
+    /* Продолжение давней задачи начинается со сжатого контекста: месяц и
+       больше — значит история уже не нужна целиком, достаточно конспекта.
+       Сжимаем до createRun, чтобы модель не получила старое окно в первом же
+       запросе. */
+    squeezeStaleContext(chat, project, since, 'resume');
+    /* Подъём прерванных задач тоже считается: если после падения разом
+       помечены сорок диалогов, поднимать все сразу — верный способ упасть
+       снова. Не хватило места — задача останется помеченной и поднимется
+       следующим стартом или при входе человека. */
+    const slot = CAPACITY.maxRuns > 0 ? runGate.reserve() : null;
+    if (CAPACITY.maxRuns > 0 && !slot) {
+      console.log(`[resume] диалог ${meta.id}: нет свободного места (${CAPACITY.maxRuns} занято) — продолжу позже`);
+      return false;
+    }
+    const run = createRun({ user, project, chat, attempts, release: slot });
     const isFirst = chat.messages.filter((item) => item.role === 'user').length <= 1;
     console.log(`[resume] диалог ${chat.id}: продолжаю автоматически (попытка ${attempts}, ${source})`);
     void executeRun(run, {
@@ -643,6 +816,12 @@ function resumeInterruptedRuns() {
   if (started) console.log(`[resume] автоматически продолжаю задач: ${started}`);
 }
 
+/* Ежемесячное сжатие старого контекста живёт в src/contextkeep.mjs: раз в сутки
+   тик находит диалоги, которых не касались месяц и больше, и сжимает только
+   раздувшуюся историю. Так «контекст хранится всегда» не превращается в «платим
+   за всё всегда»: к давнему диалогу модель подходит с конспектом, а полный текст
+   лежит файлом в `.history/` проекта. */
+
 const MIME = {
   '.html': 'text/html; charset=utf-8',
   '.htm': 'text/html; charset=utf-8',
@@ -704,8 +883,8 @@ function sendJson(res, status, data, extraHeaders = {}) {
   res.end(body);
 }
 
-function sendError(res, status, message) {
-  sendJson(res, status, { error: message });
+function sendError(res, status, message, extraHeaders = {}) {
+  sendJson(res, status, { error: message }, extraHeaders);
 }
 
 function readBody(req, limit) {
@@ -1097,6 +1276,139 @@ function serializeAttachment(att) {
   };
 }
 
+/* --- поддержка: сообщения от пользователя ---
+   Обращение приходит из окна «Поддержка» и попадает в кабинет администратора
+   отдельным блоком. Скриншот передаётся data-URL'ом в том же JSON (клиент
+   заранее сжимает картинку), а на диск ложится обычным файлом в SUPPORT_DIR:
+   так он не раздувает индекс и не теряется при перезапуске. */
+const SUPPORT_KINDS = { problem: 'Проблема', idea: 'Идея', question: 'Вопрос' };
+const SUPPORT_IMAGE_MIME = { 'image/jpeg': '.jpg', 'image/png': '.png', 'image/webp': '.webp' };
+
+function supportKindLabel(kind) {
+  return SUPPORT_KINDS[kind] || 'Обращение';
+}
+
+/* Проверка по «магическим» байтам: браузер присылает и MIME, и содержимое, а
+   верить одним заголовкам нельзя — под видом картинки мог бы приехать скрипт. */
+function looksLikeImage(buffer, mime) {
+  if (mime === 'image/jpeg') return buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff;
+  if (mime === 'image/png') {
+    return buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+  }
+  if (mime === 'image/webp') {
+    return buffer.subarray(0, 4).toString('latin1') === 'RIFF' && buffer.subarray(8, 12).toString('latin1') === 'WEBP';
+  }
+  return false;
+}
+
+function badSupportInput(message, status = 400) {
+  return Object.assign(new Error(message), { status });
+}
+
+/* data-URL → файл. Возвращает описание для записи в индекс или null, если
+   скриншота нет. Ошибки формата — понятные человеку, чтобы он сразу понял,
+   что поправить, и не потерял уже написанный текст. */
+function saveSupportScreenshot(input, id) {
+  if (!input) return null;
+  const raw = String(input?.data || '');
+  if (!raw) return null;
+  const match = /^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/=\s]+)$/.exec(raw);
+  if (!match) throw badSupportInput('Скриншот не принят: подойдёт JPEG, PNG или WebP');
+  const mime = match[1];
+  const buffer = Buffer.from(match[2].replace(/\s+/g, ''), 'base64');
+  if (!buffer.length) throw badSupportInput('Скриншот пустой — выберите файл заново');
+  if (buffer.length > LIMITS.supportScreenshotBytes) {
+    const mb = Math.floor(LIMITS.supportScreenshotBytes / 1024 / 1024);
+    throw badSupportInput(`Скриншот больше ${mb} МБ — пришлите картинку поменьше`, 413);
+  }
+  if (!looksLikeImage(buffer, mime)) throw badSupportInput('Файл не похож на картинку');
+  fs.mkdirSync(SUPPORT_DIR, { recursive: true });
+  const ext = SUPPORT_IMAGE_MIME[mime];
+  const file = `${id}${ext}`;
+  fs.writeFileSync(path.join(SUPPORT_DIR, file), buffer);
+  const asked = safeName(String(input?.name || '')) || `screenshot${ext}`;
+  const name = asked.toLowerCase().endsWith(ext) ? asked : `${asked.replace(/\.[A-Za-z0-9]{1,5}$/, '')}${ext}`;
+  return { file, mime, size: buffer.length, name };
+}
+
+/* Что видит автор обращения и что видит администратор. Скриншот отдаём
+   короткой ссылкой: файл лежит вне папки проекта, и открыть его может только
+   автор или администратор (проверка внутри маршрута). */
+function supportScreenshotPayload(message) {
+  const shot = message.screenshot;
+  if (!shot || !shot.file) return null;
+  return {
+    name: shot.name || 'screenshot',
+    size: shot.size || 0,
+    url: `/api/support/${message.id}/screenshot`,
+  };
+}
+
+function serializeSupportForOwner(message) {
+  return {
+    id: message.id,
+    kind: message.kind,
+    kindLabel: supportKindLabel(message.kind),
+    text: message.text,
+    contact: message.contact || '',
+    page: message.page || '',
+    status: message.status,
+    createdAt: message.createdAt,
+    readAt: message.readAt || null,
+    doneAt: message.doneAt || null,
+    screenshot: supportScreenshotPayload(message),
+  };
+}
+
+function serializeSupportForAdmin(message) {
+  return {
+    ...serializeSupportForOwner(message),
+    userId: message.userId,
+    username: message.username,
+    displayName: message.displayName || message.username,
+    ua: message.ua || '',
+  };
+}
+
+/* Кому уходит сигнал: все администраторы, кроме автора обращения. Себе о своём
+   же сообщении уведомление не нужно. */
+function supportAdmins(excludeId) {
+  return store
+    .users()
+    .filter((item) => item.role === 'admin' && !item.disabled && item.id !== excludeId)
+    .map((item) => item.id);
+}
+
+/* Уведомления не должны ломать отправку: обращение уже сохранено, а Telegram
+   или push могут быть недоступны. Ошибки только пишем в журнал. */
+function announceSupport(message) {
+  const kindLabel = supportKindLabel(message.kind);
+  notifyAdmin(
+    supportMessage({
+      kind: message.kind,
+      kindLabel,
+      username: message.username,
+      displayName: message.displayName,
+      text: message.text,
+      contact: message.contact,
+      page: message.page,
+      ua: message.ua,
+      hasScreenshot: Boolean(message.screenshot),
+    }),
+  ).catch((error) => console.warn('[support] telegram не отправлен:', error?.message || error));
+  const admins = supportAdmins(message.userId);
+  if (!admins.length) return;
+  const text = supportPushText({ kindLabel, username: message.displayName || message.username, text: message.text });
+  pushToUsers(admins, {
+    title: text.title,
+    body: text.body,
+    url: '/?support=admin',
+    kind: 'support',
+    tag: 'dsh-support',
+    onlyWhenAway: false,
+  }).catch((error) => console.warn('[support] push не отправлен:', error?.message || error));
+}
+
 function chatMeta(chat) {
   return {
     id: chat.id,
@@ -1278,6 +1590,9 @@ function bootstrapPayload(user) {
        той, что идёт, вместо пустого экрана. */
     runs: activeRunsFor(user.id),
     keys: { vision: keyStatus().vision },
+    /* Администратору сразу видно, есть ли неразобранные обращения: цифра стоит
+       на кнопке «Поддержка» и в меню профиля. */
+    support: user.role === 'admin' ? { unread: store.supportUnread() } : { unread: 0 },
     limits: {
       maxAttachments: LIMITS.maxAttachmentsPerMessage,
       maxFileMb: Math.round(LIMITS.maxAttachmentBytes / 1024 / 1024),
@@ -1580,7 +1895,7 @@ async function processAttachment(att, workspace) {
     const buffer = fs.readFileSync(full);
     if (att.kind === 'image') {
       const result = await describeImage({ buffer, mime: att.mime, name: att.name });
-      store.updateAttachment(att.id, { status: 'ready', text: result.text, warnings: [] });
+      store.updateAttachment(att.id, { status: 'ready', ...storeAttachText(att.id, result.text), warnings: [] });
       return;
     }
     const parsed = extractDocumentText(buffer, att.name, att.mime, { maxChars: LIMITS.maxFileTextChars });
@@ -1592,7 +1907,11 @@ async function processAttachment(att, workspace) {
       });
       return;
     }
-    store.updateAttachment(att.id, { status: 'ready', text: parsed.text, warnings: parsed.warnings });
+    store.updateAttachment(att.id, {
+      status: 'ready',
+      ...storeAttachText(att.id, parsed.text),
+      warnings: parsed.warnings,
+    });
   } catch (error) {
     store.updateAttachment(att.id, {
       status: 'error',
@@ -1631,20 +1950,23 @@ function attachmentContext(attachments) {
   let budget = LIMITS.attachmentsContextChars;
   for (const att of attachments) {
     let body;
+    /* Полный текст может лежать отдельным файлом (см. src/attachtext.mjs):
+       в индексе хранятся только первые 2 000 знаков. */
+    const full = attachText(att, LIMITS.maxFileTextChars);
     if (att.kind === 'image') {
-      body = `[Изображение «${att.name}» — распознавание]\n${att.text || '(не удалось распознать)'}`;
+      body = `[Изображение «${att.name}» — распознавание]\n${full || '(не удалось распознать)'}`;
       if (att.size <= 8 * 1024 * 1024 && images.length < 4) {
-        const full = resolveSafe(store.workspaceDir(att.projectId), att.relPath);
+        const filePath = resolveSafe(store.workspaceDir(att.projectId), att.relPath);
         try {
-          const buf = fs.readFileSync(full);
+          const buf = fs.readFileSync(filePath);
           const mime = att.mime && att.mime.startsWith('image/') ? att.mime : 'image/png';
           images.push(`data:${mime};base64,${buf.toString('base64')}`);
         } catch {
           /* ignore */
         }
       }
-    } else if (att.text) {
-      body = `[Файл «${att.name}» (${kindLabel(att.kind)}), путь: ${att.relPath}]\n${att.text}`;
+    } else if (full) {
+      body = `[Файл «${att.name}» (${kindLabel(att.kind)}), путь: ${att.relPath}]\n${full}`;
     } else {
       body = `[Файл «${att.name}» (${kindLabel(att.kind)}), путь: ${att.relPath}] — текст не извлечён.`;
     }
@@ -1732,6 +2054,20 @@ async function handleMessageStream(req, res, user, chatId) {
     }
   }
 
+  /* Антиспам на отправку: порог заведомо выше живой переписки, но скрипт,
+     который ставит сотни задач, упирается в него, а не в память сервиса. */
+  const msgHits = messageHits.check(user.id);
+  if (!msgHits.ok) {
+    const seconds = Math.max(1, Math.ceil(msgHits.retryAfterMs / 1000));
+    return sendError(
+      res,
+      429,
+      `Слишком много сообщений подряд: лимит ${CAPACITY.messagesPerUser} за 10 минут. Подождите ${seconds} с — очередь и ответы никуда не денутся.`,
+      { 'Retry-After': String(seconds) },
+    );
+  }
+  messageHits.hit(user.id);
+
   const body = await readJsonBody(req, LIMITS.jsonBody);
   const text = String(body.text || '').trim();
   const attachmentIds = Array.isArray(body.attachmentIds) ? body.attachmentIds.slice(0, LIMITS.maxAttachmentsPerMessage) : [];
@@ -1775,19 +2111,25 @@ async function handleMessageStream(req, res, user, chatId) {
       run: publicRun(active),
     });
   }
-  /* Потолка на одновременные ответы у аккаунта нет: диалоги независимы, и
-     десяток вкладок может работать сразу. Предел включается только явной
-     настройкой LIMITS.agentConcurrencyPerUser > 0 (например, для отладки). */
+  /* Потолок на аккаунт: три одновременных ответа по умолчанию. Диалоги
+     независимы, поэтому ноутбук и телефон работают вместе, но двадцать вкладок
+     не занимают все места сервиса у остальных. Меняется DSHOW_RUNS_PER_USER. */
   const busy = runningByUser.get(user.id) || 0;
   if (LIMITS.agentConcurrencyPerUser > 0 && busy >= LIMITS.agentConcurrencyPerUser) {
     return sendError(
       res,
       429,
       `Сейчас идёт ${busy} ${busy === 1 ? 'ответ' : 'ответа'} — дождитесь завершения хотя бы одного.`,
+      { 'Retry-After': '20' },
     );
   }
+  /* Общий потолок сервиса: столько ответов одновременно, сколько выдерживает
+     контейнер. Если места нет — коротко ждём в очереди, а потом честно говорим
+     «занято» с указанием, через сколько секунд попробовать. */
+  const opened = await acquireRunSlotOrReject(res);
+  if (opened.rejected) return;
 
-  const run = createRun({ user, project, chat });
+  const run = createRun({ user, project, chat, release: opened.slot });
   /* Текущее соединение подписывается на запуск. Работа идёт отдельно от него:
      обрыв этого сокета (перезагрузка страницы, уход на другой проект, сон
      телефона) задачу больше не прерывает. */
@@ -2080,9 +2422,16 @@ async function executeRun(run, job) {
        отправляем уведомление на все устройства пользователя. */
     notifyRunPush({ user, project, chat, run, status: 'done', text: assistantText, approval: budgetInfo, outcome });
   } catch (error) {
-    const aborted = error?.name === 'AbortError' || controller.signal.aborted;
-    const message = aborted ? 'Остановлено' : describeFailure(error);
-    if (!aborted) console.error('[agent]', error?.message || error);
+    /* Потолок времени — это не «человек нажал Стоп»: говорим прямо, что работу
+       остановили часы, и предлагаем продолжить с конкретного места. */
+    const timedOut = run.stoppedBy === 'timeout';
+    const aborted = !timedOut && (error?.name === 'AbortError' || controller.signal.aborted);
+    const message = timedOut
+      ? `Остановил задачу: она шла дольше ${Math.round(CAPACITY.runMaxMs / 60000)} минут. Напишите, что сделать в первую очередь — продолжу с этого места.`
+      : aborted
+        ? 'Остановлено'
+        : describeFailure(error);
+    if (!aborted && !timedOut) console.error('[agent]', error?.message || error);
     if (assistantText) {
       chat.messages.push({ role: 'assistant', content: assistantText, interrupted: true, at: nowIso() });
     } else {
@@ -2090,14 +2439,15 @@ async function executeRun(run, job) {
     }
     saveRunChat(chat);
     stream.emit({ type: 'error', message, aborted });
-    finishRun(run, aborted ? 'stopped' : 'error');
-    startNextQueuedRun(run, aborted ? 'stopped' : 'error');
+    const finalStatus = timedOut ? 'error' : aborted ? 'stopped' : 'error';
+    finishRun(run, finalStatus);
+    startNextQueuedRun(run, finalStatus);
     notifyRunPush({
       user,
       project,
       chat,
       run,
-      status: aborted ? 'stopped' : 'error',
+      status: finalStatus,
       text: assistantText,
       errorText: message,
     });
@@ -2247,7 +2597,13 @@ function beginDashboardRun(task, { manual = false } = {}) {
     title: `${block ? block.title : 'Дашборд'} — ${label}`,
   });
   const chat = store.getChat(chatMeta.id, user.id) || chatMeta;
-  const run = createRun({ user, project, chat });
+  /* Постоянное задание тоже занимает место в общем потолке: иначе планировщик
+     в обход ограничителя поднял бы десятки ответов и выел память. */
+  const slot = CAPACITY.maxRuns > 0 ? runGate.reserve() : null;
+  if (CAPACITY.maxRuns > 0 && !slot) {
+    return { ok: false, reason: 'сервис занят — попробую позже', retryMinutes: 15 };
+  }
+  const run = createRun({ user, project, chat, release: slot });
   run.source = 'dashboard';
   run.dashboardTaskId = task.id;
   /* Материалы задания готовим до старта: и копии в проекте, и текст для модели. */
@@ -2389,7 +2745,7 @@ function assetVersion() {
   const now = Date.now();
   if (now - assetVersionCache.at < 2000) return assetVersionCache.value;
   let stamp = 0;
-  for (const name of ['index.html', 'styles.css', 'app.js', 'theme.js', 'favicon.svg']) {
+  for (const name of ['index.html', 'styles.css', 'app.js', 'attach-shrink.js', 'theme.js', 'favicon.svg']) {
     try {
       stamp = Math.max(stamp, fs.statSync(path.join(PUBLIC_DIR, name)).mtimeMs);
     } catch {
@@ -2714,15 +3070,32 @@ async function route(req, res) {
          друг друга.
          browser: чем открывается живая проверка страницы (check_page). Без
          параметра значение только из уже сделанной проверки и не запускает
-         Chromium; ?browser=1 — честный запуск, чтобы видеть состояние в облаке. */
+         Chromium; ?browser=1 — честный запуск, но только для администратора:
+         публичный адрес не должен позволять кому угодно поднимать браузер. */
+      const healthUser = currentUser(req, null);
+      const probe = url.searchParams.get('browser') === '1' && healthUser?.role === 'admin';
       return sendJson(res, 200, {
         ok: true,
         time: nowIso(),
         sessions: sessionSeats(),
         docs: await docEngines(),
         skills: listSkills().length,
-        browser: await browserStatus({ probe: url.searchParams.get('browser') === '1' }),
+        browser: await browserStatus({ probe }),
         stealth: obscuraInfo(),
+        /* Нагрузка: по этим числам видно, когда пора поднимать тариф. Открыто,
+           как и остальное в /api/health: имён, текстов и адресов здесь нет. */
+        load: {
+          runs: runGate.stats(),
+          memory: memoryStats(),
+          loopLagMs: loopMonitor.stats().loopLagMs,
+          activeRuns: [...runs.values()].filter((run) => run.status === 'running').length,
+          limits: {
+            maxRuns: CAPACITY.maxRuns,
+            runsPerUser: CAPACITY.runsPerUser,
+            runMaxMinutes: Math.round(CAPACITY.runMaxMs / 60000),
+            modelTimeoutSeconds: Math.round(CAPACITY.modelTimeoutMs / 1000),
+          },
+        },
       });
     }
 
@@ -2903,6 +3276,79 @@ async function route(req, res) {
       proofreadHits.hit(user.id);
       const result = await proofreadText(text);
       return sendJson(res, 200, result);
+    }
+
+    /* --- поддержка ---
+       Сообщение о проблеме, идея или вопрос. Текст проверяем по длине, скриншот
+       раскладываем в файл. Уведомление администратору (Telegram и push) уходит
+       уже после сохранения: недоступная доставка не должна «съедать» обращение. */
+    if (pathname === '/api/support' && method === 'POST') {
+      const gate = supportHits.check(user.id);
+      if (!gate.ok) {
+        return sendError(res, 429, `Слишком много обращений. Повторите через ${Math.ceil(gate.retryAfterMs / 60000)} мин.`);
+      }
+      const body = await readJsonBody(req, LIMITS.jsonBody);
+      /* Тип приходит из интерфейса, но верить ему на слово нельзя: неизвестный
+         тип — это ошибка клиента, а не повод молча записать «проблему». */
+      const kind = String(body.kind || 'problem').trim();
+      if (!SUPPORT_KINDS[kind]) return sendError(res, 400, 'Неизвестный тип обращения');
+      const text = String(body.text || '').trim();
+      if (!text) return sendError(res, 400, 'Напишите, пожалуйста, что случилось');
+      if (text.length > LIMITS.supportTextChars) {
+        return sendError(res, 400, `Текст длиннее ${LIMITS.supportTextChars} символов`);
+      }
+      const contact = String(body.contact || '').trim().slice(0, LIMITS.supportContactChars);
+      const page = String(body.page || '').trim().slice(0, 200);
+      const ua = String(req.headers['user-agent'] || '').slice(0, 300);
+      const id = uid('sp_');
+      let screenshot = null;
+      try {
+        screenshot = saveSupportScreenshot(body.screenshot, id);
+      } catch (error) {
+        return sendError(res, error.status || 400, error.message);
+      }
+      const message = store.createSupportMessage({
+        id,
+        userId: user.id,
+        username: user.username,
+        displayName: user.displayName || user.username,
+        kind,
+        text,
+        contact,
+        page,
+        ua,
+        screenshot,
+      });
+      supportHits.hit(user.id);
+      announceSupport(message);
+      return sendJson(res, 200, { ok: true, message: serializeSupportForOwner(message) });
+    }
+
+    if (pathname === '/api/support' && method === 'GET') {
+      const messages = store.supportMessages({ userId: user.id, limit: 20 }).map(serializeSupportForOwner);
+      return sendJson(res, 200, { messages });
+    }
+
+    /* Цифра на кнопке у администратора: спрашиваем часто и дёшево, поэтому
+       отдельный короткий маршрут без списка сообщений. */
+    if (pathname === '/api/support/unread' && method === 'GET') {
+      return sendJson(res, 200, { unread: user.role === 'admin' ? store.supportUnread() : 0 });
+    }
+
+    /* Скриншот обращения: отдаём только автору и администратору. Имя файла
+       строим от id записи, поэтому подставить чужой путь снаружи нельзя. */
+    if (parts[1] === 'support' && parts[2] && parts[3] === 'screenshot' && method === 'GET') {
+      const message = store.getSupportMessage(parts[2]);
+      if (!message || !message.screenshot) return sendError(res, 404, 'Файл не найден');
+      if (user.role !== 'admin' && message.userId !== user.id) return sendError(res, 403, 'Недостаточно прав');
+      let full = null;
+      try {
+        full = resolveSafe(SUPPORT_DIR, message.screenshot.file);
+      } catch {
+        full = null;
+      }
+      if (!full || !fs.existsSync(full)) return sendError(res, 404, 'Файл не найден');
+      return sendFile(res, full, { name: message.screenshot.name });
     }
 
     if (pathname === '/api/projects' && method === 'POST') {
@@ -3236,9 +3682,11 @@ async function route(req, res) {
               return sendError(res, 402, 'На балансе закончились средства. Напишите администратору.');
             }
           }
+          const opened = await acquireRunSlotOrReject(res);
+          if (opened.rejected) return;
           chat.queue.splice(index, 1);
           store.saveChat(chat.id, chatFilePayload(chat));
-          const run = createRun({ user, project, chat });
+          const run = createRun({ user, project, chat, release: opened.slot });
           attachRun(res, run);
           void executeRun(run, {
             text: item.text,
@@ -3732,6 +4180,44 @@ async function route(req, res) {
       return sendJson(res, 200, { approval: updated, budgetUsd });
     }
 
+    /* --- обращения в поддержку: кабинет администратора --- */
+    if (pathname === '/api/admin/support' && method === 'GET') {
+      const admin = requireAdmin(req, res);
+      if (!admin) return;
+      const messages = store.supportMessages({ limit: 200 }).map(serializeSupportForAdmin);
+      return sendJson(res, 200, { messages, unread: store.supportUnread() });
+    }
+    if (parts[1] === 'admin' && parts[2] === 'support' && parts[3] && method === 'POST') {
+      const admin = requireAdmin(req, res);
+      if (!admin) return;
+      const message = store.getSupportMessage(parts[3]);
+      if (!message) return sendError(res, 404, 'Обращение не найдено');
+      const body = await readJsonBody(req, LIMITS.jsonBody);
+      const status = String(body.status || '');
+      const updated = store.setSupportStatus(message.id, status);
+      if (!updated) return sendError(res, 400, 'Неизвестный статус обращения');
+      return sendJson(res, 200, {
+        message: serializeSupportForAdmin(updated),
+        unread: store.supportUnread(),
+      });
+    }
+    if (parts[1] === 'admin' && parts[2] === 'support' && parts[3] && method === 'DELETE') {
+      const admin = requireAdmin(req, res);
+      if (!admin) return;
+      const removed = store.deleteSupportMessage(parts[3]);
+      if (!removed) return sendError(res, 404, 'Обращение не найдено');
+      /* Скриншот удалённого обращения больше никому не нужен: убираем и файл,
+         чтобы папка не росла «сиротами» после чистки кабинета. */
+      if (removed.screenshot?.file) {
+        try {
+          fs.rmSync(path.join(SUPPORT_DIR, removed.screenshot.file), { force: true });
+        } catch (error) {
+          console.warn('[support] файл скриншота не удалён:', error?.message || error);
+        }
+      }
+      return sendJson(res, 200, { ok: true, unread: store.supportUnread() });
+    }
+
     sendError(res, 404, 'Не найдено');
   } catch (error) {
     if (res.headersSent) {
@@ -3785,6 +4271,12 @@ if (process.env.DSHOW_DASHBOARD !== '0') startDashboardScheduler();
    побьётся, переписки и структура вернутся. Выключается DSHOW_BACKUPS=0. */
 if (process.env.DSHOW_BACKUPS !== '0') startAutoBackup();
 
+/* Контекст хранится всегда, поэтому старый диалог обязан дешеветь сам: раз в
+   сутки тик из src/contextkeep.mjs сворачивает в конспект историю диалогов,
+   которых не касались месяц (`DSHOW_CONTEXT_COMPACT_DAYS`). Выключается
+   DSHOW_CONTEXT_COMPACT=0 — это нужно проверкам, которым фоновой тик не нужен. */
+if (process.env.DSHOW_CONTEXT_COMPACT !== '0') startContextCompactor();
+
 /* Отложенные рассылки уведомлений: раз в полминуты проверяем, не пора ли
    отправлять. Выключается DSHOW_PUSH_SCHEDULE=0 — это нужно проверкам. */
 if (process.env.DSHOW_PUSH_SCHEDULE !== '0') startPushScheduler();
@@ -3801,8 +4293,61 @@ if (obscuraConfigured() && !obscuraInfo().ready) {
   timer.unref?.();
 }
 
-process.on('SIGINT', () => {
-  console.log('\nОстановка…');
+/* Остановка по сигналу облака. Amvera при выкладке и перезапуске шлёт SIGTERM,
+   и без обработчика процесс умирает сразу: недописанный индекс, потерянные
+   отложенные сохранения. Закрываем приём, отдаём хранилищу последний шанс и
+   выходим сами, не дожидаясь принудительного kill. */
+let shuttingDown = false;
+function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`\nОстановка по ${signal}…`);
+  try {
+    store.flushNow?.();
+  } catch (error) {
+    console.error('[shutdown]', error?.message || error);
+  }
+  try {
+    loopMonitor.stop();
+  } catch {
+    /* нечего останавливать */
+  }
+  /* server.close() перестаёт принимать новые соединения, но уже открытые
+     потоки задач (SSE) висят до конца работы — а это может быть долго. Облако
+     ждать не станет: через несколько секунд оно прибьёт процесс, и мы рискуем
+     остаться с недописанным индексом. Поэтому сначала отпускаем свободные
+     соединения, а через три секунды — принудительно все и выходим сами. */
   server.close(() => process.exit(0));
-  setTimeout(() => process.exit(0), 3000).unref();
+  try {
+    server.closeIdleConnections?.();
+  } catch {
+    /* сокетов уже нет */
+  }
+  const timer = setTimeout(() => {
+    try {
+      server.closeAllConnections?.();
+    } catch {
+      /* сервер уже закрыт */
+    }
+    process.exit(0);
+  }, 3000);
+  timer.unref?.();
+}
+
+process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+
+/* Аварии, которые не поймал ни один обработчик запроса. Раньше они молча
+   убивали весь сервис у всех пользователей; теперь попадают в журнал с
+   контекстом, а сервис продолжает работать. Если такое сыплется — видно по
+   журналу, а не по «всё пропало». */
+process.on('unhandledRejection', (reason) => {
+  const detail = reason instanceof Error ? reason.stack || reason.message : String(reason);
+  console.error('[process] необработанный отказ:', detail);
 });
+process.on('uncaughtException', (error) => {
+  const detail = error instanceof Error ? error.stack || error.message : String(error);
+  const benign = ['EPIPE', 'ECONNRESET', 'ERR_STREAM_WRITE_AFTER_END'].includes(String(error?.code || ''));
+  console.error(`[process] ${benign ? 'сетевая ошибка' : 'необработанное исключение'}:`, detail);
+});
+

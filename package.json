@@ -10,8 +10,13 @@
   },
   "scripts": {
     "start": "node server.mjs",
+    "test": "node scripts/check.mjs",
+    "test:live": "node scripts/check.mjs --live",
+    "test:json": "node scripts/check.mjs --json",
     "smoke": "node test/smoke.mjs",
     "test:docs": "node test/docs.mjs",
+    "test:legalbench": "node --test test/legalbench.mjs",
+    "legalbench": "node scripts/legalbench.mjs",
     "test:docpreview": "node --test test/docpreview.mjs",
     "test:runs": "node test/runs.mjs",
     "test:queue": "node test/queue.mjs",
@@ -21,7 +26,9 @@
     "test:ui-scroll": "node test/ui-scroll.mjs",
     "test:ui-sheet": "node test/ui-modal-sheet.mjs",
     "test:ui-swipe": "node test/ui-swipe.mjs",
+    "test:ui-support": "node test/ui-support.mjs",
     "test:ui-version": "node test/ui-version.mjs",
+    "test:attach-shrink": "node test/attach-shrink.mjs",
     "test:reasoning": "node --test test/reasoning.mjs",
     "test:browser": "node test/browser.mjs",
     "test:browser-engines": "node test/browser-engines.mjs"

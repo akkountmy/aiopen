@@ -17,6 +17,7 @@ const {
   collapseBlankRuns,
   collapseDiffContext,
   compactText,
+  compactStaleHistory,
   compressHistory,
   createTrimStats,
   describeTrim,
@@ -389,6 +390,40 @@ test('счётчики субагента складываются в общие
   /* Пустые значения не ломают слияние. */
   mergeTrim(total, null);
   assert.equal(total.toolResults, 2);
+});
+
+test('старый контекст сжимается без модели и не теряет полный текст', () => {
+  const localWs = path.join(tmpRoot, 'stale');
+  fs.mkdirSync(localWs, { recursive: true });
+  const history = [];
+  for (let index = 0; index < 40; index++) {
+    history.push({ role: 'user', content: `вопрос номер ${index} `.repeat(40) });
+    history.push({ role: 'assistant', content: `ответ номер ${index} `.repeat(40) });
+  }
+  const chat = { history, memory: '' };
+  const before = historyTokens(chat.history);
+  const result = compactStaleHistory({ chat, workspace: localWs, budget: 2000, keepRecent: 8, config });
+  assert.equal(result.compacted, true);
+  assert.ok(result.after < before, 'история не уменьшилась');
+  assert.ok(result.removed >= 1, 'ничего не срезано');
+  assert.match(String(result.spill), /^\.history\//);
+  /* Полный текст среза остался файлом: read_file его прочитает. */
+  const spilled = fs.readFileSync(path.join(localWs, result.spill), 'utf8');
+  assert.match(spilled, /вопрос номер 0/);
+  /* В памяти диалога — конспект и указание, где искать детали. */
+  assert.match(chat.memory, /Ранее в разговоре \(сжато\)/);
+  assert.match(chat.memory, /\.history\//);
+  /* Маленький диалог не трогаем: сжатие не должно стоить дороже экономии. */
+  const small = {
+    history: [
+      { role: 'user', content: 'привет' },
+      { role: 'assistant', content: 'здравствуйте' },
+    ],
+    memory: '',
+  };
+  const idle = compactStaleHistory({ chat: small, workspace: localWs, budget: 2000, config });
+  assert.equal(idle.compacted, false);
+  assert.equal(small.history.length, 2);
 });
 
 let failed = 0;

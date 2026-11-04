@@ -33,6 +33,10 @@
          поэтому там остаётся системная белая полоса с чёрными значками. -->
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <script src="/theme.js?v=__ASSET_VERSION__"></script>
+    <!-- Сжатие вложений больше 0,7 МБ до отправки на сервер: экономит трафик
+         человека, место на диске и токены распознавания. Подключается отдельным
+         файлом до app.js, чтобы логику можно было проверить тестом. -->
+    <script src="/attach-shrink.js?v=__ASSET_VERSION__"></script>
     <link rel="stylesheet" href="/styles.css?v=__ASSET_VERSION__" />
   </head>
   <body>
@@ -132,11 +136,11 @@
           </div>
           <div class="topbar-right">
             <span id="balanceChip" class="balance-chip hidden" aria-label="Баланс"></span>
-            <!-- Профиль стоит в шапке первым, за ним — «Дашборд», тема и папка.
-                 На телефоне от «Дашборда» остаётся только значок, чтобы шапка не
-                 расползлась, а ник уходит в раскрывающийся список: кнопка профиля
-                 остаётся квадратом, как соседи, и ряд значков справа держит
-                 одинаковый шаг. -->
+            <!-- Профиль стоит в шапке первым, за ним — «Поддержка», «Дашборд»,
+                 тема и папка. На телефоне от «Поддержки» и «Дашборда» остаётся
+                 только значок, чтобы шапка не расползлась, а ник уходит в
+                 раскрывающийся список: кнопка профиля остаётся квадратом, как
+                 соседи, и ряд значков справа держит одинаковый шаг. -->
             <button id="userChip" class="user-chip user-chip-top" type="button" title="Учётная запись" aria-haspopup="menu">
               <!-- Ник идёт первым, значок человечка — за ним: так подпись
                    читается как имя учётной записи, а рисунок только подтверждает
@@ -148,6 +152,21 @@
               </span>
               <svg class="account-glyph" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="7" r="3.2" /><path d="M4.5 16.2c.9-2.7 3-4.2 5.5-4.2s4.6 1.5 5.5 4.2" /></svg>
               <svg class="chev" viewBox="0 0 20 20" aria-hidden="true"><path d="M6 8l4 4 4-4" /></svg>
+            </button>
+            <!-- «Поддержка» стоит перед «Дашбордом»: сообщение о проблеме — первое,
+                 что ищет человек, когда что-то не работает. Значок и подпись те же,
+                 что у «Дашборда», поэтому на телефоне кнопка так же сжимается до
+                 квадрата. Цифра на значке — сколько обращений ещё не прочитал
+                 администратор; обычному пользователю её не показываем. -->
+            <button id="supportBtn" class="btn btn-ghost dash-btn support-btn" type="button" title="Поддержка: сообщить о проблеме или предложить идею" aria-label="Поддержка" aria-haspopup="dialog">
+              <svg class="dash-btn-ico" viewBox="0 0 20 20" aria-hidden="true">
+                <path d="M4 11.4V10a6 6 0 0 1 12 0v1.4" />
+                <rect x="2.6" y="10.4" width="3.3" height="5.2" rx="1.5" />
+                <rect x="14.1" y="10.4" width="3.3" height="5.2" rx="1.5" />
+                <path d="M15.75 15.6v.35a2.35 2.35 0 0 1-2.35 2.35H11" />
+              </svg>
+              <span class="dash-btn-label">Поддержка</span>
+              <span id="supportBadge" class="support-badge" hidden aria-hidden="true"></span>
             </button>
             <button id="dashboardBtn" class="btn btn-ghost dash-btn" type="button" title="Дашборд: постоянные задания" aria-label="Дашборд" aria-pressed="false">
               <svg class="dash-btn-ico" viewBox="0 0 20 20" aria-hidden="true"><rect x="3.2" y="3.2" width="5.6" height="5.6" rx="1.5" /><rect x="11.2" y="3.2" width="5.6" height="5.6" rx="1.5" /><rect x="3.2" y="11.2" width="5.6" height="5.6" rx="1.5" /><rect x="11.2" y="11.2" width="5.6" height="5.6" rx="1.5" /></svg>

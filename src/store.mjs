@@ -23,12 +23,29 @@ import {
   withoutCompanySize,
 } from './dashboard.mjs';
 import { MEMORY_LIMITS, normalizeFact } from './memory.mjs';
+import { dropAttachText } from './attachtext.mjs';
 import { hashPassword, sessionKind, verifyPassword } from './security.mjs';
 import { atomicWrite, nowIso, readJson, uid, uniqueFileName } from './util.mjs';
 
 /* Насколько перекрытие слов должно быть большим, чтобы новый факт считался
    уточнением старого (тогда старый заменяется, а не добавляется рядом). */
 const REPLACE_OVERLAP = 0.6;
+
+/* Пауза перед записью индекса: изменения в пределах этого окна склеиваются в
+   одну запись. Проверкам нужна мгновенная запись — они задают 0. */
+const SAVE_DEBOUNCE_MS = (() => {
+  const value = Number(process.env.DSHOW_SAVE_DEBOUNCE_MS);
+  if (Number.isFinite(value) && value >= 0) return value;
+  return 2500;
+})();
+
+/* До этого размера индекс пишется синхронно на каждое изменение: на сотнях
+   килобайт это доли миллисекунды, а поведение остаётся предсказуемым (проверки
+   читают файл сразу после запроса). Дальше включается склейка записи. */
+const DIRECT_SAVE_LIMIT = (() => {
+  const mb = Number(process.env.DSHOW_SAVE_DIRECT_MB);
+  return (Number.isFinite(mb) && mb >= 0 ? mb : 2) * 1024 * 1024;
+})();
 
 /* Когда в сеансе последний раз что-то делали: свежая отметка, а если её ещё нет
    (сеансы, созданные до появления поля), — момент входа. По этой величине
@@ -160,6 +177,9 @@ function emptyState() {
     attachments: {},
     usage: {},
     approvals: [],
+    /* Обращения из окна «Поддержка»: сообщение о проблеме, идея или вопрос.
+       Скриншот лежит файлом в data/support, здесь — только его описание. */
+    support: [],
     /* Постоянные задания «Дашборда»: шесть блоков на каждый аккаунт. */
     dashboard: [],
     settings: {
@@ -204,6 +224,12 @@ class Store {
   constructor() {
     this.state = emptyState();
     this.loaded = false;
+    /* Отложенная запись индекса. Один ход агента сохраняет состояние десяток
+       раз; на индексе в десятки мегабайт синхронная перезапись на каждый чих
+       блокировала бы процесс и тормозила всех остальных пользователей. */
+    this.dirty = false;
+    this.flushTimer = null;
+    this.lastBytes = 0;
   }
 
   init({ adminUsername, adminPassword }) {
@@ -214,6 +240,13 @@ class Store {
       this.state = { ...emptyState(), ...existing };
     }
     this.loaded = true;
+    /* Размер уже лежащего индекса: по нему решается, писать сразу или копить.
+       Ошибка чтения не важна — тогда первая запись будет прямой. */
+    try {
+      this.lastBytes = fs.statSync(INDEX_FILE).size;
+    } catch {
+      this.lastBytes = 0;
+    }
     this.pruneSessions();
     this.migrate();
     this.migrateUploadsIntoRoot();
@@ -358,6 +391,12 @@ class Store {
       this.state.dashboard = [];
       changed = true;
     }
+    /* Обращения в поддержку появились позже остальных разделов: у старых
+       файлов списка нет, и первый же запрос должен видеть пустой массив. */
+    if (!Array.isArray(this.state.support)) {
+      this.state.support = [];
+      changed = true;
+    }
     if (!this.state.kicked || typeof this.state.kicked !== 'object') {
       this.state.kicked = {};
       changed = true;
@@ -411,9 +450,44 @@ class Store {
     if (changed) this.save();
   }
 
+  /* Сохранение с короткой задержкой: изменения копятся, файл пишется один раз
+     на пачку. Задержка включается только на большом индексе — маленький (свежая
+     установка, проверки) пишется сразу, как раньше: экономить там нечего, а
+     предсказуемость важнее. Перезапуск и выкладка пишут немедленно через
+     flushNow(), его вызывает обработчик SIGTERM. */
   save() {
     if (!this.loaded) return;
-    atomicWrite(INDEX_FILE, JSON.stringify(this.state, null, 2));
+    this.dirty = true;
+    if ((this.lastBytes || 0) < DIRECT_SAVE_LIMIT) {
+      this.flushNow();
+      return;
+    }
+    if (this.flushTimer) return;
+    this.flushTimer = setTimeout(() => {
+      this.flushTimer = null;
+      this.flushNow();
+    }, SAVE_DEBOUNCE_MS);
+    this.flushTimer.unref?.();
+  }
+
+  /** Записать индекс сейчас, не дожидаясь паузы. */
+  flushNow() {
+    if (this.flushTimer) {
+      clearTimeout(this.flushTimer);
+      this.flushTimer = null;
+    }
+    if (!this.loaded || !this.dirty) return;
+    this.dirty = false;
+    try {
+      /* Без pretty-print: индекс читает программа, а не человек. Это минус
+         четверть размера и времени записи на ровном месте. */
+      const json = JSON.stringify(this.state);
+      this.lastBytes = Buffer.byteLength(json);
+      atomicWrite(INDEX_FILE, json);
+    } catch (error) {
+      this.dirty = true;
+      throw error;
+    }
   }
 
   /* Когда-то вложения из диалогов складывались в подпапку uploads — из-за неё
@@ -1191,6 +1265,19 @@ class Store {
     return path.join(WORKSPACES_DIR, projectId);
   }
 
+  /** Удаляет файл вложения; сам путь проверяем, чтобы не выйти за папку проекта. */
+  removeAttachmentFile(att) {
+    if (!att?.relPath || !att?.projectId) return;
+    try {
+      const root = this.workspaceDir(att.projectId);
+      const full = path.resolve(root, att.relPath);
+      if (!full.startsWith(path.resolve(root) + path.sep)) return;
+      fs.rmSync(full, { force: true });
+    } catch {
+      /* файла уже нет — не повод падать */
+    }
+  }
+
   /* ---------------- workflows: папки проектов ---------------- */
 
   workflowsFor(userId) {
@@ -1338,8 +1425,14 @@ class Store {
 
   deleteChat(id) {
     this.state.chats = this.state.chats.filter((c) => c.id !== id);
+    /* Вложения уходят вместе с диалогом — и записи в индексе, и сами файлы.
+       Иначе у полусотни человек папка с загрузками растёт годами: счётчик
+       места на диске считает их, а найти их в интерфейсе уже нельзя. */
     for (const [attId, att] of Object.entries(this.state.attachments)) {
-      if (att.chatId === id) delete this.state.attachments[attId];
+      if (att.chatId !== id) continue;
+      dropAttachText(att);
+      this.removeAttachmentFile(att);
+      delete this.state.attachments[attId];
     }
     /* Постоянное задание хранит ссылку на свой последний диалог. Если диалог
        удалили, ссылка ведёт в никуда: карточка показывает «остановлено» и
@@ -1385,6 +1478,7 @@ class Store {
   deleteAttachment(id) {
     const att = this.getAttachment(id);
     if (!att) return false;
+    dropAttachText(att);
     delete this.state.attachments[id];
     this.save();
     return true;
@@ -1460,6 +1554,95 @@ class Store {
     if (status === 'approved' && budgetUsd !== null) this.setProjectBudget(approval.projectId, budgetUsd);
     this.save();
     return approval;
+  }
+
+  /* ---------------- поддержка ----------------
+     Обращение — это не задача и не запрос на одобрение: человек пишет, что у
+     него не работает, что хотелось бы добавить или о чём он хочет спросить.
+     Статус короткий и понятный автору: new — ещё не смотрели, read — прочитали,
+     done — вопрос закрыт. Скриншот хранится файлом (см. data/support), в записи
+     остаётся только имя и размер: индекс не раздувается картинками. */
+
+  createSupportMessage({
+    /* Номер обращения может прийти снаружи: сервер кладёт скриншот файлом с
+       этим же именем, и запись должна указывать ровно на него. */
+    id = null,
+    userId,
+    username,
+    displayName = '',
+    kind = 'problem',
+    text = '',
+    contact = '',
+    page = '',
+    ua = '',
+    screenshot = null,
+  }) {
+    const message = {
+      id: id || uid('sp_'),
+      userId,
+      username,
+      displayName: displayName || username,
+      kind: ['problem', 'idea', 'question'].includes(kind) ? kind : 'problem',
+      text: String(text || ''),
+      contact: String(contact || ''),
+      page: String(page || ''),
+      ua: String(ua || ''),
+      screenshot: screenshot || null,
+      status: 'new',
+      createdAt: nowIso(),
+      readAt: null,
+      doneAt: null,
+    };
+    this.state.support.push(message);
+    this.save();
+    return message;
+  }
+
+  /* Список обращений: администратор видит все, человек — только свои.
+     Свежие сверху: администратору важен последний сигнал, а не архив. */
+  supportMessages({ userId = null, limit = 200 } = {}) {
+    return this.state.support
+      .filter((item) => (userId ? item.userId === userId : true))
+      .slice()
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+      .slice(0, limit);
+  }
+
+  getSupportMessage(id) {
+    return this.state.support.find((item) => item.id === id) || null;
+  }
+
+  /* Сколько обращений ещё не открывали — цифра на кнопке и в меню профиля. */
+  supportUnread() {
+    return this.state.support.filter((item) => item.status === 'new').length;
+  }
+
+  setSupportStatus(id, status) {
+    const message = this.getSupportMessage(id);
+    if (!message) return null;
+    const allowed = ['new', 'read', 'done'];
+    if (!allowed.includes(status)) return null;
+    message.status = status;
+    if (status === 'new') {
+      message.readAt = null;
+      message.doneAt = null;
+    } else if (status === 'read') {
+      message.readAt = message.readAt || nowIso();
+      message.doneAt = null;
+    } else {
+      message.readAt = message.readAt || nowIso();
+      message.doneAt = nowIso();
+    }
+    this.save();
+    return message;
+  }
+
+  deleteSupportMessage(id) {
+    const index = this.state.support.findIndex((item) => item.id === id);
+    if (index < 0) return null;
+    const [removed] = this.state.support.splice(index, 1);
+    this.save();
+    return removed;
   }
 
   /* ---------------- usage ---------------- */

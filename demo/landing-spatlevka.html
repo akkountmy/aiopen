@@ -1,0 +1,1013 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Шпатлёвка стен под покраску в Москве — от 620 ₽/м², 6 дней</title>
+<meta name="description" content="Шпатлёвка стен под покраску в Москве: старт, финиш, под обои, под покраску — от 380 ₽/м², просвет под правилом 2 м не больше 1 мм, гарантия 24 месяца по договору.">
+<meta name="robots" content="noindex">
+<meta name="theme-color" content="#F7F5F1">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Шпатлёвка стен под покраску — от 620 ₽/м² за 6 дней">
+<meta property="og:description" content="Старт, финиш, под обои и под покраску. Просвет под правилом 2 м — не больше 1 мм. Гарантия 24 месяца, цена фиксируется до начала работ.">
+<meta property="og:image" content="https://rovno.example/og/spatlevka-1200.jpg">
+<meta property="og:locale" content="ru_RU">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23B04A18'/%3E%3Cpath d='M8 21h7V11h9' stroke='%23fff' stroke-width='3' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
+<style>
+/* ============ 1. ДИЗАЙН-СИСТЕМА: токены до вёрстки ============ */
+:root{
+  /* палитра: 6 нейтралей + акцентная пара */
+  --bg:#F7F5F1; --surface:#FFFFFF; --surface-2:#F0EDE6;
+  --ink:#14171C; --ink-2:#575E68; --line:#E3DED4;
+  --accent:#B04A18; --accent-dark:#8A3A12; --accent-soft:#FBEEE4;
+  --ok:#157F5B; --err:#9B2C1B;
+  --btn-ink:#FFFFFF;
+  --font:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,"Noto Sans",sans-serif;
+  /* шкала типографики: 8 ступеней на clamp() */
+  --fs-1:clamp(12px,.75rem,13px);
+  --fs-2:clamp(14px,.875rem,15px);
+  --fs-3:clamp(15px,.95rem,17px);
+  --fs-4:clamp(18px,1.05rem,20px);
+  --fs-5:clamp(21px,1.5rem,24px);
+  --fs-6:clamp(24px,2.1rem,31px);
+  --fs-7:clamp(28px,3vw,41px);
+  --fs-8:clamp(36px,5vw,62px);
+  /* отступы только по шагу 8 px */
+  --s-1:8px; --s-2:16px; --s-3:24px; --s-4:32px; --s-5:48px; --s-6:64px; --s-7:96px;
+  /* радиусы и тени: 3 уровня */
+  --r-1:10px; --r-2:14px; --r-3:20px; --r-pill:999px;
+  --sh-1:0 1px 2px rgba(20,23,28,.06);
+  --sh-2:0 10px 30px -14px rgba(20,23,28,.22);
+  --sh-3:0 30px 70px -34px rgba(20,23,28,.34);
+  --container:1200px;
+  --dur:180ms;
+}
+/* тёмная тема меняет значения тех же токенов, а не вводит новые цвета */
+@media (prefers-color-scheme:dark){
+  :root{
+    --bg:#111418; --surface:#181C22; --surface-2:#20252C;
+    --ink:#F2F0EC; --ink-2:#A9AFB9; --line:#2B323A;
+    --accent:#E4793A; --accent-dark:#F0A46A; --accent-soft:#2A1E16;
+    --ok:#4FB98E; --err:#F08A78;
+    --btn-ink:#111418;
+    --sh-1:0 1px 2px rgba(0,0,0,.4);
+    --sh-2:0 10px 30px -14px rgba(0,0,0,.6);
+    --sh-3:0 30px 70px -34px rgba(0,0,0,.8);
+  }
+}
+/* ============ 2. БАЗА ============ */
+*{box-sizing:border-box}
+html{scroll-behavior:smooth;-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--bg);color:var(--ink);font:400 var(--fs-3)/1.62 var(--font);-webkit-font-smoothing:antialiased;overflow-wrap:break-word}
+img{display:block;max-width:100%;height:auto}
+a{color:inherit}
+h1,h2,h3{margin:0;font-weight:650;letter-spacing:-.018em;line-height:1.14;text-wrap:balance}
+p{margin:0}
+ul,ol{margin:0;padding:0;list-style:none}
+:focus-visible{outline:2px solid var(--accent-dark);outline-offset:3px;border-radius:var(--r-1)}
+.skip{position:absolute;left:-9999px;top:0;background:var(--surface);color:var(--ink);padding:12px 18px;border-radius:0 0 var(--r-1) 0;z-index:60}
+.skip:focus{left:0}
+.wrap{width:100%;max-width:var(--container);margin-inline:auto;padding-inline:var(--s-3)}
+.kicker{display:flex;align-items:center;gap:10px;font-size:var(--fs-1);letter-spacing:.13em;text-transform:uppercase;color:var(--accent-dark);font-weight:650}
+.sec__num{display:inline-flex;align-items:center;justify-content:center;min-width:26px;height:22px;padding:0 6px;border:1px solid var(--line);border-radius:var(--r-pill);color:var(--ink-2);font-size:11px;letter-spacing:.06em}
+.lead{font-size:var(--fs-4);line-height:1.6;color:var(--ink-2);max-width:62ch}
+.hl{color:var(--accent-dark);background:linear-gradient(transparent 64%,var(--accent-soft) 64%);padding-inline:2px}
+/* ============ 3. КНОПКИ И ССЫЛКИ ============ */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:10px;min-height:48px;padding:13px 22px;border:1px solid transparent;border-radius:var(--r-2);background:var(--accent);color:var(--btn-ink);font:600 var(--fs-2)/1.2 var(--font);text-decoration:none;cursor:pointer;transition:background var(--dur) ease,transform var(--dur) ease,box-shadow var(--dur) ease}
+.btn:hover{background:var(--accent-dark);transform:translateY(-1px);box-shadow:var(--sh-2)}
+.btn:active{transform:translateY(0)}
+.btn--ghost{background:transparent;color:var(--ink);border-color:var(--line)}
+.btn--ghost:hover{background:var(--surface);border-color:var(--ink-2)}
+.btn--sm{min-height:44px;padding:10px 16px;font-size:var(--fs-2)}
+.btn--full{width:100%}
+.btn--on-dark{background:var(--surface);color:var(--ink)}
+/* ============ 4. ХЕДЕР ============ */
+.hdr{position:sticky;top:0;z-index:50;background:color-mix(in srgb,var(--bg) 88%,transparent);backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
+.hdr__in{display:flex;align-items:center;gap:var(--s-3);min-height:64px}
+.logo{display:flex;align-items:center;gap:10px;min-height:44px;font-weight:700;font-size:var(--fs-4);letter-spacing:-.02em;text-decoration:none}
+.logo__mark{width:26px;height:26px;border-radius:8px;background:var(--accent);position:relative;flex:0 0 auto}
+.logo__mark::after{content:"";position:absolute;inset:7px 7px 7px 7px;border-left:2px solid var(--btn-ink);border-bottom:2px solid var(--btn-ink);border-radius:1px}
+.logo__sub{font-size:var(--fs-1);font-weight:500;color:var(--ink-2);letter-spacing:0;text-transform:uppercase}
+.nav{display:none;gap:var(--s-3);margin-left:auto}
+.nav a{font-size:var(--fs-2);color:var(--ink-2);text-decoration:none;padding:8px 2px;border-bottom:2px solid transparent;transition:color var(--dur) ease,border-color var(--dur) ease}
+.nav a:hover{color:var(--ink);border-bottom-color:var(--accent)}
+.hdr__cta{margin-left:auto}
+@media (min-width:900px){
+  .nav{display:flex;margin-left:var(--s-4)}
+  .hdr__cta{margin-left:0}
+  .logo__sub{display:inline}
+}
+@media (max-width:899px){ .logo__sub{display:none} }
+/* ============ 5. СЕКЦИИ ============ */
+.sec{padding-block:clamp(48px,7vw,96px);border-top:1px solid transparent}
+.sec--line{border-top-color:var(--line)}
+.sec__head{display:grid;gap:var(--s-2);margin-bottom:var(--s-5);max-width:76ch}
+.sec__head h2{font-size:var(--fs-7)}
+.sec__head p{color:var(--ink-2);font-size:var(--fs-4);max-width:66ch}
+/* герой */
+.hero{padding-block:clamp(40px,6vw,80px)}
+.hero__in{display:grid;gap:var(--s-5);align-items:start}
+.hero h1{font-size:var(--fs-8);max-width:20ch;margin-block:var(--s-3) var(--s-3)}
+.hero__cta{display:flex;flex-wrap:wrap;gap:var(--s-2);margin-block:var(--s-4) var(--s-5)}
+.hero__facts{display:grid;grid-template-columns:1fr 1fr;gap:var(--s-3);padding-top:var(--s-4);border-top:1px solid var(--line)}
+.hero__facts li{font-size:var(--fs-2);color:var(--ink-2);line-height:1.4}
+.hero__facts b{display:block;font-size:var(--fs-5);color:var(--ink);font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+.pricecard{background:var(--surface);border:1px solid var(--line);border-radius:var(--r-3);padding:var(--s-4);box-shadow:var(--sh-2)}
+.pricecard__label{font-size:var(--fs-2);color:var(--ink-2);text-transform:uppercase;letter-spacing:.1em}
+.pricecard__sum{font-size:var(--fs-7);font-weight:700;letter-spacing:-.03em;margin-block:var(--s-1) 4px;font-variant-numeric:tabular-nums}
+.pricecard__note{font-size:var(--fs-2);color:var(--ink-2);padding-bottom:var(--s-3);border-bottom:1px solid var(--line)}
+.pricecard__list{display:grid;gap:10px;margin-block:var(--s-3);font-size:var(--fs-2)}
+.pricecard__list li{position:relative;padding-left:24px;color:var(--ink-2)}
+.pricecard__list li::before{content:"";position:absolute;left:0;top:.55em;width:9px;height:9px;border-radius:3px;background:var(--accent-soft);border:1px solid var(--accent)}
+@media (min-width:1000px){
+  .hero__in{grid-template-columns:minmax(0,1.35fr) minmax(320px,.65fr);gap:var(--s-6)}
+  .hero__facts{grid-template-columns:repeat(4,1fr)}
+}
+/* карточки */
+.cards{display:grid;gap:var(--s-2);grid-template-columns:1fr}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r-2);padding:var(--s-3);transition:box-shadow var(--dur) ease,transform var(--dur) ease,border-color var(--dur) ease}
+.card:hover{box-shadow:var(--sh-2);transform:translateY(-2px);border-color:var(--ink-2)}
+.card h3{font-size:var(--fs-5);margin-bottom:var(--s-1)}
+.card__price{display:flex;align-items:baseline;gap:8px;margin-block:var(--s-1) var(--s-2);font-variant-numeric:tabular-nums}
+.card__price b{font-size:var(--fs-6);color:var(--accent-dark);letter-spacing:-.02em}
+.card__price span{font-size:var(--fs-2);color:var(--ink-2)}
+.card p{font-size:var(--fs-2);color:var(--ink-2)}
+.card__meta{margin-top:var(--s-2);padding-top:var(--s-2);border-top:1px solid var(--line);font-size:var(--fs-1);color:var(--ink-2);letter-spacing:.02em}
+@media (min-width:680px){ .cards{grid-template-columns:1fr 1fr} }
+@media (min-width:1000px){ .cards--3{grid-template-columns:repeat(3,1fr)} }
+/* таблицы */
+.tablewrap{background:var(--surface);border:1px solid var(--line);border-radius:var(--r-2);overflow:hidden}
+table{width:100%;border-collapse:collapse;font-size:var(--fs-2)}
+caption{text-align:left;padding:var(--s-3) var(--s-3) 0;font-size:var(--fs-1);color:var(--ink-2);letter-spacing:.04em;text-transform:uppercase}
+th,td{padding:14px var(--s-3);text-align:left;border-bottom:1px solid var(--line);vertical-align:top}
+thead th{background:var(--surface-2);font-size:var(--fs-1);text-transform:uppercase;letter-spacing:.08em;color:var(--ink-2);font-weight:650}
+tbody tr:last-child td{border-bottom:0}
+td b{font-variant-numeric:tabular-nums;white-space:nowrap}
+.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+tbody tr:hover{background:color-mix(in srgb,var(--accent-soft) 55%,transparent)}
+@media (max-width:759px){
+  thead{display:none}
+  table,tbody,tr,td{display:block;width:100%}
+  tr{padding:var(--s-2) 0;border-bottom:1px solid var(--line)}
+  tbody tr:last-child{border-bottom:0}
+  td{border-bottom:0;padding:4px var(--s-3);display:grid;grid-template-columns:minmax(0,7.5em) minmax(0,1fr);gap:10px}
+  td::before{content:attr(data-l);font-size:var(--fs-1);text-transform:uppercase;letter-spacing:.06em;color:var(--ink-2);padding-top:3px}
+  td b{white-space:normal}
+  .num{text-align:left}
+}
+/* калькулятор */
+.calc{display:grid;gap:var(--s-3);background:var(--surface);border:1px solid var(--line);border-radius:var(--r-3);padding:var(--s-3);box-shadow:var(--sh-1)}
+@media (min-width:900px){ .calc{grid-template-columns:minmax(0,1fr) minmax(0,.9fr);gap:var(--s-5);padding:var(--s-4)} }
+.field{display:grid;gap:6px;margin-bottom:var(--s-2)}
+.field label{font-size:var(--fs-2);font-weight:600}
+.field input,.field select,.field textarea{width:100%;min-height:48px;padding:12px 14px;border:1px solid var(--line);border-radius:var(--r-1);background:var(--bg);color:var(--ink);font:400 var(--fs-3)/1.4 var(--font)}
+.field textarea{min-height:88px;resize:vertical}
+.field input:focus,.field select:focus,.field textarea:focus{border-color:var(--accent);outline:2px solid var(--accent-soft);outline-offset:0}
+.field__hint{font-size:var(--fs-1);color:var(--ink-2)}
+.field__err{font-size:var(--fs-1);color:var(--err);font-weight:600;min-height:1.2em}
+.field input[aria-invalid="true"],.field textarea[aria-invalid="true"],.field select[aria-invalid="true"]{border-color:var(--err)}
+.check{display:flex;gap:10px;align-items:center;min-height:44px;font-size:var(--fs-2);color:var(--ink-2);cursor:pointer}
+.check input{width:24px;height:24px;min-height:0;margin-top:0;accent-color:var(--accent);flex:0 0 auto}
+.calc__out{background:var(--surface-2);border:1px solid var(--line);border-radius:var(--r-2);padding:var(--s-3);align-self:start}
+.calc__sum{font-size:var(--fs-6);font-weight:700;letter-spacing:-.02em;font-variant-numeric:tabular-nums;margin-block:6px}
+.calc__row{display:flex;justify-content:space-between;gap:var(--s-2);font-size:var(--fs-2);padding-block:7px;border-bottom:1px dashed var(--line)}
+.calc__row:last-of-type{border-bottom:0}
+.calc__row span:last-child{font-variant-numeric:tabular-nums;font-weight:600}
+.calc__note{font-size:var(--fs-1);color:var(--ink-2);margin-top:var(--s-2);padding-top:var(--s-2);border-top:1px solid var(--line)}
+/* шаги и процесс */
+.steps{display:grid;gap:var(--s-2);counter-reset:step}
+.step{display:grid;grid-template-columns:38px minmax(0,1fr);gap:var(--s-2);padding:var(--s-2) 0;border-bottom:1px solid var(--line)}
+.step:last-child{border-bottom:0}
+.step__n{width:34px;height:34px;border-radius:50%;background:var(--accent-soft);color:var(--accent-dark);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:var(--fs-2);border:1px solid color-mix(in srgb,var(--accent) 30%,transparent)}
+.step h3{font-size:var(--fs-3);margin-bottom:4px}
+.step p{font-size:var(--fs-2);color:var(--ink-2)}
+.step__time{font-size:var(--fs-1);color:var(--accent-dark);font-weight:650;letter-spacing:.04em;text-transform:uppercase}
+@media (min-width:900px){ .steps--2{grid-template-columns:1fr 1fr;gap:0 var(--s-5)} }
+/* кейсы */
+.case{background:var(--surface);border:1px solid var(--line);border-radius:var(--r-2);overflow:hidden;display:flex;flex-direction:column}
+.case__media{display:grid;grid-template-columns:1fr 1fr;gap:2px;background:var(--line)}
+.case__media img{width:100%;aspect-ratio:4/3;object-fit:cover;background:var(--surface-2)}
+.case__media figcaption{grid-column:1 / -1;font-size:var(--fs-1);color:var(--ink-2);padding:8px var(--s-3);background:var(--surface)}
+.case__body{padding:var(--s-3);display:grid;gap:10px}
+.case__body h3{font-size:var(--fs-4)}
+.case__facts{display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:var(--fs-1);color:var(--ink-2)}
+.case__facts b{display:block;font-size:var(--fs-3);color:var(--ink);font-variant-numeric:tabular-nums}
+/* отзывы */
+.quote{background:var(--surface);border:1px solid var(--line);border-radius:var(--r-2);padding:var(--s-3);display:grid;gap:var(--s-2)}
+.quote p{font-size:var(--fs-3)}
+.quote footer{font-size:var(--fs-1);color:var(--ink-2)}
+/* гарантия */
+.guarantee{display:grid;gap:var(--s-4);background:var(--ink);color:var(--bg);border-radius:var(--r-3);padding:var(--s-4);box-shadow:var(--sh-3)}
+.guarantee h2{font-size:var(--fs-6);color:var(--bg)}
+.guarantee p{color:color-mix(in srgb,var(--bg) 78%,transparent);font-size:var(--fs-3)}
+.guarantee__grid{display:grid;gap:var(--s-3)}
+.guarantee__grid div{font-size:var(--fs-2);color:color-mix(in srgb,var(--bg) 82%,transparent)}
+.guarantee__grid b{display:block;font-size:var(--fs-6);color:var(--bg);letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+@media (min-width:900px){ .guarantee{grid-template-columns:minmax(0,1fr) minmax(0,1.1fr);gap:var(--s-5);padding:var(--s-5)} .guarantee__grid{grid-template-columns:1fr 1fr} }
+/* FAQ */
+.faq{display:grid;gap:0;border-top:1px solid var(--line)}
+.faq details{border-bottom:1px solid var(--line)}
+.faq summary{display:flex;justify-content:space-between;gap:var(--s-2);align-items:center;padding:var(--s-3) 0;cursor:pointer;font-size:var(--fs-4);font-weight:600;list-style:none}
+.faq summary::-webkit-details-marker{display:none}
+.faq summary::after{content:"+";font-size:var(--fs-5);color:var(--accent-dark);line-height:1;flex:0 0 auto;transition:color var(--dur) ease}
+.faq details[open] summary::after{content:"–"}
+.faq p{padding-bottom:var(--s-3);color:var(--ink-2);font-size:var(--fs-3);max-width:74ch}
+/* форма */
+.form{display:grid;gap:var(--s-2);background:var(--surface);border:1px solid var(--line);border-radius:var(--r-3);padding:var(--s-3);box-shadow:var(--sh-2)}
+@media (min-width:760px){ .form{grid-template-columns:1fr 1fr;padding:var(--s-4)} .form__wide{grid-column:1 / -1} .form fieldset{grid-column:1 / -1} }
+.form fieldset{border:0;margin:0;padding:0;display:grid;gap:0}
+.form__status{font-size:var(--fs-2);font-weight:600;color:var(--ok);min-height:1.4em}
+.form__status[data-state="err"]{color:var(--err)}
+/* доверие */
+.facts{display:grid;gap:var(--s-2);grid-template-columns:1fr 1fr}
+@media (min-width:760px){ .facts{grid-template-columns:repeat(4,1fr)} }
+.fact{background:var(--surface);border:1px solid var(--line);border-radius:var(--r-2);padding:var(--s-3)}
+.fact b{display:block;font-size:var(--fs-6);letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+.fact span{font-size:var(--fs-2);color:var(--ink-2)}
+/* контакты и подвал */
+.contacts{display:grid;gap:var(--s-4)}
+@media (min-width:900px){ .contacts{grid-template-columns:minmax(0,1.1fr) minmax(0,.9fr);gap:var(--s-6)} }
+.contacts dl{display:grid;gap:var(--s-2);margin:0;font-size:var(--fs-3)}
+.contacts dl div{display:grid;gap:2px}
+.contacts dt{font-size:var(--fs-1);text-transform:uppercase;letter-spacing:.09em;color:var(--ink-2)}
+.contacts dd{margin:0;font-weight:600}
+.contacts a{display:inline-block;padding-block:10px;text-decoration:underline;text-decoration-color:var(--line);text-underline-offset:4px;transition:text-decoration-color var(--dur) ease}
+.contacts a:hover{text-decoration-color:var(--accent)}
+.demo{border:1px dashed var(--line);border-radius:var(--r-2);padding:var(--s-2);font-size:var(--fs-2);color:var(--ink-2);background:var(--surface-2)}
+.playbook{display:grid;gap:var(--s-2)}
+.playbook li{display:grid;grid-template-columns:24px minmax(0,1fr);gap:12px;font-size:var(--fs-2);color:var(--ink-2);padding-block:8px;border-bottom:1px solid var(--line)}
+.playbook li:last-child{border-bottom:0}
+.playbook b{color:var(--ink)}
+.playbook li::before{content:"✓";color:var(--ok);font-weight:700}
+.ftr{border-top:1px solid var(--line);padding-block:var(--s-4);font-size:var(--fs-1);color:var(--ink-2)}
+.ftr__in{display:flex;flex-wrap:wrap;gap:var(--s-2) var(--s-4);align-items:center;justify-content:space-between}
+.ftr a{display:inline-block;padding-block:14px;text-decoration:underline;text-decoration-color:var(--line);text-underline-offset:4px}
+.ftr a:hover{text-decoration-color:var(--accent)}
+.plaque{position:fixed;left:var(--s-2);right:var(--s-2);bottom:var(--s-2);z-index:70;background:var(--err);color:#fff;border-radius:var(--r-2);padding:12px 16px;font-size:var(--fs-2);box-shadow:var(--sh-3);display:none}
+.plaque[data-show="1"]{display:block}
+@media (min-width:760px){ .plaque{left:auto;right:var(--s-3);max-width:420px} }
+/* ============ 6. motion: мелкие и отключаемые ============ */
+@keyframes rise{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+.hero h1,.hero .lead,.hero__cta,.pricecard{animation:rise 320ms ease both}
+.hero .lead{animation-delay:60ms}
+.hero__cta{animation-delay:110ms}
+.pricecard{animation-delay:80ms}
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation:none!important;transition:none!important}
+  html{scroll-behavior:auto}
+}
+</style>
+<script type="application/ld+json">
+{"@context":"https://schema.org","@graph":[
+{"@type":"LocalBusiness","@id":"#rovno","name":"РОВНО — малярно-штукатурные работы","description":"Шпатлёвка стен под покраску в Москве и Московской области. Старт, финиш, под обои, под покраску.","areaServed":"Москва и Московская область","telephone":"+7 495 123-45-67","email":"zakaz@rovno.example","priceRange":"380–900 ₽/м²","address":{"@type":"PostalAddress","addressLocality":"Москва","streetAddress":"ул. Примерная, 12, офис 3","postalCode":"101000","addressCountry":"RU"},"openingHours":"Mo-Sa 08:00-20:00"},
+{"@type":"Service","name":"Шпатлёвка стен под покраску","serviceType":"Малярно-штукатурные работы","provider":{"@id":"#rovno"},"areaServed":"Москва","offers":[
+{"@type":"Offer","name":"Шпатлёвка старт","price":"450","priceCurrency":"RUB","priceSpecification":{"@type":"UnitPriceSpecification","price":"450","priceCurrency":"RUB","unitText":"м²"}},
+{"@type":"Offer","name":"Шпатлёвка финиш под покраску","price":"620","priceCurrency":"RUB","priceSpecification":{"@type":"UnitPriceSpecification","price":"620","priceCurrency":"RUB","unitText":"м²"}},
+{"@type":"Offer","name":"Шпатлёвка под обои","price":"380","priceCurrency":"RUB","priceSpecification":{"@type":"UnitPriceSpecification","price":"380","priceCurrency":"RUB","unitText":"м²"}},
+{"@type":"Offer","name":"Шпатлёвка под покраску «свет»","price":"780","priceCurrency":"RUB","priceSpecification":{"@type":"UnitPriceSpecification","price":"780","priceCurrency":"RUB","unitText":"м²"}}]},
+{"@type":"FAQPage","mainEntity":[
+{"@type":"Question","name":"Сколько сохнет шпатлёвка перед покраской?","acceptedAnswer":{"@type":"Answer","text":"Финишный слой на гипсовой основе сохнет 3–4 часа при 20 °C и влажности 50 %. Шлифовать можно после полного высыхания, красить — через 24 часа после последнего слоя и грунта."}},
+{"@type":"Question","name":"Нужно ли снимать старую шпатлёвку?","acceptedAnswer":{"@type":"Answer","text":"Снимаем только отслаивающиеся участки: проверяем три-четыре места шпателем и простукиванием. Если слой держится, грунтуем Betokontakt и выравниваем стартом, перепад до 10 мм входит в цену."}},
+{"@type":"Question","name":"Сколько стоит шпатлёвка квартиры 60 м² под покраску?","acceptedAnswer":{"@type":"Answer","text":"Работы по стенам — от 96 000 ₽ (620 ₽/м², 3 слоя со стеклохолстом и шлифовкой), материалы — 9 000–12 000 ₽. Итог 105 000–108 000 ₽ и 6 рабочих дней."}},
+{"@type":"Question","name":"Что входит в гарантию 24 месяца?","acceptedAnswer":{"@type":"Answer","text":"Отслоение, трещины по нашим швам, проступающие пятна и «рябь» под лампой. Не входят подвижки дома, протечки и повреждения после монтажа мебели."}},
+{"@type":"Question","name":"Можно ли шпатлевать по газобетону и ГКЛ?","acceptedAnswer":{"@type":"Answer","text":"Да. Газобетон грунтуем в два слоя и выравниваем стартом до 15 мм, ГКЛ — швы серпянкой, саморезы, стеклохолст 50 г/м² и финиш двумя слоями."}},
+{"@type":"Question","name":"Работаете с материалом заказчика?","acceptedAnswer":{"@type":"Answer","text":"Да, но даём письменную гарантию только на материалы, которые проверили сами: партия, срок годности и условия хранения. Цена работ при этом выше на 8 %."}},
+{"@type":"Question","name":"Как принимают работу?","acceptedAnswer":{"@type":"Answer","text":"По акту: правило 2 м на просвет, переносная лампа 500 Вт вдоль стены, влагомер. Просвет для окраски — не больше 1 мм на 2 м. Замечания вносятся в дефектную ведомость и устраняются за наш счёт."}},
+{"@type":"Question","name":"Можно ли делать шпатлёвку зимой?","acceptedAnswer":{"@type":"Answer","text":"Да, при температуре в помещении 15–25 °C и влажности 40–65 %. Обогреватели ставим так, чтобы поток не бил в свежий слой, иначе гипс сохнет неравномерно и даёт усадочные трещины."}}]}
+]}
+</script>
+</head>
+<body>
+<a class="skip" href="#main">Перейти к содержанию</a>
+<div class="plaque" id="plaque" role="alert"></div>
+<header class="hdr">
+  <div class="wrap hdr__in">
+    <a class="logo" href="#top"><span class="logo__mark" aria-hidden="true"></span>РОВНО<span class="logo__sub">шпатлёвка под покраску</span></a>
+    <nav class="nav" aria-label="Разделы страницы">
+      <a href="#services">Виды работ</a>
+      <a href="#prices">Цены</a>
+      <a href="#process">Сроки</a>
+      <a href="#cases">Объекты</a>
+      <a href="#faq">Вопросы</a>
+      <a href="#contacts">Контакты</a>
+    </nav>
+    <a class="btn btn--sm hdr__cta" href="tel:+74951234567">+7 (495) 123-45-67</a>
+  </div>
+</header>
+
+<main id="main">
+  <section class="hero" id="top">
+    <div class="wrap hero__in">
+      <div>
+        <p class="kicker">Москва и МО · малярно-штукатурные работы с 2014 года</p>
+        <h1>Шпатлёвка стен под покраску — <span class="hl">от 620 ₽/м²</span>, сдаём за 6 дней и даём 24 месяца гарантии</h1>
+        <p class="lead" style="margin-block:16px 0">Доводим стены до просвета под правилом 2 м не больше 1 мм — под глянцевую краску, бра и боковой свет из окна. Перепад до 10 мм, стеклохолст и шлифовка входят в цену, а цена фиксируется в смете до начала работ: доплат «по факту» не бывает.</p>
+        <div class="hero__cta">
+          <a class="btn" href="#calc">Посчитать стоимость по площади</a>
+          <a class="btn btn--ghost" href="#prices">Цены по видам работ</a>
+        </div>
+        <ul class="hero__facts">
+          <li><b>412</b> объектов сдано</li>
+          <li><b>68 400 м²</b> отшпатлёвано</li>
+          <li><b>6 дней</b> на квартиру 60 м²</li>
+          <li><b>24 мес</b> гарантии по договору</li>
+        </ul>
+      </div>
+      <aside class="pricecard" aria-label="Ориентир по стоимости квартиры 60 м²">
+        <p class="pricecard__label">Квартира 60 м², под покраску</p>
+        <p class="pricecard__sum">от 96 000 ₽</p>
+        <p class="pricecard__note">работы 620 ₽/м² + материалы 120 ₽/м²</p>
+        <ul class="pricecard__list">
+          <li>2 слоя финиша + стеклохолст 50 г/м²</li>
+          <li>шлифовка P150 → P240 и контроль лампой 500 Вт</li>
+          <li>цена в смете не растёт, если перепад до 10 мм</li>
+          <li>уборка и вынос мусора включены</li>
+        </ul>
+        <a class="btn btn--full" href="#form">Вызвать замерщика — бесплатно</a>
+        <p class="pricecard__note" style="border:0;padding:12px 0 0">Замер 40 минут, смета на месте, выезд по Москве в пределах МКАД — 0 ₽.</p>
+      </aside>
+    </div>
+  </section>
+
+  <section class="sec sec--line" aria-labelledby="facts-h">
+    <div class="wrap">
+      <div class="sec__head">
+        <p class="kicker"><span class="sec__num">01</span> На чём стоит доверие</p>
+        <h2 id="facts-h">Четыре цифры, которые можно проверить по договору и актам</h2>
+        <p>Не «большой опыт», а измеримые вещи: сколько объектов закрыто, сколько квадратов прошло через руки, за сколько дней сдаём типовую квартиру и на какой срок отвечаем рублём.</p>
+      </div>
+      <div class="facts">
+        <div class="fact"><b>412</b><span>объектов сдано по акту с 2014 года, из них 118 — под покраску «свет»</span></div>
+        <div class="fact"><b>68 400</b><span>м² стен и потолков отшпатлёвано: от комнаты 18 м² до дома 340 м²</span></div>
+        <div class="fact"><b>1,2 %</b><span>объектов с замечаниями на приёмке в 2025–2026 годах: 5 из 412</span></div>
+        <div class="fact"><b>24 мес</b><span>гарантия: выезд по рекламации за 5 рабочих дней, устранение за наш счёт</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="sec sec--line" id="services" aria-labelledby="serv-h">
+    <div class="wrap">
+      <div class="sec__head">
+        <p class="kicker"><span class="sec__num">02</span> Виды шпатлёвки</p>
+        <h2 id="serv-h">Шесть видов работ: от чернового старта за 450 ₽/м² до покраски «под свет» за 780 ₽/м²</h2>
+        <p>Разница в цене — это разница в слоях, шлифовке и контроле. Старт выравнивает геометрию стены, финиш готовит поверхность под конкретное покрытие. Смешивать их нельзя: под обои достаточно финиша P150, под глянцевую краску нужен трёхслойный пирог и шлифовка P240 с лампой.</p>
+      </div>
+      <div class="cards cards--3">
+        <article class="card">
+          <h3>Старт, выравнивающая</h3>
+          <p class="card__price"><b>450 ₽</b><span>за м²</span></p>
+          <p>Первый слой по бетону, газобетону и штукатурке: снимает перепад до 10 мм, наплывы и «волны» после кладки. Шлифуется после высыхания, готовит стену под финиш.</p>
+          <p class="card__meta">1 слой · 1,3–1,6 кг/м² на 1 мм · сохнет 4–6 ч · 18 м² за смену</p>
+        </article>
+        <article class="card">
+          <h3>Под обои</h3>
+          <p class="card__price"><b>380 ₽</b><span>за м²</span></p>
+          <p>Два тонких слоя и шлифовка P150. Допуск мягче: просвет под правилом 2 м до 2 мм, потому что обои перекрывают мелкую «рябь». Самый дешёвый способ получить ровную стену.</p>
+          <p class="card__meta">2 слоя · без шлифовки P240 · сохнет 3–4 ч · 20 м² за смену</p>
+        </article>
+        <article class="card">
+          <h3>Финиш под покраску</h3>
+          <p class="card__price"><b>620 ₽</b><span>за м²</span></p>
+          <p>Базовый вариант «под покраску»: стеклохолст 50 г/м², два слоя финишной смеси по 1–2 мм, шлифовка P150 → P180. Матовая краска ложится без «теней» на стыках.</p>
+          <p class="card__meta">2 слоя + армирование · 0,8–1,2 кг/м² на слой · 12 м² за смену</p>
+        </article>
+        <article class="card">
+          <h3>Под покраску «свет»</h3>
+          <p class="card__price"><b>780 ₽</b><span>за м²</span></p>
+          <p>Три слоя, шлифовка P240 и приёмка переносной лампой 500 Вт вдоль стены. Просвет 1 мм на 2 м. Для глянцевой и сатиновой краски, бра над стеной и оконного света под углом.</p>
+          <p class="card__meta">3 слоя · лампа 500 Вт · 9 м² за смену · приёмка с влагомером</p>
+        </article>
+        <article class="card">
+          <h3>Влагостойкая, санузел</h3>
+          <p class="card__price"><b>720 ₽</b><span>за м²</span></p>
+          <p>Цементная смесь вместо гипсовой: держит влажность 75–85 % и не боится конденсата. Углы и примыкания к ванне армируем серпянкой 50 мм, стыки ГКЛ — герметиком.</p>
+          <p class="card__meta">Vetonit KR · 2 слоя + углы · сохнет 12 ч · 10 м² за смену</p>
+        </article>
+        <article class="card">
+          <h3>Потолок под покраску</h3>
+          <p class="card__price"><b>690 ₽</b><span>за м²</span></p>
+          <p>Работа снизу вверх, поэтому дороже стен: расход выше на 15 %, физически тяжелее шлифовать. Строительные леса и подмости до 3,5 м включены в цену.</p>
+          <p class="card__meta">3 слоя · леса включены · 8 м² за смену · лампа снизу по нормали</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <section class="sec sec--line" id="prices" aria-labelledby="price-h">
+    <div class="wrap">
+      <div class="sec__head">
+        <p class="kicker"><span class="sec__num">03</span> Цены</p>
+        <h2 id="price-h">Прайс по видам работ: единица, цена «от» и что внутри</h2>
+        <p>Цены — за работы без материалов, Москва, 2026 год. Материалы считаем отдельной строкой по расходу: 90–140 ₽/м² при слое 2 мм. Минимальный заказ — 15 м², от 300 м² скидка 7 %.</p>
+      </div>
+      <div class="tablewrap">
+        <table>
+          <caption>Прайс-лист на малярно-штукатурные работы</caption>
+          <thead>
+            <tr><th scope="col">Вид работ</th><th scope="col">Цена от</th><th scope="col">Что входит</th><th scope="col" class="num">Срок на 60 м²</th></tr>
+          </thead>
+          <tbody>
+            <tr><td data-l="Вид работ"><b>Старт, выравнивающая</b></td><td data-l="Цена от"><b>450 ₽/м²</b></td><td data-l="Что входит">1 слой до 10 мм, шлифовка, обеспыливание</td><td data-l="Срок" class="num">2 дня</td></tr>
+            <tr><td data-l="Вид работ"><b>Под обои</b></td><td data-l="Цена от"><b>380 ₽/м²</b></td><td data-l="Что входит">2 слоя, шлифовка P150, грунт под клей</td><td data-l="Срок" class="num">3 дня</td></tr>
+            <tr><td data-l="Вид работ"><b>Финиш под покраску</b></td><td data-l="Цена от"><b>620 ₽/м²</b></td><td data-l="Что входит">Стеклохолст 50 г/м², 2 слоя, шлифовка P150→P180</td><td data-l="Срок" class="num">5 дней</td></tr>
+            <tr><td data-l="Вид работ"><b>Под покраску «свет»</b></td><td data-l="Цена от"><b>780 ₽/м²</b></td><td data-l="Что входит">3 слоя, P240, приёмка лампой 500 Вт, просвет 1 мм/2 м</td><td data-l="Срок" class="num">6 дней</td></tr>
+            <tr><td data-l="Вид работ"><b>Влагостойкая, санузел</b></td><td data-l="Цена от"><b>720 ₽/м²</b></td><td data-l="Что входит">Цементная смесь, армирование углов, герметик в стыках</td><td data-l="Срок" class="num">4 дня</td></tr>
+            <tr><td data-l="Вид работ"><b>Потолок под покраску</b></td><td data-l="Цена от"><b>690 ₽/м²</b></td><td data-l="Что входит">3 слоя, леса до 3,5 м, шлифовка снизу</td><td data-l="Срок" class="num">6 дней</td></tr>
+            <tr><td data-l="Вид работ"><b>Откосы и углы</b></td><td data-l="Цена от"><b>350 ₽/м.п.</b></td><td data-l="Что входит">Уголок ПВХ, 2 слоя, шлифовка по ребру</td><td data-l="Срок" class="num">2 дня</td></tr>
+            <tr><td data-l="Вид работ"><b>Демонтаж старой шпатлёвки</b></td><td data-l="Цена от"><b>190 ₽/м²</b></td><td data-l="Что входит">Снятие шпателем или ПМ, вывоз мусора</td><td data-l="Срок" class="num">1 день</td></tr>
+            <tr><td data-l="Вид работ"><b>Снятие обоев</b></td><td data-l="Цена от"><b>120 ₽/м²</b></td><td data-l="Что входит">Размачивание, снятие, очистка клея</td><td data-l="Срок" class="num">1 день</td></tr>
+            <tr><td data-l="Вид работ"><b>Армирование стеклохолстом</b></td><td data-l="Цена от"><b>60 ₽/м²</b></td><td data-l="Что входит">Паутинка 50 г/м² на клей, внахлёст 50 мм</td><td data-l="Срок" class="num">1 день</td></tr>
+            <tr><td data-l="Вид работ"><b>Грунтование</b></td><td data-l="Цена от"><b>90 ₽/м²</b></td><td data-l="Что входит">2 слоя, Betokontakt на бетон, ТЕКС на гипс</td><td data-l="Срок" class="num">1 день</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="cards" style="margin-top:24px">
+        <article class="card">
+          <h3>Что входит в цену всегда</h3>
+          <p>Замер и дефектовка, защита пола и мебели плёнкой 40 мкм, обеспыливание пылесосом с фильтром HEPA, уборка и вынос мусора, акт приёмки и гарантийный талон на 24 месяца.</p>
+        </article>
+        <article class="card">
+          <h3>Что считается отдельно</h3>
+          <p>Материалы по расходу (90–140 ₽/м²), демонтаж старого покрытия, работа на высоте выше 3,5 м, ночные смены (+15 % к ставке), доставка в область дальше 30 км от МКАД (+20 ₽/м²).</p>
+        </article>
+        <article class="card">
+          <h3>Когда цена меняется</h3>
+          <p>Только если при замере перепад окажется больше 10 мм: каждый дополнительный миллиметр старта — 45 ₽/м². Это фиксируется в смете до начала работ и подтверждается фотоотчётом с правилом в кадре.</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <section class="sec sec--line" id="calc" aria-labelledby="calc-h">
+    <div class="wrap">
+      <div class="sec__head">
+        <p class="kicker"><span class="sec__num">04</span> Калькулятор</p>
+        <h2 id="calc-h">Считает диапазон, а не одну цифру — чтобы не было «звоните, узнаете»</h2>
+        <p>Площадь стен — это периметр × высоту, без вычета окон и дверей (проёмы шпатлюем по откосам). Калькулятор даёт вилку по ставкам прайса и расходу материалов; точную смету замерщик считает по факту перепада.</p>
+      </div>
+      <div class="calc">
+        <div>
+          <div class="field">
+            <label for="calc-area">Площадь стен, м²</label>
+            <input id="calc-area" type="number" inputmode="decimal" min="1" max="2000" step="1" value="60" autocomplete="off">
+            <p class="field__hint">Квартира 60 м² — это примерно 165 м² стен при потолке 2,7 м. Минимальный заказ — 15 м².</p>
+          </div>
+          <div class="field">
+            <label for="calc-type">Что нужно сделать</label>
+            <select id="calc-type">
+              <option value="start">Старт, выравнивание — от 450 ₽/м²</option>
+              <option value="wallpaper">Под обои — от 380 ₽/м²</option>
+              <option value="finish" selected>Финиш под покраску — от 620 ₽/м²</option>
+              <option value="paint">Под покраску «свет» — от 780 ₽/м²</option>
+              <option value="bath">Влагостойкая, санузел — от 720 ₽/м²</option>
+              <option value="ceiling">Потолок под покраску — от 690 ₽/м²</option>
+            </select>
+          </div>
+          <label class="check" for="calc-armor" style="margin-bottom:16px">
+            <input id="calc-armor" type="checkbox" checked>
+            <span>Армировать стеклохолстом 50 г/м² (+60 ₽/м²) — не даёт трещин на стыках и в углах</span>
+          </label>
+          <button class="btn btn--full" type="button" id="calc-go">Пересчитать</button>
+        </div>
+        <div class="calc__out" id="calc-out">
+          <p class="kicker" style="letter-spacing:.1em">Ориентировочная стоимость</p>
+          <p class="calc__sum" id="calc-sum">—</p>
+          <div id="calc-rows"></div>
+          <p class="calc__note" id="calc-note"></p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="sec sec--line" id="work" aria-labelledby="work-h">
+    <div class="wrap">
+      <div class="sec__head">
+        <p class="kicker"><span class="sec__num">05</span> Состав работ</p>
+        <h2 id="work-h">Семь шагов от бетона до стены, которую можно красить</h2>
+        <p>Порядок не переставляется: грунт до армирования, старт до финиша, шлифовка после каждого сохшего слоя. Нарушение последовательности — главная причина «ряби» и трещин по стыкам через 3–6 месяцев.</p>
+      </div>
+      <div class="steps steps--2">
+        <div class="step">
+          <span class="step__n">1</span>
+          <div>
+            <h3>Замер и дефектовка</h3>
+            <p>Правило 2 м по трём линиям на каждой стене, влагомер в 5 точках, простукивание на отслоения. В протокол пишем перепад в миллиметрах и влажность основания — от этих цифр зависит слой старта и цена.</p>
+            <p class="step__time">40 минут · бесплатно</p>
+          </div>
+        </div>
+        <div class="step">
+          <span class="step__n">2</span>
+          <div>
+            <h3>Подготовка и демонтаж</h3>
+            <p>Снимаем обои и отслаивающуюся шпатлёвку, расшиваем трещины на глубину 3–5 мм, очищаем от пыли и масляных пятен. Пол и мебель закрываем плёнкой 40 мкм и картоном.</p>
+            <p class="step__time">1 день · 120–190 ₽/м²</p>
+          </div>
+        </div>
+        <div class="step">
+          <span class="step__n">3</span>
+          <div>
+            <h3>Грунтование</h3>
+            <p>Бетон и ГКЛ — Knauf Betokontakt (кварц), гипс и газобетон — ТЕКС Универсал в два слоя. Расход 0,15 л/м² на слой, сохнет 2–4 часа. Без грунта финиш «садится» пятнами и отслаивается.</p>
+            <p class="step__time">2–4 часа · 90 ₽/м²</p>
+          </div>
+        </div>
+        <div class="step">
+          <span class="step__n">4</span>
+          <div>
+            <h3>Армирование</h3>
+            <p>Стеклохолст 50 г/м² на клей внахлёст 50 мм, серпянка 50 мм в углы и на стыки ГКЛ. Сетка распределяет напряжение и не даёт трещине пойти по шву при усадке дома.</p>
+            <p class="step__time">1 день · 60 ₽/м²</p>
+          </div>
+        </div>
+        <div class="step">
+          <span class="step__n">5</span>
+          <div>
+            <h3>Старт: выравнивание</h3>
+            <p>Vetonit KR, ТЕКС Профи Старт или Knauf Rotband — слой до 10 мм за проход, больше — в два приёма с сушкой 4–6 часов. Расход 1,3–1,6 кг/м² на миллиметр.</p>
+            <p class="step__time">1–2 дня · 450 ₽/м²</p>
+          </div>
+        </div>
+        <div class="step">
+          <span class="step__n">6</span>
+          <div>
+            <h3>Финиш: два-три слоя</h3>
+            <p>Vetonit LR+ или Sheetrock (Дано-Гипс) слоем 1–2 мм, каждый слой сохнет 3–4 часа. Первый слой идёт поперёк стены, второй — вертикально, так видны и убираются полосы от шпателя.</p>
+            <p class="step__time">2 дня · 620–780 ₽/м²</p>
+          </div>
+        </div>
+        <div class="step">
+          <span class="step__n">7</span>
+          <div>
+            <h3>Шлифовка и контроль лампой</h3>
+            <p>P150 → P180 → P240, обеспыливание HEPA-пылесосом. Затем лампа 500 Вт ставится вплотную к стене: тени показывают перепад 0,3–0,5 мм, которые глаз при дневном свете не видит.</p>
+            <p class="step__time">1 день · входит в цену</p>
+          </div>
+        </div>
+      </div>
+      <div class="sec__head" style="margin-top:48px">
+        <h2 style="font-size:var(--fs-6)">Материалы с расходом на м²</h2>
+        <p>Работаем на смесях, которые проверяли на 68 400 м²: расход и поведение при шлифовке известны. Материал заказчика принимаем, но гарантия на него — только после проверки партии и срока годности.</p>
+      </div>
+      <div class="tablewrap">
+        <table>
+          <caption>Материалы по этапам</caption>
+          <thead><tr><th scope="col">Этап</th><th scope="col">Материал и марка</th><th scope="col">Зачем</th><th scope="col" class="num">Расход</th></tr></thead>
+          <tbody>
+            <tr><td data-l="Этап"><b>Грунт</b></td><td data-l="Материал">Knauf Betokontakt, ТЕКС Универсал</td><td data-l="Зачем">Адгезия на бетоне и гипсе, обеспыливание</td><td data-l="Расход" class="num">0,15 л/м²</td></tr>
+            <tr><td data-l="Этап"><b>Армирование</b></td><td data-l="Материал">Стеклохолст 50 г/м², серпянка 50 мм</td><td data-l="Зачем">Защита стыков и углов от трещин</td><td data-l="Расход" class="num">1,05 м²/м²</td></tr>
+            <tr><td data-l="Этап"><b>Старт</b></td><td data-l="Материал">Vetonit KR, ТЕКС Профи Старт, Knauf Rotband</td><td data-l="Зачем">Выравнивание перепада до 10 мм</td><td data-l="Расход" class="num">1,3–1,6 кг/м² на 1 мм</td></tr>
+            <tr><td data-l="Этап"><b>Финиш</b></td><td data-l="Материал">Vetonit LR+, Sheetrock, ТЕКС Профи Финиш</td><td data-l="Зачем">Гладкая поверхность под краску</td><td data-l="Расход" class="num">0,8–1,2 кг/м² на слой</td></tr>
+            <tr><td data-l="Этап"><b>Санузел</b></td><td data-l="Материал">Vetonit KR (цементная), гидроизоляция швов</td><td data-l="Зачем">Влагостойкость 75–85 % влажности</td><td data-l="Расход" class="num">1,4 кг/м² на 1 мм</td></tr>
+            <tr><td data-l="Этап"><b>Откосы</b></td><td data-l="Материал">Уголок ПВХ 25×25 мм, серпянка</td><td data-l="Зачем">Ровное ребро, которое не скалывается</td><td data-l="Расход" class="num">1 м.п. на 1 м.п.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section class="sec sec--line" id="process" aria-labelledby="proc-h">
+    <div class="wrap">
+      <div class="sec__head">
+        <p class="kicker"><span class="sec__num">06</span> Процесс и сроки</p>
+        <h2 id="proc-h">Пять шагов для заказчика: от звонка до акта — и сколько это занимает</h2>
+        <p>Сроки считаем по 8-часовому рабочему дню, понедельник–суббота, 8:00–20:00. Время на сушку слоёв входит в срок: нельзя красить стену, которая ещё «тянет» влагу, — краска вспучится через 2–3 недели.</p>
+      </div>
+      <div class="steps">
+        <div class="step">
+          <span class="step__n">1</span>
+          <div><h3>Заявка и разговор</h3><p>Отвечаем за 15 минут в рабочее время. Уточняем площадь, тип покрытия, сроки и есть ли лифт — от этого зависит логистика.</p><p class="step__time">15 минут</p></div>
+        </div>
+        <div class="step">
+          <span class="step__n">2</span>
+          <div><h3>Замер на объекте</h3><p>Правило, влагомер, лампа. На месте показываем, где перепад больше 10 мм и почему это плюс 45 ₽/м² за миллиметр.</p><p class="step__time">40 минут · 0 ₽ в пределах МКАД</p></div>
+        </div>
+        <div class="step">
+          <span class="step__n">3</span>
+          <div><h3>Смета и договор</h3><p>Смета по позициям прайса с объёмами и материалами, договор с приложением-сметой, график платежей. Цена фиксируется на 30 дней.</p><p class="step__time">1 день</p></div>
+        </div>
+        <div class="step">
+          <span class="step__n">4</span>
+          <div><h3>Работы по этапам</h3><p>Аванс 30 % на материалы, остальное — по этапам после приёмки каждого. Каждый вечер фотоотчёт в мессенджер: что сделано, что сохнет.</p><p class="step__time">2–16 дней по объекту</p></div>
+        </div>
+        <div class="step">
+          <span class="step__n">5</span>
+          <div><h3>Приёмка и гарантийный талон</h3><p>Акт с контрольными замерами, дефектная ведомость, если что-то нашлось, гарантийный талон на 24 месяца и схема заделки швов.</p><p class="step__time">1 час</p></div>
+        </div>
+      </div>
+      <div class="tablewrap" style="margin-top:32px">
+        <table>
+          <caption>Сроки по типовым объектам</caption>
+          <thead><tr><th scope="col">Объект</th><th scope="col" class="num">Площадь стен</th><th scope="col" class="num">Срок работ</th><th scope="col">Бригада</th></tr></thead>
+          <tbody>
+            <tr><td data-l="Объект"><b>Комната</b></td><td data-l="Площадь" class="num">40 м²</td><td data-l="Срок" class="num">2–3 дня</td><td data-l="Бригада">1 мастер</td></tr>
+            <tr><td data-l="Объект"><b>Квартира 60 м²</b></td><td data-l="Площадь" class="num">165 м²</td><td data-l="Срок" class="num">5–6 дней</td><td data-l="Бригада">2 мастера</td></tr>
+            <tr><td data-l="Объект"><b>Квартира 100 м²</b></td><td data-l="Площадь" class="num">275 м²</td><td data-l="Срок" class="num">8–10 дней</td><td data-l="Бригада">2–3 мастера</td></tr>
+            <tr><td data-l="Объект"><b>Дом 180 м²</b></td><td data-l="Площадь" class="num">480 м²</td><td data-l="Срок" class="num">14–16 дней</td><td data-l="Бригада">3 мастера</td></tr>
+            <tr><td data-l="Объект"><b>Офис 120 м²</b></td><td data-l="Площадь" class="num">330 м²</td><td data-l="Срок" class="num">9–11 дней</td><td data-l="Бригада">3 мастера, возможны ночные смены</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section class="sec sec--line" id="standards" aria-labelledby="std-h">
+    <div class="wrap">
+      <div class="sec__head">
+        <p class="kicker"><span class="sec__num">07</span> Приёмка и нормативы</p>
+        <h2 id="std-h">Как проверяем себя до того, как стену увидит заказчик</h2>
+        <p>Ориентир — СП 71.13330.2017 «Изоляционные и отделочные покрытия» (актуализированная редакция СНиП 3.04.01-87) и ГОСТ 31357-2007 на сухие гипсовые смеси. Внутренний допуск по просвету мы держим строже нормы: под покраску — 1 мм на 2 м вместо допустимых 2–3 мм.</p>
+      </div>
+      <div class="tablewrap">
+        <table>
+          <caption>Контрольные замеры на приёмке</caption>
+          <thead><tr><th scope="col">Параметр</th><th scope="col">Наш допуск</th><th scope="col">Чем проверяем</th></tr></thead>
+          <tbody>
+            <tr><td data-l="Параметр"><b>Просвет под правилом 2 м</b></td><td data-l="Допуск">≤ 1 мм под покраску, ≤ 2 мм под обои</td><td data-l="Проверка">Правило 2 м + клин-щуп</td></tr>
+            <tr><td data-l="Параметр"><b>Отклонение от вертикали</b></td><td data-l="Допуск">≤ 2 мм на 1 м высоты</td><td data-l="Проверка">Лазерный уровень, отвес</td></tr>
+            <tr><td data-l="Параметр"><b>Перепад на участке 4 м²</b></td><td data-l="Допуск">≤ 2 мм</td><td data-l="Проверка">Правило + лампа 500 Вт</td></tr>
+            <tr><td data-l="Параметр"><b>Влажность основания</b></td><td data-l="Допуск">≤ 8 % (гипс), ≤ 5 % (цемент)</td><td data-l="Проверка">Влагомер в 5 точках</td></tr>
+            <tr><td data-l="Параметр"><b>Условия в помещении</b></td><td data-l="Допуск">15–25 °C, 40–65 % влажности</td><td data-l="Проверка">Гигрометр, термометр</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <ul class="playbook" style="margin-top:24px">
+        <li><span><b>Фотоотчёт с правилом в кадре.</b> Каждый слой фиксируем на фото: так видно, что старт лежит до 10 мм, а не «на глаз».</span></li>
+        <li><span><b>Лампа, а не «нормально на глаз».</b> Приёмка идёт с переносной лампой 500 Вт: она показывает перепад 0,3 мм, который не видно при дневном свете.</span></li>
+        <li><span><b>Дефектная ведомость.</b> Найденное на приёмке вносим в список с датой устранения; подписываем акт только после закрытия пунктов.</span></li>
+        <li><span><b>Схема заделки швов.</b> Передаём заказчику: где проходят стыки ГКЛ и углы, чтобы при монтаже мебели и полок крепёж не попадал в шов.</span></li>
+      </ul>
+    </div>
+  </section>
+
+  <section class="sec sec--line" id="cases" aria-labelledby="cases-h">
+    <div class="wrap">
+      <div class="sec__head">
+        <p class="kicker"><span class="sec__num">08</span> Объекты</p>
+        <h2 id="cases-h">Три объекта с цифрами: перепад, срок, стоимость и что оказалось сложным</h2>
+        <p>Ниже — примеры работ с реальными параметрами задачи. Фотографии заменены схемами «до/после»: в демонстрационном макете нет съёмки объектов, на рабочей версии сайта здесь стоят фото с привязкой к адресу.</p>
+      </div>
+      <div class="cards cards--3">
+        <article class="case">
+          <figure class="case__media" style="margin:0">
+            <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 400 300'%3E%3Crect width='400' height='300' fill='%23CFC8BA'/%3E%3Cpath d='M0 210 L60 190 L120 215 L180 188 L240 212 L300 186 L360 208 L400 196 L400 300 L0 300 Z' fill='%23BDB5A5'/%3E%3Cpath d='M0 240 L80 226 L160 246 L240 222 L320 244 L400 230 L400 300 L0 300 Z' fill='%23AEA594'/%3E%3Ccircle cx='300' cy='90' r='34' fill='%23D8D2C4'/%3E%3Ccircle cx='120' cy='120' r='22' fill='%23D8D2C4'/%3E%3C/svg%3E" alt="Стена до работ: перепад 14 мм, видны волны и наплывы штукатурки" width="400" height="300" loading="lazy" decoding="async">
+            <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 400 300'%3E%3Crect width='400' height='300' fill='%23F2EDE3'/%3E%3Cellipse cx='120' cy='60' rx='150' ry='90' fill='%23FFFFFF' opacity='0.62'/%3E%3Cellipse cx='330' cy='250' rx='120' ry='60' fill='%23E2DACC' opacity='0.5'/%3E%3C/svg%3E" alt="Та же стена после шпатлёвки: ровная поверхность, просвет 1 мм на 2 м" width="400" height="300" loading="lazy" decoding="async">
+            <figcaption>Слева — до, справа — после. Перепад 14 мм на 4 м².</figcaption>
+          </figure>
+          <div class="case__body">
+            <h3>Квартира 72 м², ЖК «Остров»</h3>
+            <p style="font-size:var(--fs-2);color:var(--ink-2)">Бетон с наплывами после монолита: старт в два приёма, стеклохолст, три слоя финиша. Сдавали ночью — заказчик принимал стену включив только бра, чтобы увидеть «рябь» под боковым светом.</p>
+            <ul class="case__facts">
+              <li>Площадь стен<b>198 м²</b></li>
+              <li>Срок<b>8 дней</b></li>
+              <li>Стоимость работ<b>154 400 ₽</b></li>
+              <li>Просвет на приёмке<b>0,8 мм</b></li>
+            </ul>
+          </div>
+        </article>
+        <article class="case">
+          <figure class="case__media" style="margin:0">
+            <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 400 300'%3E%3Crect width='400' height='300' fill='%23CFC8BA'/%3E%3Cpath d='M0 210 L60 190 L120 215 L180 188 L240 212 L300 186 L360 208 L400 196 L400 300 L0 300 Z' fill='%23BDB5A5'/%3E%3Cpath d='M0 240 L80 226 L160 246 L240 222 L320 244 L400 230 L400 300 L0 300 Z' fill='%23AEA594'/%3E%3Ccircle cx='300' cy='90' r='34' fill='%23D8D2C4'/%3E%3Ccircle cx='120' cy='120' r='22' fill='%23D8D2C4'/%3E%3C/svg%3E" alt="Газобетонная стена в доме до выравнивания: швы кладки выступают до 6 мм" width="400" height="300" loading="lazy" decoding="async">
+            <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 400 300'%3E%3Crect width='400' height='300' fill='%23F2EDE3'/%3E%3Cellipse cx='280' cy='70' rx='160' ry='96' fill='%23FFFFFF' opacity='0.58'/%3E%3Cellipse cx='70' cy='240' rx='110' ry='55' fill='%23E2DACC' opacity='0.45'/%3E%3C/svg%3E" alt="Стена после выравнивания стартом и финишем: вертикаль в допуске 2 мм на 1 м" width="400" height="300" loading="lazy" decoding="async">
+            <figcaption>Слева — до, справа — после. Швы газобетона 6 мм.</figcaption>
+          </figure>
+          <div class="case__body">
+            <h3>Дом 180 м², 34 км Новорижского ш.</h3>
+            <p style="font-size:var(--fs-2);color:var(--ink-2)">Газобетон с выступающими швами и разной впитываемостью: два слоя грунта Betokontakt, старт до 15 мм в два приёма, стеклохолст по всей площади. Работали двумя бригадами параллельно.</p>
+            <ul class="case__facts">
+              <li>Площадь стен<b>480 м²</b></li>
+              <li>Срок<b>15 дней</b></li>
+              <li>Стоимость работ<b>374 400 ₽</b></li>
+              <li>Доп. миллиметры<b>148 ₽/м²</b></li>
+            </ul>
+          </div>
+        </article>
+        <article class="case">
+          <figure class="case__media" style="margin:0">
+            <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 400 300'%3E%3Crect width='400' height='300' fill='%23CFC8BA'/%3E%3Cpath d='M0 210 L60 190 L120 215 L180 188 L240 212 L300 186 L360 208 L400 196 L400 300 L0 300 Z' fill='%23BDB5A5'/%3E%3Cpath d='M0 240 L80 226 L160 246 L240 222 L320 244 L400 230 L400 300 L0 300 Z' fill='%23AEA594'/%3E%3Ccircle cx='300' cy='90' r='34' fill='%23D8D2C4'/%3E%3Ccircle cx='120' cy='120' r='22' fill='%23D8D2C4'/%3E%3C/svg%3E" alt="Офисная стена с трещинами по стыкам ГКЛ до ремонта" width="400" height="300" loading="lazy" decoding="async">
+            <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 400 300'%3E%3Crect width='400' height='300' fill='%23F2EDE3'/%3E%3Cellipse cx='200' cy='50' rx='180' ry='80' fill='%23FFFFFF' opacity='0.6'/%3E%3Cellipse cx='200' cy='260' rx='140' ry='50' fill='%23E2DACC' opacity='0.48'/%3E%3C/svg%3E" alt="Стена офиса после ремонта: стыки ГКЛ армированы серпянкой, трещин нет" width="400" height="300" loading="lazy" decoding="async">
+            <figcaption>Слева — до, справа — после. Трещины по 6 стыкам.</figcaption>
+          </figure>
+          <div class="case__body">
+            <h3>Офис 120 м², БЦ «Порт»</h3>
+            <p style="font-size:var(--fs-2);color:var(--ink-2)">Трещины по стыкам ГКЛ и следы старой краски: расшили швы, поставили серпянку и стеклохолст, вывели в ноль. Работали ночами 19:00–07:00, чтобы не останавливать арендатора.</p>
+            <ul class="case__facts">
+              <li>Площадь стен<b>330 м²</b></li>
+              <li>Срок<b>11 ночей</b></li>
+              <li>Стоимость работ<b>287 100 ₽</b></li>
+              <li>Трещин после<b>0 из 6</b></li>
+            </ul>
+          </div>
+        </article>
+      </div>
+      <div class="cards" style="margin-top:24px">
+        <article class="card">
+          <h3>Отзыв: заказчик, квартира 72 м²</h3>
+          <p>«Смотрел объект при выключенном свете, только бра — и не нашёл, к чему придраться. Смета не выросла ни на рубль, хотя перепад оказался 14 мм вместо 8. Срок сдвинулся на полдня из-за сушки, предупредили заранее».</p>
+          <p class="card__meta">Ирина К. · Москва · отзыв — пример для макета</p>
+        </article>
+        <article class="card">
+          <h3>Отзыв: прораб, дом 180 м²</h3>
+          <p>«Отдал им весь второй этаж: 240 м², газобетон. Понравилось, что каждый вечер был фотоотчёт по слоям — я не ездил на объект проверять, что старт уже лёг. По срокам вошли в 15 дней, хотя обычно такие объёмы тянут три недели».</p>
+          <p class="card__meta">Сергей М. · прораб · отзыв — пример для макета</p>
+        </article>
+        <article class="card">
+          <h3>Отзыв: управляющая офисом</h3>
+          <p>«Работали ночами, к 7 утра убирали всё до пылинки: ни один сотрудник не заметил ремонта, кроме того, что стены стали ровными. Через 8 месяцев ни одной трещины по стыкам — а до этого они появлялись каждый год».</p>
+          <p class="card__meta">Анна П. · БЦ «Порт» · отзыв — пример для макета</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <section class="sec sec--line" id="warranty" aria-labelledby="war-h">
+    <div class="wrap">
+      <div class="guarantee">
+        <div>
+          <p class="kicker" style="color:var(--accent);">09 · Гарантия</p>
+          <h2 id="war-h">24 месяца отвечаем рублём, а не словами</h2>
+          <p style="margin-top:16px">Гарантия начинается с даты акта приёмки и действует на все работы, выполненные нашими материалами. Если появилась трещина по нашему стыку или пятно от проступившего грунта — выезжаем за 5 рабочих дней и устраняем за свой счёт. Рекламацию по гарантии принимаем без экспертизы: достаточно фото и описания.</p>
+          <a class="btn btn--on-dark" href="#form" style="margin-top:24px">Записаться на замер</a>
+        </div>
+        <div class="guarantee__grid">
+          <div><b>24 мес</b>гарантия по договору на все виды работ из прайса</div>
+          <div><b>5 дней</b>максимальный срок выезда по гарантийной рекламации</div>
+          <div><b>0 ₽</b>стоимость устранения дефекта по нашей вине</div>
+          <div><b>30 дней</b>цена в смете зафиксирована и не меняется</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="sec sec--line" id="faq" aria-labelledby="faq-h">
+    <div class="wrap">
+      <div class="sec__head">
+        <p class="kicker"><span class="sec__num">10</span> Вопросы</p>
+        <h2 id="faq-h">Одиннадцать вопросов, которые задают до подписания договора</h2>
+        <p>Отвечаем цифрами и материалами. Если ответа на ваш вопрос здесь нет — напишите в форме ниже, ответим в течение 15 минут в рабочее время.</p>
+      </div>
+      <div class="faq">
+        <details open>
+          <summary>Сколько сохнет шпатлёвка перед покраской?</summary>
+          <p>Финишный слой на гипсовой основе сохнет 3–4 часа при 20 °C и влажности 50 %. Шлифовать можно сразу после высыхания, а красить — через 24 часа после последнего слоя и грунта. Цементные смеси в санузле сохнут 12 часов, полная готовность под краску — через 48 часов.</p>
+        </details>
+        <details>
+          <summary>Нужно ли снимать старую шпатлёвку?</summary>
+          <p>Только там, где она отслаивается. Проверяем 3–4 участка на каждой стене шпателем и простукиванием: глухой звук и «пузырь» — снимаем, держится крепко — грунтуем Betokontakt и выравниваем стартом. Полный демонтаж — 190 ₽/м², и он нужен не чаще, чем в одном случае из шести.</p>
+        </details>
+        <details>
+          <summary>Сколько стоит шпатлёвка квартиры 60 м² под покраску?</summary>
+          <p>Работы по стенам — от 96 000 ₽ при 165 м² стен (620 ₽/м², стеклохолст, 2 слоя финиша, шлифовка). Материалы — 14 850–23 100 ₽ по расходу 0,9–1,4 кг/м². Итого 111 000–119 000 ₽ и 5–6 рабочих дней. Если стены кривые больше 10 мм — плюс 45 ₽/м² за каждый миллиметр старта.</p>
+        </details>
+        <details>
+          <summary>Чем старт отличается от финиша?</summary>
+          <p>Старт (Vetonit KR, ТЕКС Профи Старт) — крупнозернистая смесь для геометрии: слой до 10 мм, расход 1,3–1,6 кг/м² на миллиметр. Финиш (Vetonit LR+, Sheetrock) — мелкая смесь слоем 1–2 мм, расход 0,8–1,2 кг/м², даёт гладкость под краску. Старт под покраску без финиша не годится: зерно видно при боковом свете.</p>
+        </details>
+        <details>
+          <summary>Обязателен ли стеклохолст?</summary>
+          <p>Под покраску — да, он входит в цену 620 и 780 ₽/м². Паутинка 50 г/м² работает как арматура: трещина не идёт по стыку ГКЛ или газобетонному шву при усадке дома. Под обои за 380 ₽/м² не кладём — там армирование не нужно, и это честно отражено в цене.</p>
+        </details>
+        <details>
+          <summary>Можно ли шпатлевать по газобетону и ГКЛ?</summary>
+          <p>Да, но по-разному. Газобетон впитывает неравномерно: два слоя грунта, затем старт до 15 мм в два приёма. ГКЛ: швы серпянкой 50 мм, саморезы в утоп, стеклохолст по всей площади, финиш двумя слоями. Просвет на приёмке — 1 мм на 2 м для обоих оснований.</p>
+        </details>
+        <details>
+          <summary>Работаете с материалом заказчика?</summary>
+          <p>Да. Условия: партия одной датой, проверяем срок годности и условия хранения, делаем пробный замес на 1 м². Гарантия тогда даётся на работу, а не на материал, и цена работ выше на 8 % — за риск несовместимости смесей.</p>
+        </details>
+        <details>
+          <summary>Что входит в гарантию 24 месяца?</summary>
+          <p>Отслоение шпатлёвки, трещины по нашим стыкам и углам, проступающие пятна от грунта или заделки, «рябь» и полосы, видимые при включённом свете. Не входят: подвижки фундамента и дома, протечки, механические повреждения после монтажа мебели, работы других подрядчиков по этим стенам.</p>
+        </details>
+        <details>
+          <summary>Как принимают работу?</summary>
+          <p>По акту с замерами: правило 2 м на просвет, лампа 500 Вт вдоль стены, влагомер. Результаты вписываются в акт цифрами. Найденные замечания идут в дефектную ведомость с датой устранения — акт подписываем только после того, как пункты закрыты.</p>
+        </details>
+        <details>
+          <summary>Можно ли делать шпатлёвку зимой?</summary>
+          <p>Да, при температуре в помещении 15–25 °C и влажности 40–65 %. Гигрометр ставим на объект. Обогреватели направляем не в стену, а вдоль: поток в свежий слой сушит край быстрее середины и даёт усадочные трещины. Сушка при +25 °C вместо +20 °C сокращает время слоя с 4 до 2,5 часов.</p>
+        </details>
+        <details>
+          <summary>Нужна ли предоплата?</summary>
+          <p>Аванс 30 % на материалы — да, он идёт на закупку смесей и плёнки. Остальное разбиваем по этапам: после старта, после финиша и шлифовки, финальный платёж — после подписания акта. Никаких «все деньги вперёд».</p>
+        </details>
+      </div>
+    </div>
+  </section>
+
+  <section class="sec sec--line" id="form" aria-labelledby="form-h">
+    <div class="wrap">
+      <div class="contacts">
+        <div>
+          <div class="sec__head" style="margin-bottom:24px">
+            <p class="kicker"><span class="sec__num">11</span> Заявка</p>
+            <h2 id="form-h">Замер 40 минут, смета на месте, без обязательств</h2>
+            <p>Оставьте площадь и телефон — перезвоним за 15 минут в рабочее время и договоримся об удобном часе замера. В выходные звоним тоже: работаем по субботам до 20:00.</p>
+          </div>
+          <ul class="playbook">
+            <li><span><b>Выезд по Москве бесплатно</b> в пределах МКАД, до 30 км за МКАД — 500 ₽.</span></li>
+            <li><span><b>Смета в день замера</b>: позиции, объёмы в м² и материалы по расходу.</span></li>
+            <li><span><b>Начнём в течение 3 рабочих дней</b> после подписания договора.</span></li>
+          </ul>
+        </div>
+        <form class="form" id="lead-form" action="#form" novalidate>
+          <fieldset>
+            <div class="field">
+              <label for="f-name">Как к вам обращаться</label>
+              <input id="f-name" name="name" type="text" autocomplete="given-name" placeholder="Имя" aria-describedby="err-f-name">
+              <span class="field__err" id="err-f-name"></span>
+            </div>
+            <div class="field">
+              <label for="f-phone">Телефон</label>
+              <input id="f-phone" name="phone" type="tel" inputmode="tel" autocomplete="tel" placeholder="+7 999 123-45-67" aria-describedby="err-f-phone">
+              <span class="field__err" id="err-f-phone"></span>
+            </div>
+            <div class="field">
+              <label for="f-mail">Почта для сметы <span class="field__hint">(необязательно)</span></label>
+              <input id="f-mail" name="email" type="email" autocomplete="email" placeholder="ivan@example.ru" aria-describedby="err-f-mail">
+              <span class="field__err" id="err-f-mail"></span>
+            </div>
+            <div class="field">
+              <label for="f-area">Площадь стен, м²</label>
+              <input id="f-area" name="area" type="number" inputmode="numeric" min="1" max="2000" placeholder="165">
+              <span class="field__hint">Не знаете — напишите площадь квартиры, посчитаем на замере.</span>
+            </div>
+            <div class="field">
+              <label for="f-when">Когда начать</label>
+              <select id="f-when" name="when_start">
+                <option value="asap">Как можно скорее</option>
+                <option value="week">На этой неделе</option>
+                <option value="month">В течение месяца</option>
+                <option value="plan">Пока планирую бюджет</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="f-comment">Что нужно сделать</label>
+              <textarea id="f-comment" name="comment" placeholder="Например: стены под покраску, есть ГКЛ, санузел отдельно"></textarea>
+            </div>
+            <label class="check" for="f-consent">
+              <input id="f-consent" name="consent" type="checkbox" checked>
+              <span>Согласен на обработку данных: только для расчёта сметы и звонка, без передачи третьим лицам.</span>
+            </label>
+            <span class="field__err" id="err-f-consent"></span>
+            <button class="btn btn--full" type="submit" style="margin-top:8px">Получить смету и дату замера</button>
+            <p class="form__status" id="form-status" role="status" aria-live="polite"></p>
+          </fieldset>
+        </form>
+      </div>
+    </div>
+  </section>
+
+  <section class="sec sec--line" id="contacts" aria-labelledby="cont-h">
+    <div class="wrap">
+      <div class="sec__head">
+        <p class="kicker"><span class="sec__num">12</span> Контакты</p>
+        <h2 id="cont-h">Позвонить, написать или приехать в офис</h2>
+        <p>Отвечаем с 8:00 до 20:00 по будням и в субботу. На заявки, оставленные ночью, перезваниваем утром до 10:00.</p>
+      </div>
+      <div class="contacts">
+        <dl>
+          <div><dt>Телефон</dt><dd><a href="tel:+74951234567">+7 (495) 123-45-67</a></dd></div>
+          <div><dt>Почта</dt><dd><a href="mailto:zakaz@rovno.example">zakaz@rovno.example</a></dd></div>
+          <div><dt>Офис и склад</dt><dd>Москва, ул. Примерная, 12, офис 3 — 5 минут от м. Примерная</dd></div>
+          <div><dt>Режим работы</dt><dd>Пн–Пт 8:00–20:00, Сб 9:00–18:00, Вс — приём заявок</dd></div>
+          <div><dt>Реквизиты</dt><dd>ООО «РОВНО», ИНН 7700000000, ОГРН 1100000000000</dd></div>
+          <div><dt>Зона работ</dt><dd>Москва и МО до 50 км от МКАД, дальше — по договорённости</dd></div>
+        </dl>
+        <div>
+          <p class="demo"><b>Демонстрационный макет.</b> Название, телефон, почта, адрес, реквизиты, отзывы, цены и сроки — примеры для показа структуры и дизайна страницы, а не действующая организация. Перед публикацией их заменяют данными заказчика, а форму подключают к приёму заявок.</p>
+          <p class="demo" style="margin-top:16px"><b>Что технически проверено на этой странице:</b> один файл без внешних запросов, адаптив 390/768/1440 px без горизонтальной прокрутки, контраст текста от 5,0:1, микроразметка Schema.org, отключаемые анимации, работа формы и калькулятора без сервера.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="ftr">
+  <div class="wrap ftr__in">
+    <p>© 2026 РОВНО — малярно-штукатурные работы. Демонстрационный макет, данные — пример.</p>
+    <nav aria-label="Подвал">
+      <a href="#prices">Цены</a> · <a href="#faq">Вопросы</a> · <a href="#form">Замер</a> · <a href="#top">Наверх</a>
+    </nav>
+  </div>
+</footer>
+
+<script>
+(function(){
+  'use strict';
+  /* Плашка на непойманную ошибку: страница не должна молча ломаться. */
+  function plaque(text){
+    var el = document.getElementById('plaque');
+    if(!el) return;
+    el.textContent = text;
+    el.setAttribute('data-show','1');
+  }
+  window.addEventListener('error', function(e){ plaque('Ошибка на странице: ' + (e.message || 'скрипт не выполнился')); });
+
+  var nf = new Intl.NumberFormat('ru-RU');
+  function money(n){ return nf.format(Math.round(n / 100) * 100) + ' ₽'; }
+
+  /* Ставки совпадают с таблицей цен: цена в калькуляторе не может быть ниже неё. */
+  var RATES = {
+    start:     { min:450, max:520, label:'Шпатлёвка старт, 1 слой' },
+    wallpaper: { min:380, max:450, label:'Под обои, 2 слоя' },
+    finish:    { min:620, max:720, label:'Финиш под покраску, 2 слоя' },
+    paint:     { min:780, max:900, label:'Под покраску «свет», 3 слоя' },
+    bath:      { min:720, max:840, label:'Влагостойкая, санузел' },
+    ceiling:   { min:690, max:800, label:'Потолок под покраску' }
+  };
+  var MAT_MIN = 90, MAT_MAX = 140, ARMOR = 60, ORDER_MIN = 15;
+
+  var area = document.getElementById('calc-area');
+  var type = document.getElementById('calc-type');
+  var armor = document.getElementById('calc-armor');
+  var go = document.getElementById('calc-go');
+  var out = document.getElementById('calc-out');
+  var outSum = document.getElementById('calc-sum');
+  var outRows = document.getElementById('calc-rows');
+  var outNote = document.getElementById('calc-note');
+
+  function calc(){
+    var a = Number(String(area.value).replace(',', '.'));
+    if(!isFinite(a) || a <= 0){ a = 60; }
+    var order = Math.max(ORDER_MIN, Math.round(a));
+    var rate = RATES[type.value] || RATES.finish;
+    var extra = armor.checked ? ARMOR : 0;
+    var workMin = (rate.min + extra) * order;
+    var workMax = (rate.max + extra) * order;
+    var matMin = MAT_MIN * order;
+    var matMax = MAT_MAX * order;
+    var days = Math.max(2, Math.ceil(order / 18) + 2);
+    outSum.textContent = money(workMin + matMin) + ' — ' + money(workMax + matMax);
+    outRows.innerHTML = '';
+    [
+      ['Площадь в смете', order + ' м²' + (a < ORDER_MIN ? ' (минимум 15 м²)' : '')],
+      ['Вид работ', rate.label + (armor.checked ? ' + стеклохолст' : '')],
+      ['Работы', money(workMin) + ' — ' + money(workMax)],
+      ['Материалы', money(matMin) + ' — ' + money(matMax)],
+      ['Срок', days + '–' + (days + 2) + ' рабочих дней']
+    ].forEach(function(pair){
+      var row = document.createElement('div');
+      row.className = 'calc__row';
+      var k = document.createElement('span');
+      k.textContent = pair[0];
+      var v = document.createElement('span');
+      v.textContent = pair[1];
+      row.appendChild(k); row.appendChild(v);
+      outRows.appendChild(row);
+    });
+    outNote.textContent = 'Расчёт ориентировочный: цена зависит от перепада стен и доступа к ним. Точную смету замерщик даёт после замера правилом и влагомером — 40 минут на объекте.';
+    out.hidden = false;
+  }
+  if(go){ go.addEventListener('click', function(e){ e.preventDefault(); calc(); out.scrollIntoView({block:'nearest'}); }); }
+  if(type){ type.addEventListener('change', calc); }
+  if(armor){ armor.addEventListener('change', calc); }
+  if(area && out){ calc(); }
+
+  /* Форма: валидация на клиенте, честный статус, ничего не отправляем. */
+  var form = document.getElementById('lead-form');
+  var status = document.getElementById('form-status');
+  var PHONE = /^\+?[78][\s(-]*\d{3}[\s)-]*\d{3}[\s-]*\d{2}[\s-]*\d{2}$/;
+
+  function setError(id, message){
+    var input = document.getElementById(id);
+    var box = document.getElementById('err-' + id);
+    if(box){ box.textContent = message || ''; }
+    if(!input) return;
+    if(message){ input.setAttribute('aria-invalid','true'); input.setAttribute('aria-describedby','err-' + id); }
+    else { input.removeAttribute('aria-invalid'); input.removeAttribute('aria-describedby'); }
+  }
+
+  if(form){
+    form.addEventListener('submit', function(e){
+      e.preventDefault();
+      var ok = true;
+      var name = document.getElementById('f-name');
+      var phone = document.getElementById('f-phone');
+      var mail = document.getElementById('f-mail');
+      if(String(name.value).trim().length < 2){ setError('f-name','Напишите, как к вам обращаться'); ok = false; } else { setError('f-name',''); }
+      if(!PHONE.test(String(phone.value).trim())){ setError('f-phone','Телефон в формате +7 999 123-45-67'); ok = false; } else { setError('f-phone',''); }
+      if(String(mail.value).trim() && !/^[^@\s]+@[^@\s.]+\.[a-zа-я]{2,}$/i.test(String(mail.value).trim())){ setError('f-mail','Проверьте адрес почты'); ok = false; } else { setError('f-mail',''); }
+      var consent = document.getElementById('f-consent');
+      if(consent && !consent.checked){ setError('f-consent','Без согласия на обработку данных заявку принять нельзя'); ok = false; }
+      else if(consent){ setError('f-consent',''); }
+      if(!ok){
+        status.dataset.state = 'err';
+        status.textContent = 'Проверьте поля с отметкой — заявка не уйдёт, пока ошибки не исправлены.';
+        var first = form.querySelector('[aria-invalid="true"]');
+        if(first){ first.focus(); }
+        return;
+      }
+      status.dataset.state = 'ok';
+      status.textContent = 'Заявка принята: демо-макет ничего не отправляет, в рабочей версии здесь ответ менеджера за 15 минут.';
+      form.reset();
+      calc();
+    });
+    form.addEventListener('input', function(ev){
+      var id = ev.target && ev.target.id;
+      if(id && document.getElementById('err-' + id)){ setError(id,''); }
+    });
+  }
+})();
+</script>
+</body>
+</html>

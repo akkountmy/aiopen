@@ -107,8 +107,6 @@ description: Как честно посчитать большие данные 
 
 ## Инструменты в этом окружении
 
-**Локальный харнесс (DSH):** расчёты — через `pwsh` и Python `C:\Python314\python.exe` (установлены pandas 3, pyarrow 25, openpyxl, numpy; `polars` нет). Для CSV — `pandas.read_csv(sep=None, engine="python", dtype=str)` с последующим приведением типов; для больших файлов — `chunksize`, `usecols`, `dtype` и `pyarrow` для parquet. Книги — openpyxl (чтение `read_only=True`), результаты — `excel_create`/`excel_update` или openpyxl, отчёт — `word_create` или python-docx, `present` для выдачи файла. Проверять результат удобно повторным чтением файла в Python.
-
 **Сервис DSH Open Web:** первый инструмент — `analyze_data` (читает CSV и XLSX потоком, работает на сотнях тысяч строк):
 - `mode: "profile"` — профиль колонок: типы, пропуски, уникальные, мин/среднее/медиана/p95/макс, частые значения. Это шаг 1, всегда начинай с него;
 - `mode: "query"` — `filters[]` (`column`, `op`: `eq/ne/gt/gte/lt/lte/contains/startsWith/endsWith/in/notIn/between/empty/notEmpty`, `value`), `groupBy[]` (до 3 колонок; объектом с `part: year|quarter|month|week|day` — разрез даты), `metrics[]` (до 8: `count`, `countDistinct`, `sum`, `avg`, `min`, `max`, `median`, `p95`, `stddev`, с `as` для имени колонки), `sort: { column, desc }`, `limit` (по умолчанию 50, до 2000);

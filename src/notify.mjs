@@ -107,3 +107,36 @@ export function approvalMessage({ username, projectName, chatTitle, spentUsd, li
     .filter(Boolean)
     .join('\n');
 }
+
+/* Обращение из окна «Поддержка». Текст приходит от человека, поэтому весь
+   пользовательский ввод проходит через escapeTelegram: иначе символ «<» в
+   описании ошибки ломал бы разметку и Telegram отклонял бы сообщение целиком. */
+export function supportMessage({ kind, kindLabel, username, displayName, text, contact, page, ua, hasScreenshot }) {
+  const url = TELEGRAM.publicUrl;
+  const who = displayName && displayName !== username ? `${displayName} (${username})` : username;
+  const trimmed = String(text || '').trim();
+  const body = trimmed.length > 900 ? `${trimmed.slice(0, 900)}…` : trimmed;
+  return [
+    `💬 <b>Сообщение от пользователя: ${escapeTelegram(kindLabel || 'обращение')}</b>`,
+    '',
+    `От: <b>${escapeTelegram(who)}</b>`,
+    page ? `Страница: ${escapeTelegram(page)}` : null,
+    contact ? `Связаться: ${escapeTelegram(contact)}` : null,
+    '',
+    `<blockquote>${escapeTelegram(body)}</blockquote>`,
+    hasScreenshot ? 'Скриншот приложен — он виден в кабинете администратора.' : null,
+    '',
+    `Ответить: ${url} → меню пользователя → «Пользователи» → «Сообщения от пользователя».`,
+  ]
+    .filter((line) => line !== null)
+    .join('\n');
+}
+
+/* Подпись для уведомления на устройстве администратора. */
+export function supportPushText({ kindLabel, username, text }) {
+  const trimmed = String(text || '').replace(/\s+/g, ' ').trim();
+  return {
+    title: `${kindLabel || 'Сообщение'} от ${username}`,
+    body: trimmed.length > 140 ? `${trimmed.slice(0, 140)}…` : trimmed,
+  };
+}

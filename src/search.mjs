@@ -3,6 +3,8 @@ import net from 'node:net';
 import { extractDocumentText } from './docparse.mjs';
 import { extractReadable, extractFields } from './extract.mjs';
 import { truncate } from './util.mjs';
+import { withHeavySlot, CAPACITY } from './capacity.mjs';
+import { LIMITS } from './config.mjs';
 import { deepseekEnabled, deepseekSearch, deepseekFetch } from './deepseek-search.mjs';
 import { looksLikeChallenge, obscuraConfigured, obscuraLoad } from './obscura.mjs';
 
@@ -10,7 +12,7 @@ const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 
 const MAX_BYTES = 12 * 1024 * 1024;
-const FETCH_TIMEOUT_MS = 30000;
+const FETCH_TIMEOUT_MS = LIMITS.fetchTimeoutMs > 0 ? LIMITS.fetchTimeoutMs : 30000;
 /* У стелс-браузера свой запас времени. В контейнере запуск браузера, отрисовка
    и ожидание сети складываются: reddit на живом сервисе отдался за 46 с, а на
    прежнем лимите 30 с загрузка обрывалась и модель получала «страница не
@@ -457,7 +459,9 @@ async function loadHtml(
   const mode = String(engine || 'auto').toLowerCase();
   const url = assertPublicUrl(rawUrl);
   if (mode === 'obscura') {
-    return obscuraLoad(url.href, { timeoutMs: stealthBudget(timeoutMs), waitMs, proxy, format: stealthFormat });
+    return withHeavySlot(() =>
+      obscuraLoad(url.href, { timeoutMs: stealthBudget(timeoutMs), waitMs, proxy, format: stealthFormat }),
+    );
   }
   const page = await requestPage(url.href, { method, headers, body, accept, timeoutMs });
   if (mode === 'http' || page.kind !== 'html' || !obscuraConfigured()) return page;
@@ -465,7 +469,9 @@ async function loadHtml(
   const suspicious = page.status >= 400 || looksLikeChallenge(text) || text.length < 400;
   if (!suspicious) return page;
   try {
-    const stealth = await obscuraLoad(url.href, { timeoutMs: stealthBudget(timeoutMs), waitMs, proxy, format: stealthFormat });
+    const stealth = await withHeavySlot(() =>
+      obscuraLoad(url.href, { timeoutMs: stealthBudget(timeoutMs), waitMs, proxy, format: stealthFormat }),
+    );
     /* Сравнивать надо в одной мере: браузер в режиме markdown отдаёт очищенный
        текст, и он всегда короче HTML — иначе хорошая страница проигрывала бы
        заглушке только из-за разметки. */
@@ -566,7 +572,7 @@ export async function fetchUrl(
  * отдают контент только после JS. В облаке без Chromium честно говорит, что
  * браузера нет, — вместо пустого текста.
  */
-async function renderHtml(rawUrl, { timeoutMs = 45000, waitMs = 0, waitSelector = '' } = {}) {
+async function renderHtmlNow(rawUrl, { timeoutMs = 45000, waitMs = 0, waitSelector = '' } = {}) {
   const url = assertPublicUrl(rawUrl);
   await assertResolvesPublic(url.hostname);
   let playwright;
@@ -618,6 +624,12 @@ async function renderHtml(rawUrl, { timeoutMs = 45000, waitMs = 0, waitSelector 
   } finally {
     await browser.close().catch(() => {});
   }
+}
+
+/* Chromium на каждый вызов — самый дорогой инструмент в наборе, поэтому он идёт
+   через общий счётчик тяжёлых работ вместе с анти-ботом, Python и распаковкой. */
+function renderHtml(rawUrl, options = {}) {
+  return withHeavySlot(() => renderHtmlNow(rawUrl, options));
 }
 
 /**
@@ -685,7 +697,7 @@ export async function scrapePage(
 }
 
 /** Загружает несколько адресов параллельно; ошибки не срывают остальные. */
-export async function fetchMany(urls, { maxChars = 8000, concurrency = 3 } = {}) {
+export async function fetchMany(urls, { maxChars = 8000, concurrency = CAPACITY.crawlConcurrency } = {}) {
   const list = [...new Set((Array.isArray(urls) ? urls : []).map((item) => String(item).trim()).filter(Boolean))].slice(0, 6);
   if (!list.length) throw new Error('Нужен хотя бы один адрес');
   const results = new Array(list.length);
@@ -710,7 +722,7 @@ export async function fetchMany(urls, { maxChars = 8000, concurrency = 3 } = {})
  * Обход сайта по ссылкам: до maxPages страниц в пределах одного сайта.
  * Нужен, когда данных нет на одной странице — прайсы, каталоги, документация.
  */
-export async function crawlSite(rawUrl, { maxPages = 8, maxDepth = 1, maxChars = 4000, concurrency = 3 } = {}) {
+export async function crawlSite(rawUrl, { maxPages = 8, maxDepth = 1, maxChars = 4000, concurrency = CAPACITY.crawlConcurrency } = {}) {
   const start = assertPublicUrl(rawUrl);
   start.hash = '';
   const seen = new Set([start.href]);

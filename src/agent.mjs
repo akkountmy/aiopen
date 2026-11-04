@@ -1,4 +1,4 @@
-import { CONTEXT, ESCALATION, MODEL, REVIEW, SPLIT, costUsd } from './config.mjs';
+import { CAPACITY, CONTEXT, ESCALATION, MODEL, REVIEW, SPLIT, costUsd } from './config.mjs';
 import { documentExcerpt, documentKind } from './doccheck.mjs';
 import { getDeepSeekKey } from './keys.mjs';
 import { chooseProfile, chooseStepRoute, describeStepRoute, isMechanicalTool } from './model.mjs';
@@ -52,6 +52,29 @@ export function describeFailure(error) {
   return friendlyError(error);
 }
 
+/* Сон, который просыпается от «Стоп»: пауза перед повтором не должна делать
+   задачу неотменяемой. */
+function sleepAbortable(ms, signal) {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(Object.assign(new Error('Остановлено'), { name: 'AbortError' }));
+      return;
+    }
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(Object.assign(new Error('Остановлено'), { name: 'AbortError' }));
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, Math.max(0, ms));
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+/* Один запрос к модели. Сигнал человека складываем с потолком времени на шаг:
+   без второго зависшее соединение держало бы место до утра, а без первого
+   «Стоп» перестал бы работать. */
 async function requestCompletion(body, { signal, onDelta, onReasoning }) {
   const key = getDeepSeekKey();
   if (!key) {
@@ -59,12 +82,17 @@ async function requestCompletion(body, { signal, onDelta, onReasoning }) {
     error.status = 401;
     throw error;
   }
+  const deadline = CAPACITY.modelTimeoutMs > 0 ? AbortSignal.timeout(CAPACITY.modelTimeoutMs) : null;
+  const combined = deadline && signal ? AbortSignal.any([signal, deadline]) : deadline || signal;
   const payload = { ...body, stream: true, stream_options: { include_usage: true } };
+  let text = '';
+  let reasoning = '';
+  try {
   const response = await fetch(`${MODEL.baseURL}/chat/completions`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
-    signal,
+    signal: combined,
   });
 
   if (!response.ok) {
@@ -78,8 +106,6 @@ async function requestCompletion(body, { signal, onDelta, onReasoning }) {
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
-  let text = '';
-  let reasoning = '';
   const toolCalls = [];
   let usage = null;
   let finishReason = null;
@@ -129,41 +155,76 @@ async function requestCompletion(body, { signal, onDelta, onReasoning }) {
   }
 
   return { text, reasoning, toolCalls: toolCalls.filter(Boolean), usage, finishReason };
+  } catch (error) {
+    /* Признак «уже что-то показали»: после первых байт повтор задвоил бы текст
+       в диалоге, поэтому повторяем только до начала выдачи. */
+    error.streamed = Boolean(text || reasoning);
+    if (deadline?.aborted && !signal?.aborted) {
+      error.status = error.status || 504;
+      error.timedOut = true;
+    }
+    throw error;
+  }
 }
 
+/** Ответы провайдера, которые имеет смысл повторить: перегрузка и таймауты. */
+const RETRYABLE_STATUS = new Set([408, 409, 425, 429, 500, 502, 503, 504]);
+/** Сколько раз повторяем шаг при перегрузке. Четыре попытки с растущей паузой
+ *  перекрывают короткий сбой провайдера, не превращая сбой в минуты ожидания. */
+const MODEL_RETRIES = 3;
+
 /**
- * Запрос к модели с двумя поправками на реальность:
+ * Запрос к модели с поправками на реальность:
  * — маршрут может не принимать reasoning_effort — повторяем без него;
- * — сильной модели может не быть в доступе — откатываемся на рабочую, чтобы
- *   задача не падала из-за недоступного профиля.
- * Обе поправки безопасны: сервер отвечает ошибкой до начала потока, поэтому
- * повтор не дублирует уже показанный текст.
+ * — сильной модели может не быть в доступе — откатываемся на рабочую;
+ * — провайдер отвечает 429/5xx или рвёт соединение — повторяем с паузой,
+ *   но только пока ничего не показали человеку (иначе текст задвоится).
  */
 async function callModel(body, options, { fallbackModel = '' } = {}) {
   let current = { ...body };
-  for (let attempt = 0; attempt < 3; attempt++) {
+  let fixups = 0;
+  let tries = 0;
+  for (;;) {
     try {
       return await requestCompletion(current, options);
     } catch (error) {
+      /* «Стоп» человека не повторяем ни при каких условиях. */
+      if (options?.signal?.aborted) throw error;
       const raw = String(error?.raw || '');
-      if (current.reasoning_effort && error?.status === 400 && /reasoning_effort|unsupported|unknown/i.test(raw)) {
-        const { reasoning_effort, ...rest } = current;
-        current = rest;
-        continue;
+      if (fixups < 3) {
+        if (current.reasoning_effort && error?.status === 400 && /reasoning_effort|unsupported|unknown/i.test(raw)) {
+          const { reasoning_effort, ...rest } = current;
+          current = rest;
+          fixups += 1;
+          continue;
+        }
+        const modelMissing =
+          (error?.status === 400 || error?.status === 404) &&
+          fallbackModel &&
+          current.model !== fallbackModel &&
+          /model|not found|does not exist|invalid|unknown/i.test(raw);
+        if (modelMissing) {
+          current = { ...current, model: fallbackModel, reasoning_effort: ESCALATION.flashEffort };
+          fixups += 1;
+          continue;
+        }
       }
-      const modelMissing =
-        (error?.status === 400 || error?.status === 404) &&
-        fallbackModel &&
-        current.model !== fallbackModel &&
-        /model|not found|does not exist|invalid|unknown/i.test(raw);
-      if (modelMissing) {
-        current = { ...current, model: fallbackModel, reasoning_effort: ESCALATION.flashEffort };
-        continue;
-      }
-      throw error;
+      const retryable =
+        error?.streamed !== true && (!error?.status || error?.timedOut === true || RETRYABLE_STATUS.has(Number(error?.status)));
+      if (!retryable || tries >= MODEL_RETRIES) throw error;
+      tries += 1;
+      /* Пауза растёт и слегка разъезжается случайной добавкой: десять задач,
+         упавших одновременно, не должны бить в провайдера одним залпом. */
+      const waitMs = Math.min(12000, 1200 * 2 ** (tries - 1)) + Math.round(Math.random() * 400);
+      const reason = error?.timedOut
+        ? `шаг дольше ${Math.round(CAPACITY.modelTimeoutMs / 1000)} с`
+        : error?.status
+          ? `ответ ${error.status}`
+          : 'обрыв связи';
+      console.warn(`[model] ${reason} — повтор ${tries}/${MODEL_RETRIES} через ${waitMs} мс`);
+      await sleepAbortable(waitMs, options?.signal);
     }
   }
-  throw new Error('Не удалось получить ответ сервиса');
 }
 
 /**
@@ -174,6 +235,10 @@ async function callModel(body, options, { fallbackModel = '' } = {}) {
 export async function simpleCompletion(messages, { maxTokens = 500, signal, effort = 'low', onUsage = null, model = '' } = {}) {
   const key = getDeepSeekKey();
   if (!key) return '';
+  /* Служебный вызов тоже под часами: конспект или проверка не должны висеть
+     наравне с задачей и держать ход. */
+  const deadline = CAPACITY.modelTimeoutMs > 0 ? AbortSignal.timeout(CAPACITY.modelTimeoutMs) : null;
+  const bounded = deadline && signal ? AbortSignal.any([signal, deadline]) : deadline || signal;
   const call = (withEffort, name) => {
     const body = { model: name || MODEL.name, messages, max_tokens: maxTokens, stream: false };
     if (withEffort) body.reasoning_effort = effort;
@@ -181,7 +246,7 @@ export async function simpleCompletion(messages, { maxTokens = 500, signal, effo
       method: 'POST',
       headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
-      signal,
+      signal: bounded,
     });
   };
   /* effort не знает каждая модель: на 400 повторяем тот же запрос без него. */
@@ -194,7 +259,6 @@ export async function simpleCompletion(messages, { maxTokens = 500, signal, effo
   /* Модели проверяющего может не быть в доступе: лучше проверить основной,
      чем промолчать. */
   if (!response.ok && model) response = await attempt('');
-  if (!response.ok) throw new Error(`simple completion ${response.status}`);
   if (!response.ok) throw new Error(`simple completion ${response.status}`);
   const json = await response.json();
   if (onUsage && json?.usage) {

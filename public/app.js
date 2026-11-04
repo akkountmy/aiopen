@@ -38,6 +38,10 @@ const ICONS = {
   key: '<svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="7.5" cy="12.5" r="3.5"/><path d="M10 10l6-6M14 6l1.5 1.5M16 4l1.5 1.5"/></svg>',
   users:
     '<svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="7.5" cy="7" r="2.6"/><path d="M3 16c0-2.2 2-3.6 4.5-3.6S12 13.8 12 16"/><path d="M13 5.2a2.4 2.4 0 010 4.6M14 12.6c1.9.3 3 1.6 3 3.4"/></svg>',
+  /* Гарнитура поддержки — тот же рисунок, что у кнопки «Поддержка» в шапке:
+     одна иконка на кнопку и на пункт меню, чтобы они читались как один раздел. */
+  support:
+    '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 11.4V10a6 6 0 0 1 12 0v1.4"/><rect x="2.6" y="10.4" width="3.3" height="5.2" rx="1.5"/><rect x="14.1" y="10.4" width="3.3" height="5.2" rx="1.5"/><path d="M15.75 15.6v.35a2.35 2.35 0 0 1-2.35 2.35H11"/></svg>',
   bell: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 8.2a5 5 0 0110 0c0 3.1 1.1 4.2 1.7 4.8H3.3C3.9 12.4 5 11.3 5 8.2z"/><path d="M8.2 16a2 2 0 003.6 0"/></svg>',
   logout:
     '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M12 4H5.5A1.5 1.5 0 004 5.5v9A1.5 1.5 0 005.5 16H12"/><path d="M11 10h6M14.5 7L17.5 10l-3 3"/></svg>',
@@ -91,6 +95,9 @@ const state = {
   liveStreams: new Map(),
   filesOpen: true,
   filesDrawerOpen: false,
+  /* Непрочитанные обращения в поддержку — только для администратора: цифра на
+     кнопке в шапке и у пункта меню профиля. */
+  supportUnread: 0,
   /* Раскрытые папки панели файлов — как state.expanded у проектов: список
      ведёт себя деревом, а не переходами «внутрь папки» и «Наверх». */
   filesExpanded: new Set(),
@@ -841,6 +848,11 @@ async function startApp(payload) {
     void maybeShowNotifyOffer();
   }, 600);
   void ensurePush();
+  /* Поддержка: цифра непрочитанных у администратора и открытие кабинета сразу
+     на блоке обращений, если человек пришёл по ссылке из уведомления. */
+  applySupportBadge(payload.support?.unread || 0);
+  startSupportWatch();
+  void openSupportFromUrl();
   /* Сервер должен знать, что человек сейчас в сервисе: тогда пуш о готовой
      задаче не уйдёт ни на это устройство, ни на телефон. */
   startPresence();
@@ -2801,6 +2813,13 @@ function renderAttachStrip() {
     name.title = att.name;
     chip.appendChild(name);
     chip.appendChild(el('span', 'fc-size', fmtSize(att.size)));
+    /* Подпись «сколько сэкономили»: человек видит, что файл сжался, и не думает,
+       что прикрепился не тот файл. */
+    if (att.note) {
+      const note = el('span', 'fc-note', att.note);
+      note.title = 'Сжато перед отправкой';
+      chip.appendChild(note);
+    }
     if (att.status === 'uploading' || att.status === 'processing') {
       const status = el('span', 'fc-status');
       status.innerHTML = '<span class="spinner"></span>';
@@ -2860,6 +2879,21 @@ function pickFiles({ accept = '', capture = '', multiple = true } = {}) {
   input.click();
 }
 
+/* Сжатие файла больше 0,7 МБ перед отправкой на сервер — общий вход для обоих
+   путей прикрепления: вложения сообщения (uploadFiles) и файлы проекта
+   (uploadToProject). Сама работа с картинками живёт в attach-shrink.js; здесь
+   только страховка: любая неудача сжатия отдаёт исходный файл, потому что
+   прикрепить файл важнее, чем сэкономить байты. */
+async function shrinkBeforeUpload(file) {
+  try {
+    const shrunk = window.AttachShrink ? await window.AttachShrink.shrink(file) : null;
+    if (shrunk?.changed) return { file: shrunk.file, note: shrunk.note };
+  } catch {
+    /* оставляем исходный файл */
+  }
+  return { file, note: '' };
+}
+
 async function uploadFiles(fileList) {
   const files = Array.from(fileList || []);
   if (!files.length) return;
@@ -2878,21 +2912,32 @@ async function uploadFiles(fileList) {
       toast(`Файл «${file.name}» больше 32 МБ`);
       continue;
     }
-    const local = { id: null, name: file.name, size: file.size, kind: file.type?.startsWith('image/') ? 'image' : 'file', status: 'uploading', label: '' };
+    const local = { id: null, name: file.name, size: file.size, kind: file.type?.startsWith('image/') ? 'image' : 'file', status: 'uploading', label: '', note: '' };
     state.attachments.push(local);
     renderAttachStrip();
     const task = (async () => {
       try {
+        /* Файл больше 0,7 МБ сжимаем до отправки на сервер (см. attach-shrink.js):
+           фото и скриншоты уходят в WebP с ограничением длинной стороны. Так
+           быстрее загрузка, меньше места на диске и меньше токенов у распознавания. */
+        const outgoing = await shrinkBeforeUpload(file);
+        if (outgoing.note) {
+          local.name = outgoing.file.name;
+          local.size = outgoing.file.size;
+          local.note = outgoing.note;
+          local.kind = outgoing.file.type?.startsWith('image/') ? 'image' : local.kind;
+          renderAttachStrip();
+        }
         const response = await fetch('/api/attachments', {
           method: 'POST',
           credentials: 'same-origin',
           headers: {
-            'Content-Type': file.type || 'application/octet-stream',
-            'X-Filename': encodeURIComponent(file.name),
+            'Content-Type': outgoing.file.type || 'application/octet-stream',
+            'X-Filename': encodeURIComponent(outgoing.file.name),
             'X-Project-Id': state.activeProjectId,
             'X-Chat-Id': state.chat?.id || '',
           },
-          body: file,
+          body: outgoing.file,
         });
         const data = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(data.error || 'Не удалось загрузить файл');
@@ -4715,17 +4760,23 @@ async function uploadToProject(fileList, dir = '.') {
   try {
     for (const file of files) {
       try {
-        const rel = folder ? `${folder}/${file.name}` : file.name;
+        /* Файл в проект — тот же порог 0,7 МБ: фото и скриншоты сжимаются в WebP
+           до отправки, чтобы папка проекта не росла мегабайтами и модель получала
+           лёгкую картинку. */
+        const outgoing = await shrinkBeforeUpload(file);
+        const name = outgoing.file.name;
+        const rel = folder ? `${folder}/${name}` : name;
         const response = await fetch(`/api/projects/${projectId}/upload?path=${encodeURIComponent(rel)}`, {
           method: 'POST',
           credentials: 'same-origin',
-          headers: { 'Content-Type': file.type || 'application/octet-stream', 'X-Filename': encodeURIComponent(file.name) },
-          body: file,
+          headers: { 'Content-Type': outgoing.file.type || 'application/octet-stream', 'X-Filename': encodeURIComponent(name) },
+          body: outgoing.file,
         });
         if (!response.ok) {
           const data = await response.json().catch(() => ({}));
           throw new Error(data.error || `Не удалось загрузить «${file.name}»`);
         }
+        if (outgoing.note) filesNote(`«${name}» сжато: ${outgoing.note}`);
         added += 1;
       } catch (error) {
         filesNote(error.message);
@@ -4824,6 +4875,9 @@ function openContextMenu(anchor, items, head = null) {
     const button = el('button', item.danger ? 'danger' : '');
     button.type = 'button';
     button.innerHTML = `${item.icon || ''}<span>${escapeHtml(item.label)}</span>`;
+    /* Цифра у пункта (например, непрочитанные обращения) — та же плашка, что на
+       кнопке в шапке: по ней видно, что внутри есть новое, не открывая раздел. */
+    if (item.badge) button.appendChild(el('span', 'menu-badge', String(item.badge)));
     button.addEventListener('click', () => {
       closeMenus();
       item.action();
@@ -5381,6 +5435,12 @@ function openUserMenu(event) {
     items.push(
       { sep: true },
       { label: 'Пользователи', icon: ICONS.users, action: () => adminModal() },
+      {
+        label: 'Сообщения от пользователя',
+        icon: ICONS.support,
+        badge: state.supportUnread || 0,
+        action: () => openAdminSupport(),
+      },
     );
   }
   items.push({ sep: true }, { label: 'Выйти', icon: ICONS.logout, danger: true, action: () => logout() });
@@ -5930,24 +5990,583 @@ async function logout() {
   showAuth();
 }
 
+/* ------------------------------ поддержка ------------------------------
+   Кнопка в шапке открывает короткое окно: проблема, идея или вопрос и скриншот.
+   Обращение уходит администратору в кабинет (блок «Сообщения от пользователя»)
+   и уведомлением на его устройства. Автор видит свои обращения и их статус —
+   так заметно, что сообщение не пропало. Скриншот сжимаем на клиенте:
+   полноэкранный снимок 4K иначе не прошёл бы ни в предел запроса, ни в разумное
+   время загрузки на телефоне. */
+const SUPPORT_KINDS = [
+  { id: 'problem', label: 'Проблема', hint: 'что-то не работает или выглядит не так' },
+  { id: 'idea', label: 'Идея', hint: 'чего не хватает и как было бы удобнее' },
+  { id: 'question', label: 'Вопрос', hint: 'как сделать то, что нужно' },
+];
+const SUPPORT_STATUS_LABELS = { new: 'Новое', read: 'Прочитано', done: 'Решено' };
+/* Длинная сторона снимка и предел самой картинки: сервер принимает до 4 МБ, но
+   с запасом — data-URL в JSON весит примерно на треть больше файла. */
+const SUPPORT_SHOT_SIDE = 1600;
+const SUPPORT_SHOT_LIMIT = 3 * 1024 * 1024;
+
+function supportKindLabel(kind) {
+  return SUPPORT_KINDS.find((item) => item.id === kind)?.label || 'Обращение';
+}
+
+function supportStatusLabel(status) {
+  return SUPPORT_STATUS_LABELS[status] || SUPPORT_STATUS_LABELS.new;
+}
+
+function supportWhen(iso) {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+}
+
+function supportBytes(size) {
+  const value = Number(size) || 0;
+  if (!value) return '—';
+  if (value < 1024) return `${value} Б`;
+  if (value < 1024 * 1024) return `${Math.round(value / 1024)} КБ`;
+  return `${(value / 1024 / 1024).toFixed(1)} МБ`;
+}
+
+/* Какая страница открыта у человека: администратору это сразу подсказывает,
+   где искать проблему. */
+function supportPageLabel() {
+  if (dashboardOpen()) return 'Дашборд';
+  const chat = state.chat;
+  if (chat && chat.title) return `Диалог «${chat.title}»`;
+  const project = activeProject();
+  if (project) return `Проект «${project.name}»`;
+  return 'Главный экран';
+}
+
+/* Картинка из файла или буфера → JPEG в data-URL. Прозрачный фон заливаем
+   белым: иначе на JPEG он стал бы чёрным и скриншот было бы не читать. */
+function supportScreenshotFromFile(file) {
+  return new Promise((resolve, reject) => {
+    if (!file || !String(file.type || '').startsWith('image/')) {
+      reject(new Error('Прикрепить можно только картинку — PNG, JPEG или WebP'));
+      return;
+    }
+    if (file.size > 24 * 1024 * 1024) {
+      reject(new Error('Скриншот слишком большой — до 24 МБ'));
+      return;
+    }
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('Не удалось прочитать файл — попробуйте другой'));
+    reader.onload = () => {
+      const image = new Image();
+      image.onerror = () => reject(new Error('Формат картинки не поддерживается — сделайте скриншот в PNG или JPEG'));
+      image.onload = () => {
+        const longest = Math.max(image.width, image.height) || 1;
+        const scale = Math.min(1, SUPPORT_SHOT_SIDE / longest);
+        const width = Math.max(1, Math.round(image.width * scale));
+        const height = Math.max(1, Math.round(image.height * scale));
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          reject(new Error('Браузер не смог подготовить картинку'));
+          return;
+        }
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, width, height);
+        ctx.drawImage(image, 0, 0, width, height);
+        let quality = 0.85;
+        let data = canvas.toDataURL('image/jpeg', quality);
+        /* Скриншот с текстом весит мало, а фотография экрана — много: сначала
+           поджимаем качество, и только потом честно отказываем. */
+        while (data.length > SUPPORT_SHOT_LIMIT && quality > 0.45) {
+          quality -= 0.15;
+          data = canvas.toDataURL('image/jpeg', quality);
+        }
+        if (data.length > SUPPORT_SHOT_LIMIT) {
+          reject(new Error('Скриншот слишком тяжёлый — обрежьте его или пришлите поменьше'));
+          return;
+        }
+        const asked = String(file.name || '').replace(/\.[A-Za-z0-9]{1,5}$/, '');
+        resolve({
+          data,
+          preview: data,
+          name: `${asked || 'screenshot'}.jpg`,
+          size: Math.round((data.length - 'data:image/jpeg;base64,'.length) * 0.75),
+        });
+      };
+      image.src = String(reader.result || '');
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+/* Мои обращения: короткий список под формой. Статус — тот же, что выставляет
+   администратор, поэтому человек видит, что сообщение прочитали и закрыли. */
+function renderSupportHistory(holder, messages) {
+  holder.innerHTML = '';
+  if (!messages.length) return;
+  holder.appendChild(el('div', 'support-history-title', 'Мои обращения'));
+  for (const message of messages.slice(0, 8)) {
+    const row = el('div', 'support-history-row');
+    const head = el('div', 'support-history-head');
+    head.appendChild(el('span', 'support-kind-chip', message.kindLabel || supportKindLabel(message.kind)));
+    head.appendChild(el('span', `support-status ${message.status || 'new'}`, supportStatusLabel(message.status)));
+    head.appendChild(el('span', 'support-history-when', supportWhen(message.createdAt)));
+    row.appendChild(head);
+    row.appendChild(el('div', 'support-history-text', message.text || ''));
+    if (message.screenshot) {
+      const link = el('a', 'support-history-shot');
+      link.href = message.screenshot.url;
+      link.target = '_blank';
+      link.rel = 'noopener';
+      link.textContent = `Скриншот · ${supportBytes(message.screenshot.size)}`;
+      row.appendChild(link);
+    }
+    holder.appendChild(row);
+  }
+}
+
+/* Цифра на кнопке «Поддержка»: у администратора — сколько обращений ещё не
+   читали. Остальным счётчик не нужен и не показывается даже при нуле. */
+function applySupportBadge(count) {
+  const value = Math.max(0, Number(count) || 0);
+  state.supportUnread = value;
+  const badge = $('#supportBadge');
+  if (!badge) return;
+  const isAdmin = state.user?.role === 'admin';
+  badge.hidden = !isAdmin || value === 0;
+  badge.textContent = value > 99 ? '99+' : String(value);
+  const button = $('#supportBtn');
+  if (!button) return;
+  const base = 'Поддержка: сообщить о проблеме или предложить идею';
+  button.title = isAdmin && value ? `${base} · новых обращений: ${value}` : base;
+}
+
+/* Тихий опрос: администратор может держать кабинет закрытым, но цифра на кнопке
+   должна появляться сама. Полминуты — достаточно, чтобы сигнал не потерялся, и
+   мало, чтобы не грузить сервер. */
+let supportWatchTimer = 0;
+
+async function refreshSupportUnread() {
+  if (!state.user || state.user.role !== 'admin') return;
+  try {
+    const data = await api('/api/support/unread');
+    applySupportBadge(data.unread || 0);
+  } catch {
+    /* сеть пропала — попробуем на следующем круге */
+  }
+}
+
+function startSupportWatch() {
+  clearInterval(supportWatchTimer);
+  supportWatchTimer = 0;
+  if (!state.user || state.user.role !== 'admin') return;
+  void refreshSupportUnread();
+  supportWatchTimer = setInterval(() => {
+    if (document.visibilityState === 'visible') void refreshSupportUnread();
+  }, 30000);
+  /* Вернулись во вкладку — не ждём круга таймера. */
+  document.addEventListener('visibilitychange', onSupportVisibility);
+}
+
+function stopSupportWatch() {
+  clearInterval(supportWatchTimer);
+  supportWatchTimer = 0;
+  document.removeEventListener('visibilitychange', onSupportVisibility);
+}
+
+function onSupportVisibility() {
+  if (document.visibilityState === 'visible') void refreshSupportUnread();
+}
+
+/* Окно обращения. */
+function openSupportModal() {
+  if (!state.user) return;
+  let kind = 'problem';
+  let shot = null;
+
+  const wrap = el('div', 'support');
+
+  if (state.user.role === 'admin') {
+    const link = el('button', 'support-admin-link');
+    link.type = 'button';
+    link.innerHTML = `${ICONS.users}<span>Сообщения от пользователя</span>`;
+    if (state.supportUnread) link.appendChild(el('span', 'support-badge inline', String(state.supportUnread)));
+    link.addEventListener('click', () => {
+      closeModal();
+      void openAdminSupport();
+    });
+    wrap.appendChild(link);
+  }
+
+  const kinds = el('div', 'support-kinds');
+  kinds.setAttribute('role', 'group');
+  kinds.setAttribute('aria-label', 'Тип обращения');
+  const kindButtons = new Map();
+  const hint = el('p', 'support-hint', SUPPORT_KINDS[0].hint);
+  for (const item of SUPPORT_KINDS) {
+    const button = el('button', `support-kind${item.id === kind ? ' active' : ''}`, item.label);
+    button.type = 'button';
+    button.setAttribute('aria-pressed', item.id === kind ? 'true' : 'false');
+    button.addEventListener('click', () => {
+      kind = item.id;
+      for (const [id, node] of kindButtons) {
+        node.classList.toggle('active', id === kind);
+        node.setAttribute('aria-pressed', id === kind ? 'true' : 'false');
+      }
+      hint.textContent = item.hint;
+      note.textContent = '';
+    });
+    kindButtons.set(item.id, button);
+    kinds.appendChild(button);
+  }
+  wrap.appendChild(kinds);
+  wrap.appendChild(hint);
+
+  const text = el('textarea', 'support-text');
+  text.rows = 5;
+  text.maxLength = 4000;
+  text.setAttribute('aria-label', 'Сообщение для администратора');
+  text.placeholder = 'Опишите, что случилось или чего не хватает. Чем конкретнее, тем быстрее разберёмся.';
+  wrap.appendChild(text);
+  const counter = el('div', 'support-counter', '0 / 4000');
+  text.addEventListener('input', () => {
+    counter.textContent = `${text.value.length} / 4000`;
+    note.textContent = '';
+  });
+  wrap.appendChild(counter);
+
+  const attach = el('div', 'support-attach');
+  const pick = el('button', 'btn btn-quiet support-pick');
+  pick.type = 'button';
+  pick.innerHTML = `${ICONS.image}<span>Прикрепить скриншот</span>`;
+  const fileInput = el('input', 'support-file');
+  fileInput.type = 'file';
+  fileInput.accept = 'image/png,image/jpeg,image/webp';
+  fileInput.setAttribute('aria-label', 'Скриншот проблемы');
+  attach.appendChild(pick);
+  attach.appendChild(fileInput);
+  attach.appendChild(el('span', 'support-attach-hint', 'PNG, JPEG или WebP · можно вставить из буфера'));
+  wrap.appendChild(attach);
+
+  const preview = el('div', 'support-preview');
+  wrap.appendChild(preview);
+
+  const note = el('p', 'field-error');
+  wrap.appendChild(note);
+
+  const renderShot = () => {
+    preview.innerHTML = '';
+    if (!shot) return;
+    const box = el('div', 'support-shot');
+    const image = el('img');
+    image.src = shot.preview;
+    image.alt = 'Приложенный скриншот';
+    box.appendChild(image);
+    const meta = el('div', 'support-shot-meta');
+    meta.appendChild(el('div', 'support-shot-name', shot.name));
+    meta.appendChild(el('div', 'support-shot-size', supportBytes(shot.size)));
+    box.appendChild(meta);
+    const remove = el('button', 'btn btn-ghost btn-icon support-shot-remove');
+    remove.type = 'button';
+    remove.setAttribute('aria-label', 'Убрать скриншот');
+    remove.title = 'Убрать скриншот';
+    remove.innerHTML = '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 5l10 10M15 5L5 15"/></svg>';
+    remove.addEventListener('click', () => {
+      shot = null;
+      renderShot();
+    });
+    box.appendChild(remove);
+    preview.appendChild(box);
+  };
+
+  const takeFile = async (file) => {
+    if (!file) return;
+    note.textContent = '';
+    pick.disabled = true;
+    try {
+      shot = await supportScreenshotFromFile(file);
+      renderShot();
+    } catch (error) {
+      shot = null;
+      renderShot();
+      note.textContent = error.message;
+    } finally {
+      pick.disabled = false;
+    }
+  };
+
+  pick.addEventListener('click', () => fileInput.click());
+  fileInput.addEventListener('change', () => {
+    const file = fileInput.files && fileInput.files[0];
+    fileInput.value = '';
+    void takeFile(file);
+  });
+  /* Скриншот часто проще вставить, чем искать файл: Ctrl+V / Cmd+V прямо в окне. */
+  wrap.addEventListener('paste', (event) => {
+    const items = [...(event.clipboardData?.files || [])];
+    const image = items.find((file) => String(file.type || '').startsWith('image/'));
+    if (!image) return;
+    event.preventDefault();
+    void takeFile(image);
+  });
+
+  const history = el('div', 'support-history');
+  wrap.appendChild(history);
+  let historyMessages = [];
+  void api('/api/support')
+    .then((data) => {
+      historyMessages = data.messages || [];
+      renderSupportHistory(history, historyMessages);
+    })
+    .catch(() => {
+      history.innerHTML = '';
+    });
+
+  openModal({
+    title: 'Поддержка',
+    body: wrap,
+    className: 'support-modal',
+    actions: [
+      { label: 'Закрыть', kind: 'quiet' },
+      {
+        label: 'Отправить',
+        kind: 'primary',
+        id: 'supportSend',
+        onClick: async () => {
+          const value = text.value.trim();
+          if (value.length < 10) {
+            note.textContent = 'Опишите ситуацию чуть подробнее — хотя бы одно предложение';
+            text.focus();
+            return false;
+          }
+          note.textContent = '';
+          try {
+            const data = await api('/api/support', {
+              method: 'POST',
+              body: {
+                kind,
+                text: value,
+                page: supportPageLabel(),
+                screenshot: shot ? { data: shot.data, name: shot.name } : null,
+              },
+            });
+            toast('Сообщение отправлено администратору', 'ok');
+            text.value = '';
+            shot = null;
+            counter.textContent = '0 / 4000';
+            renderShot();
+            /* Своё же обращение сразу видно в списке — без перезагрузки окна. */
+            historyMessages = [data.message, ...historyMessages];
+            renderSupportHistory(history, historyMessages);
+            return false;
+          } catch (error) {
+            note.textContent = error.message;
+            return false;
+          }
+        },
+      },
+    ],
+  });
+}
+
+/* --- блок администратора: сообщения от пользователя ---
+   Строка та же, что у «Запросов на тяжёлые задачи»: имя, время, текст, действия.
+   Статусы простые — новое, прочитано, решено; цифра на кнопке в шапке считает
+   именно непрочитанные. */
+function renderSupportBlock(body, data, onChanged = null) {
+  const holder = el('div', 'support-admin');
+  holder.dataset.supportBlock = '1';
+  body.appendChild(holder);
+
+  const draw = (payload) => {
+    holder.innerHTML = '';
+    const unread = Number(payload.unread || 0);
+    const title = el('div', 'admin-section-title support-admin-title');
+    title.appendChild(el('span', '', 'Сообщения от пользователя'));
+    if (unread) title.appendChild(el('span', 'support-badge inline', String(unread)));
+    holder.appendChild(title);
+    const list = payload.messages || [];
+    if (!list.length) {
+      holder.appendChild(el('p', 'muted', 'Обращений пока нет. Здесь появятся сообщения о проблемах, идеи и вопросы.'));
+      return;
+    }
+
+    const reload = async () => {
+      try {
+        const fresh = await api('/api/admin/support');
+        draw(fresh);
+        applySupportBadge(fresh.unread || 0);
+        if (onChanged) onChanged(fresh.unread || 0);
+      } catch (error) {
+        toast(error.message);
+      }
+    };
+
+    if (unread) {
+      const all = el('div', 'support-admin-all');
+      const markAll = el('button', 'btn btn-quiet', 'Прочитать все');
+      markAll.type = 'button';
+      markAll.addEventListener('click', async () => {
+        markAll.disabled = true;
+        try {
+          const fresh = await api('/api/admin/support');
+          for (const item of fresh.messages || []) {
+            if (item.status === 'new') await api(`/api/admin/support/${item.id}`, { method: 'POST', body: { status: 'read' } });
+          }
+          await reload();
+        } catch (error) {
+          toast(error.message);
+          markAll.disabled = false;
+        }
+      });
+      all.appendChild(markAll);
+      holder.appendChild(all);
+    }
+
+    for (const message of list) {
+      const row = el('div', `approval support-row${message.status === 'new' ? ' is-new' : ''}`);
+      if (message.status === 'done') row.classList.add('done');
+      const main = el('div', 'ap-main');
+      const titleLine = el('div', 'ap-title support-row-title');
+      titleLine.appendChild(el('span', 'support-kind-chip', message.kindLabel || supportKindLabel(message.kind)));
+      const who = message.displayName || message.username;
+      const person = who && who !== message.username ? `${who} (${message.username})` : who || 'Пользователь';
+      titleLine.appendChild(el('span', 'support-row-user', person));
+      titleLine.appendChild(el('span', `support-status ${message.status || 'new'}`, supportStatusLabel(message.status)));
+      main.appendChild(titleLine);
+
+      const meta = [supportWhen(message.createdAt), message.page].filter(Boolean).join(' · ');
+      if (meta) main.appendChild(el('div', 'ap-sub', meta));
+
+      const textNode = el('div', 'support-row-text', message.text || '');
+      main.appendChild(textNode);
+
+      if (message.contact) main.appendChild(el('div', 'ap-sub support-row-contact', `Связаться: ${message.contact}`));
+
+      if (message.screenshot) {
+        const link = el('a', 'support-row-shot');
+        link.href = message.screenshot.url;
+        link.target = '_blank';
+        link.rel = 'noopener';
+        link.title = 'Открыть скриншот в новой вкладке';
+        const image = el('img');
+        image.src = message.screenshot.url;
+        image.alt = message.screenshot.name || 'Скриншот обращения';
+        image.loading = 'lazy';
+        link.appendChild(image);
+        main.appendChild(link);
+      }
+
+      row.appendChild(main);
+
+      const actions = el('div', 'ap-actions');
+      if (message.status === 'new') {
+        const read = el('button', 'btn btn-quiet', 'Прочитано');
+        read.type = 'button';
+        read.addEventListener('click', async () => {
+          read.disabled = true;
+          try {
+            const updated = await api(`/api/admin/support/${message.id}`, { method: 'POST', body: { status: 'read' } });
+            applySupportBadge(updated.unread || 0);
+            await reload();
+          } catch (error) {
+            toast(error.message);
+            read.disabled = false;
+          }
+        });
+        actions.appendChild(read);
+      }
+      if (message.status !== 'done') {
+        const done = el('button', 'btn btn-quiet', 'Решено');
+        done.type = 'button';
+        done.addEventListener('click', async () => {
+          done.disabled = true;
+          try {
+            const updated = await api(`/api/admin/support/${message.id}`, { method: 'POST', body: { status: 'done' } });
+            applySupportBadge(updated.unread || 0);
+            await reload();
+          } catch (error) {
+            toast(error.message);
+            done.disabled = false;
+          }
+        });
+        actions.appendChild(done);
+      }
+      const remove = el('button', 'btn btn-ghost', 'Удалить');
+      remove.type = 'button';
+      remove.addEventListener('click', async () => {
+        const ok = await confirmPopover({
+          anchor: remove,
+          title: 'Удалить обращение?',
+          text: 'Сообщение и скриншот удалятся навсегда.',
+          confirmLabel: 'Удалить',
+        });
+        if (!ok) return;
+        try {
+          const result = await api(`/api/admin/support/${message.id}`, { method: 'DELETE' });
+          applySupportBadge(result.unread || 0);
+          await reload();
+        } catch (error) {
+          toast(error.message);
+        }
+      });
+      actions.appendChild(remove);
+      row.appendChild(actions);
+      holder.appendChild(row);
+    }
+  };
+
+  draw(data);
+  return { holder, draw };
+}
+
+/* Кабинет сразу на блоке обращений: сюда ведёт уведомление. */
+async function openAdminSupport() {
+  if (state.user?.role !== 'admin') return;
+  await adminModal({ focusSupport: true });
+}
+
+/* Открытие по ссылке из уведомления при закрытом приложении: /?support=admin. */
+async function openSupportFromUrl() {
+  try {
+    const params = new URLSearchParams(location.search);
+    if (params.get('support') !== 'admin') return;
+    params.delete('support');
+    const query = params.toString();
+    history.replaceState(null, '', `${location.pathname}${query ? `?${query}` : ''}${location.hash}`);
+  } catch {
+    /* адресная строка недоступна — ничего страшного */
+  }
+  await openAdminSupport();
+}
+
 /* ------------------------------ admin ------------------------------ */
 
-async function adminModal() {
+async function adminModal({ focusSupport = false } = {}) {
   const body = el('div', 'admin');
   body.innerHTML = '<div class="files-empty"><div class="spin-lg"></div></div>';
   openModal({
-    title: 'Пользователи',
+    /* Из уведомления о поддержке кабинет открывается не ради списка людей, а
+       ради обращений — и заголовок честно говорит, что это кабинет. */
+    title: focusSupport ? 'Кабинет администратора' : 'Пользователи',
     wide: true,
     body,
     actions: [{ label: 'Закрыть', kind: 'quiet' }],
   });
   const refresh = async () => {
-    const [usersData, statsData, approvalsData] = await Promise.all([
+    const [usersData, statsData, approvalsData, supportData] = await Promise.all([
       api('/api/admin/users'),
       api('/api/admin/stats'),
       api('/api/admin/approvals').catch(() => ({ approvals: [] })),
+      api('/api/admin/support').catch(() => ({ messages: [], unread: 0 })),
     ]);
-    renderAdmin(body, usersData.users, statsData.overview, approvalsData.approvals || [], refresh);
+    renderAdmin(body, usersData.users, statsData.overview, approvalsData.approvals || [], refresh, supportData);
+    applySupportBadge(supportData.unread || 0);
+    if (focusSupport) {
+      focusSupport = false;
+      scrollToSupportBlock(body);
+    }
   };
   try {
     await refresh();
@@ -5955,6 +6574,18 @@ async function adminModal() {
     body.innerHTML = '';
     body.appendChild(el('div', 'files-empty', error.message));
   }
+}
+
+/* Пришли из уведомления — показываем блок обращений сразу, не заставляя
+   искать его прокруткой: подсвечиваем на пару секунд, чтобы он не потерялся. */
+function scrollToSupportBlock(body) {
+  requestAnimationFrame(() => {
+    const node = body.querySelector('[data-support-block]');
+    if (!node) return;
+    node.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    node.classList.add('flash');
+    setTimeout(() => node.classList.remove('flash'), 1800);
+  });
 }
 
 /* Запросы на подтверждение тяжёлых задач: одобряем или отклоняем прямо здесь. */
@@ -6831,7 +7462,7 @@ function renderNotifySchedule(body) {
   });
 }
 
-function renderAdmin(body, users, overview, approvals = [], refresh = null) {
+function renderAdmin(body, users, overview, approvals = [], refresh = null, support = null) {
   body.innerHTML = '';
   const stats = el('div', 'stats');
   const mkStat = (value, label) => {
@@ -6891,7 +7522,7 @@ function renderAdmin(body, users, overview, approvals = [], refresh = null) {
       userInput.value = '';
       passInput.value = '';
       creditInput.value = '';
-      renderAdmin(body, users, overview, approvals, refresh);
+      renderAdmin(body, users, overview, approvals, refresh, support);
     } catch (error) {
       note.textContent = error.message;
     } finally {
@@ -6899,6 +7530,10 @@ function renderAdmin(body, users, overview, approvals = [], refresh = null) {
     }
   });
   body.appendChild(form);
+
+  /* Обращения в поддержку — сразу под формой создания пользователя: это самое
+     частое, ради чего администратор открывает кабинет. */
+  if (support) renderSupportBlock(body, support, (unread) => applySupportBadge(unread));
 
   renderApprovals(body, approvals, refresh);
 
@@ -6996,7 +7631,7 @@ function renderAdmin(body, users, overview, approvals = [], refresh = null) {
         try {
           await api(`/api/admin/users/${user.id}`, { method: 'PATCH', body: { disabled: !user.disabled } });
           user.disabled = !user.disabled;
-          renderAdmin(body, users, overview, approvals, refresh);
+          renderAdmin(body, users, overview, approvals, refresh, support);
         } catch (error) {
           toast(error.message);
         }
@@ -7014,7 +7649,7 @@ function renderAdmin(body, users, overview, approvals = [], refresh = null) {
           await api(`/api/admin/users/${user.id}`, { method: 'DELETE' });
           const idx = users.findIndex((item) => item.id === user.id);
           if (idx >= 0) users.splice(idx, 1);
-          renderAdmin(body, users, overview, approvals, refresh);
+          renderAdmin(body, users, overview, approvals, refresh, support);
         } catch (error) {
           toast(error.message);
         }
@@ -7041,10 +7676,25 @@ function composerMaxHeight() {
 }
 
 let lastComposerLength = -1;
+/* Поле просило пересчёт, но было скрыто — размеры ему вернёт наблюдатель за
+   классом композера, когда поле снова окажется в раскладке. */
+let composerResizeDeferred = false;
 
 function autoResize(force = false) {
   const input = $('#input');
   if (!input) return;
+  /* Пока идёт диктовка (.composer.dictating), поле убрано из раскладки, а
+     распознанный текст вставляется в него ещё до того, как строка диктовки
+     уйдёт с экрана. У скрытого поля и clientHeight, и scrollHeight — нули:
+     прежний код честно записывал "height: 0px", после возврата поля его высоту
+     держал только CSS min-height, длинный текст обрезался одной строкой и даже
+     не прокручивался. Поэтому на скрытом поле ничего не считаем и ничего не
+     пишем — пересчёт придёт сразу после появления поля. */
+  if (!input.getClientRects().length) {
+    composerResizeDeferred = true;
+    return;
+  }
+  composerResizeDeferred = false;
   /* Если лента была у последнего сообщения, после роста поля оставляем её там:
      иначе при сжатии ленты scrollTop обрезался и сообщения «прыгали» вниз. */
   const stick = nearBottom();
@@ -7211,16 +7861,15 @@ const dictation = {
   tick: null,
   cancelled: false,
   busy: false,
-  /* Отправлять ли распознанный текст сразу: включается, когда человек держит
-     микрофон и отпускает палец, — «отпустите, чтобы отправить». */
-  sendOnFinish: false,
   /* Запись начата удержанием, а не нажатием-переключением. */
   holdMode: false,
 };
 
-/* Удержание микрофона. Как в мобильном приложении: нажал — говоришь, отпустил —
-   сообщение уходит, сдвинул палец вверх — запись отменяется. Короткое касание
-   (меньше VOICE_HOLD_MIN_MS) не отправляет ничего: это промах, а не команда. */
+/* Удержание микрофона. Нажал — говоришь, отпустил — распознанный текст встаёт
+   в поле ввода, сдвинул палец вверх — запись отменяется и ничего не вставляет.
+   Сам по себе голос НЕ отправляет сообщение: человек дописывает, правит и жмёт
+   «Отправить» руками. Короткое касание (меньше VOICE_HOLD_MIN_MS) считается
+   промахом, а не командой, и ничего не вставляет. */
 const VOICE_HOLD_MIN_MS = 350;
 const VOICE_CANCEL_SHIFT = 56;
 const voiceHold = {
@@ -7240,7 +7889,7 @@ function showVoiceOverlay(visible, state) {
   if (hint) {
     hint.textContent = state === 'cancel'
       ? 'Отпустите, чтобы отменить запись'
-      : 'Отпустите, чтобы отправить, сдвиньте вверх для отмены';
+      : 'Отпустите — текст вставится. Вверх — отмена';
   }
 }
 
@@ -7290,6 +7939,26 @@ function cleanupDictation() {
     mic.setAttribute('aria-pressed', 'false');
     mic.disabled = false;
   }
+}
+
+/* Почему микрофон не включился — у каждой причины своё действие. Раньше на все
+   случаи была одна фраза «разрешите доступ», и было непонятно, что делать, если
+   дело не в запрете: микрофона нет или его заняла другая программа. Браузер
+   спрашивает разрешение сам, и запоминает ответ за адресом сайта: пока в этом
+   окне ответа нет, вопрос будет появляться при каждом нажатии — это поведение
+   браузера, а не приложения (запрос у нас ровно один на нажатие). */
+function dictationErrorText(error) {
+  const name = error?.name || '';
+  if (name === 'NotAllowedError' || name === 'SecurityError') {
+    return 'Микрофон запрещён для этого сайта. Нажмите значок замка в адресной строке → «Микрофон» → «Разрешить» и повторите.';
+  }
+  if (name === 'NotFoundError' || name === 'OverconstrainedError') {
+    return 'Микрофон не найден. Подключите его и проверьте «Звук» в настройках Windows.';
+  }
+  if (name === 'NotReadableError' || name === 'AbortError') {
+    return 'Микрофон занят другой программой. Закройте её и попробуйте снова.';
+  }
+  return 'Не удалось включить микрофон. Попробуйте ещё раз.';
 }
 
 async function startDictation() {
@@ -7344,8 +8013,7 @@ async function startDictation() {
   } catch (error) {
     cleanupDictation();
     setDictationBar(false);
-    const denied = error?.name === 'NotAllowedError' || error?.name === 'SecurityError';
-    toast(denied ? 'Разрешите доступ к микрофону в настройках браузера' : 'Не удалось включить микрофон');
+    toast(dictationErrorText(error));
   }
 }
 
@@ -7499,11 +8167,13 @@ async function finalizeDictation() {
 
   if (cancelled) {
     dictation.chunks = [];
+    dictation.holdMode = false;
     setDictationBar(false);
     return;
   }
   if (!chunks.length || Date.now() - startedAt < 500) {
     dictation.chunks = [];
+    dictation.holdMode = false;
     setDictationBar(false);
     toast('Слишком короткая запись');
     return;
@@ -7512,6 +8182,9 @@ async function finalizeDictation() {
   dictation.busy = true;
   $('#micBtn').disabled = true;
   setDictationBar(true, 'Распознаю речь…');
+  /* Куда встал распознанный текст: после уборки строки диктовки фокус и курсор
+     возвращаем ровно туда, чтобы человек сразу дописывал свою мысль. */
+  let caretAfterInsert = -1;
   try {
     const blob = new Blob(chunks, { type: mimeType });
     const wav = await blobToWav(blob);
@@ -7528,24 +8201,28 @@ async function finalizeDictation() {
     if (!text) {
       toast('Речь не распознана — попробуйте говорить ближе к микрофону');
     } else {
+      /* Только вставка в поле ввода — никакой автоотправки. Отправляет человек,
+         кнопкой «Отправить» или Enter, когда текст его устраивает. */
       insertTranscript(text);
-      /* Голос с удержанием: отпустили палец — сообщение уходит сразу, без
-         второго нажатия на «Отправить». */
-      if (dictation.sendOnFinish && !cancelled) {
-        dictation.sendOnFinish = false;
-        setDictationBar(false);
-        sendMessage().catch(() => {});
-      }
+      caretAfterInsert = $('#input').selectionStart ?? -1;
     }
   } catch (error) {
     toast(error.message || 'Не удалось распознать речь');
   } finally {
     dictation.busy = false;
     dictation.chunks = [];
-    dictation.sendOnFinish = false;
     dictation.holdMode = false;
     setDictationBar(false);
     $('#micBtn').disabled = false;
+    if (caretAfterInsert >= 0) {
+      const input = $('#input');
+      input.focus();
+      try {
+        input.setSelectionRange(caretAfterInsert, caretAfterInsert);
+      } catch {
+        /* поле может не поддерживать выделение — курсор останется как есть */
+      }
+    }
   }
 }
 
@@ -7555,8 +8232,9 @@ function toggleDictation() {
   else startDictation();
 }
 
-/* Держим микрофон — говорим, отпускаем — сообщение уходит. Сдвиг пальца вверх
-   больше VOICE_CANCEL_SHIFT отменяет запись, как в мобильном приложении. */
+/* Держим микрофон — говорим, отпускаем — распознанный текст остаётся в поле
+   ввода (никуда сам не уходит). Сдвиг пальца вверх больше VOICE_CANCEL_SHIFT
+   отменяет запись, как в мобильном приложении, и ничего не вставляет. */
 function beginVoiceHold(event) {
   if (dictation.busy || dictation.recorder) return;
   if (event.pointerType === 'mouse' && event.button !== 0) return;
@@ -7566,7 +8244,6 @@ function beginVoiceHold(event) {
   voiceHold.startY = event.clientY;
   voiceHold.at = Date.now();
   dictation.holdMode = true;
-  dictation.sendOnFinish = true;
   startDictation();
 }
 
@@ -7584,7 +8261,6 @@ function endVoiceHold() {
   voiceHold.active = false;
   const tooShort = Date.now() - voiceHold.at < VOICE_HOLD_MIN_MS;
   const cancelled = voiceHold.cancelled || tooShort;
-  dictation.sendOnFinish = !cancelled;
   showVoiceOverlay(false);
   if (tooShort) {
     if (dictation.recorder) stopDictation(true);
@@ -8187,14 +8863,22 @@ function openDashboardTaskModal(task) {
       files = [...files, pending];
       renderDocs();
       try {
+        /* Документы задания — тот же порог 0,7 МБ: снимок экрана или фото
+           договора сжимается до отправки, чтобы задание не тянуло мегабайты. */
+        const outgoing = await shrinkBeforeUpload(file);
+        if (outgoing.note) {
+          pending.name = outgoing.file.name;
+          pending.size = outgoing.file.size;
+          renderDocs();
+        }
         const response = await fetch(`/api/dashboard/tasks/${task.id}/files`, {
           method: 'POST',
           credentials: 'same-origin',
           headers: {
-            'Content-Type': file.type || 'application/octet-stream',
-            'X-Filename': encodeURIComponent(file.name),
+            'Content-Type': outgoing.file.type || 'application/octet-stream',
+            'X-Filename': encodeURIComponent(outgoing.file.name),
           },
-          body: file,
+          body: outgoing.file,
         });
         const data = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(data.error || 'Не удалось загрузить документ');
@@ -8278,6 +8962,8 @@ $('#dashboardBtn').addEventListener('click', () => {
   if (dashboardOpen()) hideDashboard();
   else showDashboard();
 });
+/* Кнопка «Поддержка» — слева от «Дашборда»: окно обращения к администратору. */
+$('#supportBtn').addEventListener('click', () => openSupportModal());
 $('#dashRefresh').addEventListener('click', () => loadDashboard());
 $('#dashEnableAll').addEventListener('click', toggleAllDashboardTasks);
 $('#dashRestore').addEventListener('click', restoreDashboardTasks);
@@ -8752,6 +9438,17 @@ syncFilesPanel();
    а объект события всегда истинный. Иначе на каждом символе поле схлопывалось
    до height:auto и вся лента пересчитывалась — это и выглядело как прыжки. */
 $('#input').addEventListener('input', () => autoResize());
+/* Поле вернулось в раскладку (сняли .composer.dictating после распознавания
+   речи) — досчитываем отложенный размер. Слушаем именно класс композера: так
+   работают все пути показа поля, и не нужно помнить о вызове в каждом из них. */
+{
+  const composer = $('#composer');
+  if (composer && typeof MutationObserver === 'function') {
+    new MutationObserver(() => {
+      if (composerResizeDeferred && !composer.classList.contains('dictating')) autoResize(true);
+    }).observe(composer, { attributes: true, attributeFilter: ['class'] });
+  }
+}
 /* Ширина экрана меняется не только при повороте телефона: её меняет клавиатура
    и перезагрузка страницы. Поэтому ящик закрываем только при переходе с
    широкого экрана на узкий, иначе открытая «Файлы проекта» захлопывалась. */
@@ -8984,9 +9681,10 @@ for (const toggle of document.querySelectorAll('.theme-toggle')) {
     applyTheme(currentTheme() === 'light' ? 'dark' : 'light');
   });
 }
-/* Микрофон: удержание — запись с отправкой на отпускании, сдвиг вверх —
-   отмена. Клавиатура (Enter/Space по кнопке) оставляет прежнее поведение
-   «нажал — запись, нажал ещё раз — стоп»: для неё click приходит с detail 0. */
+/* Микрофон: удержание — запись, на отпускании текст встаёт в поле ввода и
+   ждёт правки; сдвиг вверх — отмена записи. Отправки без человека нет.
+   Клавиатура (Enter/Space по кнопке) оставляет прежнее поведение «нажал —
+   запись, нажал ещё раз — стоп»: для неё click приходит с detail 0. */
 $('#micBtn').addEventListener('pointerdown', beginVoiceHold);
 $('#micBtn').addEventListener('click', (event) => {
   if (event.detail === 0) toggleDictation();
@@ -9615,11 +10313,32 @@ function clearAppBadge() {
   }
 }
 
+/* Пуш пришёл в открытую вкладку: воркер не показывает системное уведомление, и
+   окно само сообщает о новом обращении в поддержку. */
+function onPushedToPage(payload) {
+  const kind = String(payload?.kind || '');
+  if (kind !== 'support') return;
+  if (state.user?.role === 'admin') {
+    applySupportBadge(Math.max(1, Number(state.supportUnread || 0) + 1));
+    void refreshSupportUnread();
+  }
+  toast(String(payload?.title || 'Новое сообщение от пользователя'), 'ok');
+}
+
 /* Клик по уведомлению: воркер передаёт окну, какой диалог открыть. */
 function onServiceWorkerMessage(event) {
   const data = event?.data || {};
+  if (data.type === 'dsh-push') {
+    onPushedToPage(data.payload || {});
+    return;
+  }
   if (data.type !== 'dsh-open') return;
   clearAppBadge();
+  /* Уведомление о поддержке открывает кабинет сразу на блоке обращений. */
+  if (String(data.url || '').includes('support=admin') && state.user?.role === 'admin') {
+    void openAdminSupport();
+    return;
+  }
   const chatId = String(data.chatId || '');
   if (chatId) {
     openChat(chatId);

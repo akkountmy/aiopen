@@ -69,40 +69,46 @@ export function formatBytes(n) {
 /* Пишем через временный файл и переименование — читатель никогда не увидит
    половину JSON. Перед переименованием содержимое сбрасывается на диск (fsync):
    без этого после внезапного выключения контейнера на диске мог остаться файл
-   нулевой длины, и сервис терял состояние целиком. */
+   нулевой длины, и сервис терял состояние целиком.
+
+   Ошибку не глотаем: раньше при сбое переименования файл писался напрямую, то
+   есть неатомарно, а .tmp оставался мусором на диске навсегда. Теперь временный
+   файл убирается, исключение уходит наверх — вызывающий решает, повторять или
+   сообщать (индекс помечается «грязным» и пишется следующим циклом). */
 export function atomicWrite(file, content) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const tmp = `${file}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`;
-  const fd = fs.openSync(tmp, 'w');
   try {
-    fs.writeFileSync(fd, content, 'utf8');
+    let fd;
     try {
-      fs.fsyncSync(fd);
-    } catch {
-      /* не на всех файловых системах fsync доступен — запись уже сделана */
-    }
-  } finally {
-    fs.closeSync(fd);
-  }
-  try {
-    fs.renameSync(tmp, file);
-    try {
-      const dirFd = fs.openSync(path.dirname(file), 'r');
+      fd = fs.openSync(tmp, 'w');
+      fs.writeFileSync(fd, content, 'utf8');
       try {
-        fs.fsyncSync(dirFd);
-      } finally {
-        fs.closeSync(dirFd);
+        fs.fsyncSync(fd);
+      } catch {
+        /* не на всех файловых системах fsync доступен — запись уже сделана */
       }
-    } catch {
-      /* каталог на Windows не открывается на чтение — переименование уже прошло */
+    } finally {
+      if (fd !== undefined) fs.closeSync(fd);
     }
-  } catch {
-    fs.writeFileSync(file, content, 'utf8');
+    fs.renameSync(tmp, file);
+  } catch (error) {
     try {
       fs.unlinkSync(tmp);
     } catch {
-      /* ignore */
+      /* временного файла уже нет — это нормально */
     }
+    throw error;
+  }
+  try {
+    const dirFd = fs.openSync(path.dirname(file), 'r');
+    try {
+      fs.fsyncSync(dirFd);
+    } finally {
+      fs.closeSync(dirFd);
+    }
+  } catch {
+    /* каталог на Windows не открывается на чтение — переименование уже прошло */
   }
 }
 

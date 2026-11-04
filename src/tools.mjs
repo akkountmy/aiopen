@@ -1,7 +1,8 @@
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { DATA_DIR, LIMITS, MODEL } from './config.mjs';
+import { CAPACITY, DATA_DIR, LIMITS, MODEL } from './config.mjs';
+import { withHeavySlot } from './capacity.mjs';
 import { checkDocument, formatCheckReport } from './doccheck.mjs';
 import { memoryToolReply } from './memory.mjs';
 import { skillBody, skillIds } from './skills.mjs';
@@ -21,6 +22,17 @@ import { writeZip } from './zip.mjs';
 import { ARCHIVE_LIMITS, archiveKind, extractArchiveTo, formatExtraction, gunzipTo } from './archive.mjs';
 import { checkLinks, formatLinks, linksFromText } from './linkcheck.mjs';
 import { compareDocuments, formatCompare } from './comparedocs.mjs';
+import {
+  LAB_DIR,
+  resolveTaskId,
+  labStatus,
+  syncCatalog,
+  listTasks,
+  readTask,
+  fetchDocuments,
+  prepareTask,
+  gradeRun,
+} from './legalbench.mjs';
 
 /** Дата и авторитет источника — одной строкой, если DeepSeek их отдал. */
 function searchBadge(result) {
@@ -367,18 +379,45 @@ function pythonEnv(cwd) {
 
 function runProcess(command, args, { cwd, timeoutMs, input }) {
   return new Promise((resolve) => {
-    const child = spawn(command, args, { cwd, windowsHide: true, env: pythonEnv(cwd) });
+    /* На Linux процесс запускается в своей группе: иначе по таймауту убивается
+       только он сам, а его потомки (python вызывает ffmpeg, unzip и т.п.)
+       остаются жить и держат память. На Windows дерево снимает taskkill /T. */
+    const detached = process.platform !== 'win32';
+    const child = spawn(command, args, { cwd, windowsHide: true, detached, env: pythonEnv(cwd) });
     let stdout = '';
     let stderr = '';
     let killed = false;
-    const timer = setTimeout(() => {
+    let settled = false;
+    const finish = (payload) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(payload);
+    };
+    const killTree = () => {
       killed = true;
       try {
-        child.kill('SIGKILL');
+        if (process.platform === 'win32') {
+          spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
+        } else {
+          process.kill(-child.pid, 'SIGKILL');
+        }
       } catch {
-        /* ignore */
+        try {
+          child.kill('SIGKILL');
+        } catch {
+          /* процесс уже завершился */
+        }
       }
-    }, timeoutMs);
+      /* Потомки могли унаследовать каналы вывода и не дать событию close
+         случиться: не ждём их бесконечно. */
+      const forced = setTimeout(
+        () => finish({ code: -1, stdout, stderr: `${stderr}\nПроцесс остановлен: превышено время выполнения`, killed: true }),
+        3000,
+      );
+      forced.unref?.();
+    };
+    const timer = setTimeout(killTree, timeoutMs);
     child.stdout.on('data', (chunk) => {
       if (stdout.length < 60000) stdout += chunk.toString('utf8');
     });
@@ -386,12 +425,10 @@ function runProcess(command, args, { cwd, timeoutMs, input }) {
       if (stderr.length < 20000) stderr += chunk.toString('utf8');
     });
     child.on('error', (error) => {
-      clearTimeout(timer);
-      resolve({ code: -1, stdout, stderr: `${stderr}\n${error.message}`, killed });
+      finish({ code: -1, stdout, stderr: `${stderr}\n${error.message}`, killed });
     });
     child.on('close', (code) => {
-      clearTimeout(timer);
-      resolve({ code, stdout, stderr, killed });
+      finish({ code, stdout, stderr, killed });
     });
     if (input) {
       child.stdin.write(input);
@@ -1552,6 +1589,37 @@ export const TOOL_DEFS = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'legal_task',
+      description:
+        'Юридический полигон Harvey LAB (Legal Agent Benchmark, MIT): 2010 реальных заданий по 27 практикам, у каждого — инструкция, документы дела и рубрика PASS/FAIL с оценкой «всё-или-ничего». Действия: status — что уже скачано; sync — скачать/обновить каталог заданий (нужен git, ~80 МБ); list — найти задание по практике, типу работы, словам и размеру рубрики; show — инструкция, имена файлов-деливераблов и критерии; fetch — скачать документы конкретного дела; prepare — создать рабочую папку с documents/, пустой output/ и instructions.md; grade — проверить готовый файл из output против рубрики и написать report.html с вердиктом по каждому критерию. Вызывай, когда пользователь просит юридический кейс по стандарту Harvey LAB, тренировку на реальном деле или объективную оценку юридической работы; не выдумывай критерии сам — они берутся из репозитория бенчмарка.',
+      parameters: {
+        type: 'object',
+        properties: {
+          action: {
+            type: 'string',
+            enum: ['status', 'sync', 'list', 'show', 'fetch', 'prepare', 'grade'],
+            description: 'Что сделать. По умолчанию list.',
+          },
+          id: {
+            type: 'string',
+            description: 'id задания, например employment-labor/identify-issues-in-counterparty-motion-brief или contracts/commercial-vendor-customer/non-disclosure-agreement-term-negotiation.',
+          },
+          area: { type: 'string', description: 'Практика для list: contracts, real-estate, corporate-ma, employment-labor…' },
+          work_type: { type: 'string', description: 'Тип работы для list: analyze, draft, review, research.' },
+          query: { type: 'string', description: 'Поиск по названию, id и тегам.' },
+          limit: { type: 'number', description: 'Сколько заданий показать в list (по умолчанию 15).' },
+          max_criteria: { type: 'number', description: 'list: не больше N критериев в рубрике — маленькие задания быстрее проверить.' },
+          dir: { type: 'string', description: 'Папка прогона внутри проекта для prepare/grade. По умолчанию legal-lab/<последняя часть id>.' },
+          judge: { type: 'string', enum: ['flash', 'pro'], description: 'Модель-судья для grade: flash — быстрый прогон, pro — строже (по умолчанию).' },
+          criteria_limit: { type: 'number', description: 'grade: проверить только первые N критериев (рубрики бывают по 1000+ пунктов).' },
+        },
+        required: ['action'],
+      },
+    },
+  },
 ];
 
 export const TOOL_LABELS = {
@@ -1588,6 +1656,7 @@ export const TOOL_LABELS = {
   extract_archive: 'Распаковка архива',
   check_links: 'Проверка ссылок',
   compare_documents: 'Сравнение документов',
+  legal_task: 'Юридический полигон',
 };
 
 /** Русское склонение по числу: 1 ссылка, 2 ссылки, 5 ссылок. */
@@ -1603,6 +1672,8 @@ function plural(count, one, few, many) {
 export function toolSummary(name, args) {
   if (!args || typeof args !== 'object') return '';
   switch (name) {
+    case 'legal_task':
+      return [String(args.action || 'list'), args.id || args.area || args.query || ''].filter(Boolean).join(' · ');
     case 'read_file':
     case 'read_document':
     case 'analyze_image':
@@ -1696,6 +1767,8 @@ const WRITE_TARGETS = {
   create_pptx: ['path'],
   create_pdf: ['path'],
   check_page: ['screenshot'],
+  /* Полигон пишет прогон туда, куда сказали: подчинённая папка субагента обязательна. */
+  legal_task: ['dir'],
   /* Архив только читаем, пишем в папку распаковки: ограничивать path нельзя,
      иначе субагент не сможет развернуть архив, лежащий выше его папки. */
   extract_archive: ['to'],
@@ -1778,7 +1851,9 @@ export async function availableToolDefs() {
   return defs;
 }
 
-export async function executeTool(name, args, ctx) {
+/* Сам разбор инструментов. Обёртка с общим дедлайном — ниже, в executeTool:
+   так у каждой ветки остаётся прямой код, а предел по времени один на всех. */
+async function executeToolInner(name, args, ctx) {
   const root = ctx.workspace;
   /* Субагент пишет только в свою папку: проверяем до записи, а не после. */
   assertWriteScope(ctx, name, args);
@@ -1924,6 +1999,15 @@ export async function executeTool(name, args, ctx) {
     }
     case 'read_document': {
       const full = assertInside(root, resolveSafe(root, args.path));
+      const stat = fs.statSync(full);
+      if (!stat.isFile()) throw new Error('Это не файл');
+      /* Разбор документа — работа в памяти на сотни мегабайт: у общего сервиса
+         один такой файл мог бы уронить процесс остальным пользователям. */
+      if (stat.size > LIMITS.maxParseBytes) {
+        throw new Error(
+          `Файл ${formatBytes(stat.size)} больше предела разбора (${formatBytes(LIMITS.maxParseBytes)}). Спросите у владельца увеличение предела или пришлите файл частями.`,
+        );
+      }
       const buf = fs.readFileSync(full);
       const parsed = extractDocumentText(buf, args.path, '', { maxChars: LIMITS.maxFileTextChars });
       if (!parsed.text) {
@@ -1964,7 +2048,13 @@ export async function executeTool(name, args, ctx) {
     }
     case 'analyze_image': {
       const full = assertInside(root, resolveSafe(root, args.path));
-      const ext = path.extname(args.path).toLowerCase().slice(1);      const mime = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', gif: 'image/gif' }[ext] || 'image/png';
+      const stat = fs.statSync(full);
+      if (!stat.isFile()) throw new Error('Это не файл');
+      if (stat.size > LIMITS.maxAttachmentBytes) {
+        throw new Error(`Картинка ${formatBytes(stat.size)} больше предела (${formatBytes(LIMITS.maxAttachmentBytes)}). Уменьшите её и повторите.`);
+      }
+      const ext = path.extname(args.path).toLowerCase().slice(1);
+      const mime = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', gif: 'image/gif' }[ext] || 'image/png';
       const result = await describeImage({
         buffer: fs.readFileSync(full),
         mime,
@@ -2155,15 +2245,20 @@ export async function executeTool(name, args, ctx) {
       }
       const tmpDir = path.join(root, '.dshow');
       fs.mkdirSync(tmpDir, { recursive: true });
-      const scriptPath = path.join(tmpDir, `run_${Date.now()}.py`);
+      /* Уникальное имя на запуск: два человека в одну миллисекунду не должны
+         перезаписать скрипт друг друга. */
+      const stamp = `${Date.now()}_${process.pid}_${Math.random().toString(36).slice(2, 8)}`;
+      const scriptPath = path.join(tmpDir, `run_${stamp}.py`);
       fs.writeFileSync(scriptPath, `${PYTHON_GUARD}\n${code}`, 'utf8');
       /* -B: не писать __pycache__ в папку проекта. Окружение уже отфильтровано,
          поэтому -E/-I не нужны, а -I вдобавок запрещал бы импорт своих модулей
          из папки проекта. */
-      const result = await runProcess(bin, ['-B', scriptPath], {
-        cwd: root,
-        timeoutMs: LIMITS.pythonTimeoutMs,
-      });
+      const result = await withHeavySlot(() =>
+        runProcess(bin, ['-B', scriptPath], {
+          cwd: root,
+          timeoutMs: LIMITS.pythonTimeoutMs,
+        }),
+      );
       try {
         fs.unlinkSync(scriptPath);
       } catch {
@@ -2345,9 +2440,11 @@ export async function executeTool(name, args, ctx) {
         throw new Error(`«${folder}» — это файл проекта, а не папка. Укажи другую папку в to.`);
       }
       const buf = fs.readFileSync(full);
-      const result = kind === 'gz'
-        ? gunzipTo(buf, target, path.basename(rel), { overwrite: Boolean(args.overwrite) })
-        : await extractArchiveTo(buf, target, { overwrite: Boolean(args.overwrite) });
+      const result = await withHeavySlot(() =>
+        kind === 'gz'
+          ? gunzipTo(buf, target, path.basename(rel), { overwrite: Boolean(args.overwrite) })
+          : extractArchiveTo(buf, target, { overwrite: Boolean(args.overwrite) }),
+      );
       const listed = result.files.slice(0, 10).map((file) => `${folder}/${file.path}`);
       return {
         text: `${formatExtraction(result, { folder })}${listed.length ? `\nДальше читай так: ${listed.map((p) => `read_document «${p}»`).join(', ')}` : ''}`,
@@ -2404,6 +2501,141 @@ export async function executeTool(name, args, ctx) {
         meta: { left: leftRel, right: rightRel, changed: result.changed, added: result.added, removed: result.removed, exact: result.exact, truncated: result.truncated },
       };
     }
+    case 'legal_task': {
+      const action = String(args.action || 'list').trim().toLowerCase();
+      if (action === 'status') {
+        const status = labStatus();
+        if (!status.ready) {
+          return {
+            text: [
+              'Каталог заданий Harvey LAB ещё не скачан.',
+              `Данные: ${LAB_DIR}`,
+              'Вызови legal_task с action="sync" — разовый шаг, ~80 МБ, нужен git.',
+            ].join('\n'),
+            meta: { ready: false, dir: LAB_DIR },
+          };
+        }
+        return {
+          text: [
+            `Заданий: ${status.tasks} в ${status.areas} практиках (рубрики от ${status.criteriaMin} до ${status.criteriaMax} критериев).`,
+            `Каталог собран: ${String(status.catalogAt).slice(0, 16).replace('T', ' ')}. Дальше: list → show → prepare → работа → grade.`,
+          ].join('\n'),
+          meta: { ready: true, tasks: status.tasks, areas: status.areas },
+        };
+      }
+      if (action === 'sync') {
+        const stats = await syncCatalog({ refresh: Boolean(args.refresh) });
+        return {
+          text: `Каталог Harvey LAB готов: ${stats.tasks} заданий, ${stats.areas} практик.`,
+          meta: { tasks: stats.tasks, areas: stats.areas, commit: stats.commit },
+        };
+      }
+      if (action === 'list') {
+        const { total, items } = listTasks({
+          area: args.area,
+          workType: args.work_type,
+          q: args.query,
+          maxCriteria: Number(args.max_criteria) || 0,
+          limit: Number(args.limit) || 15,
+        });
+        if (!items.length) {
+          return {
+            text: 'Ничего не нашлось: ослабь фильтры или проверь каталог действием status.',
+            meta: { total: 0 },
+          };
+        }
+        const lines = items.map(
+          (task) =>
+            `• ${task.id}\n  ${task.title} · ${task.criteria} критериев${task.workType ? ` · ${task.workType}` : ''}`,
+        );
+        return {
+          text: `${lines.join('\n')}\n\nПоказано ${items.length} из ${total}. Дальше: show с id задания.`,
+          meta: { total, shown: items.length },
+        };
+      }
+      if (action === 'show') {
+        const task = readTask(args.id || args.query);
+        const criteria = task.criteria.slice(0, 6);
+        const text = [
+          `# ${task.title}`,
+          `${task.id} · ${task.area} · ${task.workType || 'тип не указан'} · ${task.criteria.length} критериев (оценка «всё-или-ничего»)`,
+          `файлы-деливераблы: ${task.deliverables.join(', ') || 'не заданы'}`,
+          `материалы дела: ${
+            task.documentsReady
+              ? task.documents.map((doc) => `${doc.name} (${formatBytes(doc.size)})`).join(', ')
+              : 'не скачаны — действие fetch'
+          }`,
+          '',
+          '## Инструкция',
+          task.instructions || '(пусто)',
+          '',
+          `## Критерии (первые ${criteria.length} из ${task.criteria.length})`,
+          ...criteria.map((criterion) => `${criterion.id} ${criterion.title}\n   ${criterion.match}`),
+        ].join('\n');
+        return {
+          text,
+          meta: { id: task.id, criteria: task.criteria.length, deliverables: task.deliverables },
+        };
+      }
+      if (action === 'fetch') {
+        const id = resolveTaskId(args.id || args.query);
+        const result = await fetchDocuments(id);
+        return {
+          text: `Документы дела ${id} на месте: ${result.documents.map((doc) => doc.name).join(', ')}`,
+          meta: { id, documents: result.documents.length },
+        };
+      }
+      if (action === 'prepare') {
+        const id = resolveTaskId(args.id || args.query);
+        const slug = id.split('/').slice(-1)[0].replace(/[^\w.-]+/g, '-');
+        const rel = String(args.dir || path.join('data', 'legalbench', 'runs', slug)).replace(/\\/g, '/');
+        const dest = assertInside(root, resolveSafe(root, rel));
+        const prepared = await prepareTask(id, { dest });
+        return {
+          text: [
+            `Задание готово: ${prepared.id}`,
+            `документы дела: ${path.relative(root, prepared.documentsDir).replace(/\\/g, '/')}`,
+            `положить результат: ${prepared.deliverables.join(', ') || 'по инструкции'} → ${path.relative(root, prepared.outputDir).replace(/\\/g, '/')}/`,
+            `критериев в рубрике: ${prepared.criteria}`,
+            `инструкция: ${path.relative(root, path.join(prepared.dir, 'instructions.md')).replace(/\\/g, '/')}`,
+            `потом: legal_task action="grade" dir="${rel}"`,
+          ].join('\n'),
+          meta: { id: prepared.id, dir: rel, documents: prepared.documents.length, criteria: prepared.criteria },
+        };
+      }
+      if (action === 'grade') {
+        const id = resolveTaskId(args.id || args.query);
+        const rel = String(args.dir || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+        if (!rel) throw new Error('Для grade нужна папка прогона: dir (её вернул prepare)');
+        const dirFull = assertInside(root, resolveSafe(root, rel));
+        if (!fs.existsSync(dirFull)) throw new Error(`Папки прогона ${rel} нет: сначала prepare`);
+        const outputDir = fs.existsSync(path.join(dirFull, 'output')) ? path.join(dirFull, 'output') : dirFull;
+        const result = await gradeRun({
+          taskId: id,
+          outputDir,
+          resultDir: dirFull,
+          judge: args.judge || 'flash',
+          maxCriteria: Number(args.criteria_limit) || 0,
+        });
+        const failed = result.criteria.filter((item) => !item.pass);
+        const lines = [
+          `${result.score === 1 ? 'ЗАЧЁТ 1.0' : 'НЕЗАЧЁТ 0.0'} — ${result.title}`,
+          `пройдено ${result.passedCount} из ${result.total} критериев (судья ${result.model}, правило «всё-или-ничего»).`,
+        ];
+        if (failed.length) {
+          lines.push('', 'Что не сдано:');
+          for (const item of failed.slice(0, 12)) lines.push(`• ${item.id} ${item.title}\n  ${item.reason}`);
+          if (failed.length > 12) lines.push(`…и ещё ${failed.length - 12} критериев — в отчёте.`);
+        }
+        const reportRel = path.relative(root, result.reportPath).replace(/\\/g, '/');
+        lines.push('', `отчёт: ${reportRel}`);
+        return {
+          text: lines.join('\n'),
+          meta: { score: result.score, passed: result.passedCount, total: result.total, report: reportRel },
+        };
+      }
+      throw new Error(`Неизвестное действие legal_task: ${action} (status, sync, list, show, fetch, prepare, grade)`);
+    }
     default:
       throw new Error(`Инструмент ${name} недоступен`);
   }
@@ -2418,4 +2650,39 @@ export function workspaceFileInfo(root, rel) {
 
 export function sanitizeRelative(rel) {
   return safeName(String(rel || '').replace(/\\/g, '/')).replace(/^\/+/, '');
+}
+
+/* Общий предел времени на один инструмент.
+ *
+ * Зачем: инструмент, который молча висит (сеть без ответа, чужой сайт держит
+ * соединение, Python ждёт ввода), занимает место в счётчике прогонов и держит
+ * диалог до сорока пяти минут. Модель в такой ситуации ничего не может:
+ * инструмент ей ничего не отвечает. Поэтому у любого вызова есть потолок,
+ * после которого агент получает понятную ошибку и продолжает работу —
+ * например, разбивает задачу на части.
+ *
+ * Сам сигнал всё равно передаётся внутрь (ctx.signal): кто умеет
+ * останавливаться — остановится сразу, остальные досчитают и освободят место. */
+export async function executeTool(name, args, ctx) {
+  const limit = Number(CAPACITY.toolDeadlineMs) || 0;
+  if (!(limit > 0)) return executeToolInner(name, args, ctx);
+  const deadline = AbortSignal.timeout(limit);
+  const signal = ctx?.signal ? AbortSignal.any([ctx.signal, deadline]) : deadline;
+  const work = executeToolInner(name, args, { ...ctx, signal });
+  /* Инструмент, который «проиграл» гонку, может позже упасть сам: гасим,
+     чтобы его ошибка не стала необработанным отказом процесса. */
+  work.catch(() => {});
+  let timer = null;
+  const guard = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      const seconds = Math.round(limit / 1000);
+      reject(new Error(`Инструмент «${name}» не уложился в ${seconds} с и был остановлен. Попробуйте меньший объём за один вызов.`));
+    }, limit);
+    timer.unref?.();
+  });
+  try {
+    return await Promise.race([work, guard]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }

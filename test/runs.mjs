@@ -490,6 +490,58 @@ try {
     'задача продолжилась после сбоя внутри инструмента',
     `ответ ${afterTool?.messages?.at(-1)?.content?.length || 0} знаков`,
   );
+  /* 9. Контекст не истекает по возрасту: задача двухмесячной давности
+     продолжается сама, но её раздутая история перед продолжением сжимается в
+     конспект — иначе продолжение стоило бы полного окна токенов. */
+  app.kill();
+  await sleep(600);
+  const aged = JSON.parse(fs.readFileSync(chatFile, 'utf8'));
+  const oldAt = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString();
+  const oldQuestion = 'Что осталось от давней задачи?';
+  aged.messages.push({ role: 'user', content: oldQuestion, at: oldAt });
+  aged.messages.push({
+    role: 'assistant',
+    content: '',
+    error: 'Сервис перезапускался, поэтому задача прервалась. Отправьте её ещё раз — контекст диалога сохранён.',
+    interrupted: true,
+    at: oldAt,
+  });
+  /* История, которую за два месяца накопила работа: заметно больше порога сжатия. */
+  aged.history = Array.isArray(aged.history) ? aged.history : [];
+  for (let index = 0; index < 60; index++) {
+    aged.history.push({ role: 'user', content: `шаг ${index}: ${'проверка макета и текста. '.repeat(24)}` });
+    aged.history.push({ role: 'assistant', content: `готово ${index}: ${'макет собран, текст вычитан. '.repeat(24)}` });
+  }
+  aged.history.push({ role: 'user', content: oldQuestion });
+  fs.writeFileSync(chatFile, JSON.stringify(aged));
+  const indexData3 = JSON.parse(fs.readFileSync(indexFile, 'utf8'));
+  const meta3 = indexData3.chats.find((item) => item.id === chatId);
+  if (meta3) meta3.running = { runId: 'run_aged', startedAt: oldAt, attempts: 0 };
+  fs.writeFileSync(indexFile, JSON.stringify(indexData3));
+
+  app = startApp();
+  await waitReady();
+  const agedChat = await waitAutoResumed(laptop, chatId, 30000);
+  check(
+    agedChat?.messages?.at(-1)?.role === 'assistant' && Boolean(agedChat.messages.at(-1).content),
+    'задача двухмесячной давности продолжилась сама',
+    agedChat?.messages?.at(-1)?.interrupted
+      ? 'осталась пометка об обрыве'
+      : `ответ ${agedChat?.messages?.at(-1)?.content?.length || 0} знаков`,
+  );
+  const agedStored = JSON.parse(fs.readFileSync(chatFile, 'utf8'));
+  const historyDir = path.join(DIR, 'workspaces', project.id, '.history');
+  const staleSlices = fs.existsSync(historyDir) ? fs.readdirSync(historyDir) : [];
+  check(
+    staleSlices.length > 0,
+    'старый контекст перед продолжением сжат и выгружен в .history',
+    `файлов ${staleSlices.length}, история ${(agedStored.history || []).length} сообщений`,
+  );
+  check(
+    /Ранее в разговоре \(сжато\)/.test(String(agedStored.memory || '')),
+    'в памяти диалога остался конспект прежнего разговора',
+    `память ${String(agedStored.memory || '').length} знаков`,
+  );
 } catch (error) {
   console.error('ошибка проверки:', error.stack || error.message);
   failures += 1;

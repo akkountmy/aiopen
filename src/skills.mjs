@@ -13,8 +13,16 @@ import { fileURLToPath } from 'node:url';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const SKILLS_DIR = path.join(ROOT, 'skills');
 
-/** Сколько символов тела навыка отдаём модели: дальше полезность падает. */
-export const SKILL_BODY_CHARS = 14000;
+/**
+ * Сколько символов тела навыка отдаём модели.
+ *
+ * Порог 14000 был на грани: самый длинный навык уже 13077 знаков, следующий
+ * рост обрезался бы молча — вместе с концом инструкции, где проверка и сдача.
+ * Держим 24000 как запас, а при обрезке показываем размер, чтобы дефект был
+ * виден. Результат use_skill в подсказке не сжимается (skipTools в trim.mjs),
+ * поэтому длина тела — это стоимость вызова; платим только при открытии навыка.
+ */
+export const SKILL_BODY_CHARS = 24000;
 
 let cache = null;
 
@@ -114,6 +122,9 @@ export function skillBody(id) {
       text: `Навык «${id}» не найден. Доступны: ${skillIds().join(', ') || 'пока нет'}.`,
     };
   }
-  const body = skill.body.length > SKILL_BODY_CHARS ? `${skill.body.slice(0, SKILL_BODY_CHARS)}\n\n(инструкция обрезана)` : skill.body;
+  const body =
+    skill.body.length > SKILL_BODY_CHARS
+      ? `${skill.body.slice(0, SKILL_BODY_CHARS)}\n\n(инструкция обрезана: показано ${SKILL_BODY_CHARS} из ${skill.body.length} знаков, хвост с проверкой и сдачей не показан — недостающее уточни у пользователя или в файлах проекта)`
+      : skill.body;
   return { ok: true, id: skill.id, name: skill.name, text: `Навык «${skill.id}» — ${skill.name}\n\n${body}` };
 }

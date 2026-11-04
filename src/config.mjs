@@ -17,6 +17,10 @@ export const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
 /** Документы, приложенные к заданиям «Дашборда»: живут отдельно от проектов,
  *  чтобы смена проекта задания не теряла материалы. */
 export const DASHBOARD_FILES_DIR = path.join(DATA_DIR, 'dashboard-files');
+/** Скриншоты из окна «Поддержка»: лежат отдельно от проектов — обращение
+ *  принадлежит человеку, а не папке, и не должно пропадать при удалении
+ *  проекта. Доступ к файлу — только у автора и у администратора. */
+export const SUPPORT_DIR = path.join(DATA_DIR, 'support');
 export const LOGS_DIR = path.join(DATA_DIR, 'logs');
 export const INDEX_FILE = path.join(DATA_DIR, 'index.json');
 
@@ -61,6 +65,20 @@ export const CONTEXT = {
     spillDir: '.trims',
     maxSpillFiles: 60,
     minHistoryChars: 2500,
+  },
+  /* Хранение контекста без срока. Раньше контекст «старел»: задача, прерванную
+     больше недели назад, сервис автоматически не подхватывал, и работа
+     человека пропадала из-за одной даты. Теперь переписка и незаконченные
+     задачи остаются навсегда, а чтобы давний диалог не стоил полного окна
+     токенов, раз в месяц (30 дней) давно не тронутая история сворачивается в
+     конспект: старые реплики уходят файлом в `.history/`, в памяти диалога
+     остаются последние и сводка. Сжимаем только то, что и правда раздулось:
+     диалог ниже `staleTokens` не трогаем вовсе. */
+  retain: {
+    compactAfterDays: Number(process.env.DSHOW_CONTEXT_COMPACT_DAYS || 30),
+    staleTokens: Number(process.env.DSHOW_CONTEXT_STALE_TOKENS || 8000),
+    keepRecent: Number(process.env.DSHOW_CONTEXT_KEEP_RECENT || 12),
+    memoryChars: Number(process.env.DSHOW_CONTEXT_MEMORY_CHARS || 2200),
   },
 };
 
@@ -185,6 +203,14 @@ export const PROMPT_BUDGET = {
 
 const MB = 1024 * 1024;
 
+/** Целое из окружения: не задано или мусор — берём запасное значение.
+ *  Отдельная функция, потому что нужна выше, чем общий count (он объявлен
+ *  ниже и до этого места ещё не существует). */
+function envCount(value, fallback) {
+  const n = Number(value);
+  return Number.isInteger(n) && n >= 0 ? n : fallback;
+}
+
 export const LIMITS = {
   jsonBody: 8 * MB,
   uploadBody: 160 * MB,
@@ -196,15 +222,70 @@ export const LIMITS = {
   maxFileTextChars: 200000,
   maxAttachmentsPerMessage: 24,
   attachmentsContextChars: 60000,
-  /** Сколько ответов может идти одновременно у одного аккаунта. 0 — без
-   *  ограничений: на одном нике и пароле может работать сколько угодно
-   *  устройств и вкладок, каждая со своим диалогом. Внутри одного диалога
-   *  всегда ровно один ответ — иначе сообщения перепутаются. */
-  agentConcurrencyPerUser: 0,
+  /** Сколько ответов может идти одновременно у одного аккаунта. По умолчанию
+   *  три: человек с ноутбуком, телефоном и планшетом работает спокойно, но
+   *  двадцать открытых вкладок не выедают все места сервиса у остальных.
+   *  0 — без ограничений (так было раньше). Внутри одного диалога всегда ровно
+   *  один ответ — иначе сообщения перепутаются. Меняется DSHOW_RUNS_PER_USER. */
+  agentConcurrencyPerUser: envCount(process.env.DSHOW_RUNS_PER_USER, 3),
   pythonTimeoutMs: 60000,
-  fetchTimeoutMs: 30000,
+  /* Ожидание ответа чужого сайта. Меняется DSHOW_FETCH_TIMEOUT_S: на медленных
+     каналах 30 секунд мало, а на общем сервисе больше минуты вредит — запрос
+     держит место в счётчике тяжёлых задач. */
+  fetchTimeoutMs: envCount(process.env.DSHOW_FETCH_TIMEOUT_S, 30) * 1000,
   transcribeBody: 24 * MB,
   proofreadChars: 24000,
+  /** Обращение в поддержку: текст и скриншот. Скриншот приходит в JSON как
+   *  data-URL уже сжатым на клиенте (JPEG, длинная сторона ~1600 px), поэтому
+   *  серверный предел считаем по готовому файлу, а не по исходной картинке. */
+  supportTextChars: 4000,
+  supportScreenshotBytes: 4 * MB,
+  supportContactChars: 200,
+};
+
+/**
+ * Запас прочности сервиса под одновременную работу людей.
+ *
+ * Считаем не «сколько пользователей зарегистрировано», а сколько ответов
+ * агента может идти ОДНОВРЕМЕННО, не выедая память контейнера: каждый живой
+ * ответ держит историю диалога, а инструменты могут поднять Chromium (сотни
+ * мегабайт) или Python. Десять одновременных прогонов — это примерно 1–2 ГБ
+ * вместе с браузером, то есть потолок тарифа «Начальный Плюс» и середина
+ * «Стандартного». Числа меняются переменными окружения, потому что тариф
+ * хостинга поднимают без правки кода.
+ */
+export const CAPACITY = {
+  /** Сколько ответов агента идёт одновременно во всём сервисе. 0 — без предела. */
+  maxRuns: envCount(process.env.DSHOW_MAX_RUNS, 10),
+  /** Сколько из них может занимать один аккаунт (см. LIMITS выше). */
+  runsPerUser: envCount(process.env.DSHOW_RUNS_PER_USER, 3),
+  /** Сколько ждём свободного места, прежде чем честно ответить «занято».
+   *  Минута: большинство ответов короче, и человек дождётся, не нажимая
+   *  «отправить» заново. 0 — не ждать вовсе. */
+  runWaitMs: envCount(process.env.DSHOW_RUN_WAIT_S, 60) * 1000,
+  /** Сколько запросов может одновременно стоять в ожидании места. Больше —
+   *  отказ сразу: бесконечная очередь съедает память и ничего не ускоряет. */
+  maxWaiting: envCount(process.env.DSHOW_MAX_WAITING_RUNS, 40),
+  /** Потолок времени на одну задачу. Счётчики шагов не спасают от зависшего
+   *  HTTP-соединения к модели: без часов задача держит место вечно, а диалог
+   *  навсегда считается занятым. 45 минут — выше любой нормальной работы и
+   *  ниже терпения человека. DSHOW_RUN_MAX_MIN=0 — без потолка. */
+  runMaxMs: envCount(process.env.DSHOW_RUN_MAX_MIN, 45) * 60 * 1000,
+  /** Сколько ждём ответа модели на одном шаге (первый байт и весь поток).
+   *  Зависшее соединение рвём и повторяем, а не ждём до утра. */
+  modelTimeoutMs: envCount(process.env.DSHOW_MODEL_TIMEOUT_S, 300) * 1000,
+  /** Потолок сообщений одного аккаунта за 10 минут. Это защита от программной
+   *  очереди в сотни задач, а не от живой работы: вдумчивый человек столько не
+   *  напишет, а «нажму сорок раз» перестаёт топить остальных. */
+  messagesPerUser: envCount(process.env.DSHOW_MESSAGES_PER_10MIN, 60),
+  /** Сколько одновременно тяжёлых инструментов (браузер, Python, распаковка)
+   *  может работать в процессе. Один Chromium на десять задач — это OOM. */
+  heavyTools: envCount(process.env.DSHOW_HEAVY_TOOLS, 3),
+  /** Сколько страниц одновременно тянет краулер внутри одного вызова. */
+  crawlConcurrency: envCount(process.env.DSHOW_CRAWL_CONCURRENCY, 2),
+  /** Потолок времени на один сетевой инструмент (краулер, обход сайта):
+   *  иначе «Стоп» не действует, а место в очереди занято. */
+  toolDeadlineMs: envCount(process.env.DSHOW_TOOL_DEADLINE_S, 120) * 1000,
 };
 
 /* Срок жизни входа можно задать переменной окружения — это нужно и облаку,
@@ -413,7 +494,7 @@ export const ASR = {
 };
 
 export function ensureDirs() {
-  for (const dir of [DATA_DIR, WORKSPACES_DIR, CHATS_DIR, UPLOADS_DIR, LOGS_DIR, DASHBOARD_FILES_DIR]) {
+  for (const dir of [DATA_DIR, WORKSPACES_DIR, CHATS_DIR, UPLOADS_DIR, LOGS_DIR, DASHBOARD_FILES_DIR, SUPPORT_DIR]) {
     fs.mkdirSync(dir, { recursive: true });
   }
 }

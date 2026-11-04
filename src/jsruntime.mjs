@@ -1,11 +1,19 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
+import { Worker, isMainThread, parentPort, workerData } from 'node:worker_threads';
 
 /* Лёгкий вычислительный слой вместо Python: в облаке Python нет, а считать
    приходится много — пересчёты, разбор текста, чистка CSV, проверки сумм.
    Код исполняется в песочнице node:vm: без сети, без process, без require,
-   с потолком по времени и по объёму чтения и записи. */
+   с потолком по времени и по объёму чтения и записи.
+
+   Исполняется он в отдельном рабочем потоке (worker_threads). Причина
+   практическая: vm-песочница останавливает код только по своему таймауту, но
+   всё это время она держит единственный поток процесса. Замерено: таймер на
+   25 мс внутри run_js не сработал ни разу за 8 секунд, то есть на всё время
+   выполнения сервис переставал отвечать всем пользователям. Теперь хозяйский
+   поток свободен, а зависший код убивается вместе с потоком. */
 
 const MAX_READ_BYTES = 64 * 1024 * 1024;
 const MAX_WRITE_FILES = 40;
@@ -164,13 +172,13 @@ function today() { var d = new Date(); return d.toISOString().slice(0, 10); }
 `;
 
 /**
- * Исполняет JavaScript модели в песочнице.
+ * Исполняет JavaScript модели в песочнице (синхронно, в текущем потоке).
+ * Снаружи её вызывает только рабочий поток — см. runJavascript ниже.
  * @returns {{ output: string, files: string[], value: string, ms: number }}
  */
-export async function runJavascript({ code, root, timeoutMs = DEFAULT_TIMEOUT_MS, signal, writeRoot = '' } = {}) {
+function runSandboxLocal({ code, root, timeoutMs = DEFAULT_TIMEOUT_MS, writeRoot = '' } = {}) {
   const source = String(code ?? '');
   if (!source.trim()) throw new Error('Пустой код');
-  if (signal?.aborted) throw Object.assign(new Error('Остановлено'), { name: 'AbortError' });
 
   /* У субагента запись разрешена только в его папку: песочница идёт через то же
      правило, что и обычные инструменты, иначе run_js стал бы лазейкой. */
@@ -302,4 +310,95 @@ function formatValue(value) {
   } catch {
     return String(value);
   }
+}
+
+/* Ветка рабочего потока: получает задание, исполняет песочницу и отдаёт итог.
+   Живёт ровно один запуск — так зависший или утёкший по памяти код невозможно
+   «починить» повторным использованием. */
+const WORKER_START = 3000;
+
+if (!isMainThread && workerData?.dshowSandbox === true) {
+  try {
+    const result = runSandboxLocal(workerData);
+    parentPort.postMessage({ ok: true, result });
+  } catch (error) {
+    parentPort.postMessage({
+      ok: false,
+      error: {
+        name: String(error?.name || 'Error'),
+        message: String(error?.message || error),
+      },
+    });
+  }
+}
+
+/**
+ * Исполняет JavaScript модели в песочнице, но в отдельном потоке.
+ * @returns {Promise<{ output: string, files: string[], value: string, ms: number }>}
+ */
+export async function runJavascript({ code, root, timeoutMs = DEFAULT_TIMEOUT_MS, signal, writeRoot = '' } = {}) {
+  const source = String(code ?? '');
+  if (!source.trim()) throw new Error('Пустой код');
+  if (signal?.aborted) throw Object.assign(new Error('Остановлено'), { name: 'AbortError' });
+  const limit = Math.max(500, Math.min(MAX_TIMEOUT_MS, Number(timeoutMs) || DEFAULT_TIMEOUT_MS));
+
+  return await new Promise((resolve, reject) => {
+    const worker = new Worker(new URL(import.meta.url), {
+      workerData: { dshowSandbox: true, code: source, root, writeRoot, timeoutMs: limit },
+      /* Потолок памяти на поток: код, который надувает массив в гигабайт,
+         падает сам, не утягивая за собой сервис. */
+      resourceLimits: { maxOldGenerationSizeMb: 384, maxYoungGenerationSizeMb: 32 },
+      stdout: false,
+      stderr: false,
+    });
+    let settled = false;
+    let killed = false;
+    const cleanup = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
+    };
+    const finish = (fn, value) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      fn(value);
+    };
+    const kill = () => {
+      killed = true;
+      void worker.terminate();
+    };
+    /* Внешний потолок выше внутреннего: сначала срабатывает таймаут vm с
+       понятным сообщением, а kill — только если поток вообще не отдал итог. */
+    const timer = setTimeout(() => {
+      kill();
+      finish(
+        reject,
+        new Error(
+          `Код выполнялся дольше ${Math.round(limit / 1000)} с и был остановлен. Упрости вычисление или разбей его на части.`,
+        ),
+      );
+    }, limit + WORKER_START);
+    if (timer.unref) timer.unref();
+    const onAbort = () => {
+      kill();
+      finish(reject, Object.assign(new Error('Остановлено'), { name: 'AbortError' }));
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
+    worker.once('message', (message) => {
+      if (message?.ok) {
+        finish(resolve, message.result);
+        return;
+      }
+      const error = new Error(String(message?.error?.message || 'Код не выполнен'));
+      error.name = String(message?.error?.name || 'Error');
+      finish(reject, error);
+    });
+    worker.once('error', (error) => {
+      finish(reject, new Error(String(error?.message || error || 'Код не выполнен')));
+    });
+    worker.once('exit', () => {
+      if (settled || killed) return;
+      finish(reject, new Error('Выполнение кода прервано'));
+    });
+  });
 }

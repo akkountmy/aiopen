@@ -327,6 +327,21 @@ test('стандарты подключаются к просьбе: финан�
   assert.doesNotMatch(plain, /ФИНАНСОВЫЙ АНАЛИЗ/);
   const finance = systemPrompt({ projectName: 'П', memory: '', userName: '', question: 'посчитай юнит-экономику' });
   assert.match(finance, /ЛИСТ «Допущения»|лист «Допущения»/i);
+  /* Лендинг: блок веб-дизайна обязан ставить дизайн-систему до вёрстки, глубину
+     содержания, технические критерии и самопроверку с блоком «Проверено».
+     Без этих пунктов агент отдаёт «водяной» одностраничник — именно на этом
+     и провалился заказ по шпатлёвке. */
+  const landing = systemPrompt({ projectName: 'П', memory: '', userName: '', question: 'сделай лендинг по шпатлёвке стен под покраску' });
+  assert.match(landing, /ДИЗАЙН-СИСТЕМА ДО ВЁРСТКИ/, 'дизайн-система обязательна до вёрстки');
+  assert.match(landing, /10 секций и 8 смысловых блоков/, 'структура продающей страницы задана числом');
+  assert.match(landing, /1200 слов .*40 конкретных чисел|1200 слов смыслового текста и 40 конкретных чисел/, 'глубина содержания измерима');
+  assert.match(landing, /Vetonit|Sheetrock|ТЕКС/, 'материалы с марками, а не «качественные материалы»');
+  assert.match(landing, /Запрещены фразы без числа/, 'запрет общих фраз');
+  assert.match(landing, /check_page/, 'самопроверка через check_page');
+  assert.match(landing, /Проверено:/, 'перед сдачей нужен блок «Проверено»');
+  assert.match(landing, /Schema\.org/, 'микроразметка обязательна');
+  assert.match(landing, /4\.5:1/, 'контраст задан числом');
+  assert.match(landing, /prefers-reduced-motion/, 'анимации уважают reduced-motion');
   /* Бюджет подсказки: влезаем в предел и оставляем запас под новые правила.
      Раньше проверялось только «меньше 12 000», и промпт подошёл к пределу
      вплотную — любая правка роняла тест. */
@@ -338,6 +353,15 @@ test('стандарты подключаются к просьбе: финан�
   assert.ok(
     PROMPT_BUDGET.limitChars - finance.length >= PROMPT_BUDGET.reserveChars,
     `запас промпта кончился: свободно ${PROMPT_BUDGET.limitChars - finance.length}, нужно ${PROMPT_BUDGET.reserveChars}`,
+  );
+  /* Самый тяжёлый реальный случай — блок дизайна: он один длиннее остальных. */
+  assert.ok(
+    landing.length < PROMPT_BUDGET.limitChars,
+    `промпт лендинга слишком большой: ${landing.length} при пределе ${PROMPT_BUDGET.limitChars}`,
+  );
+  assert.ok(
+    PROMPT_BUDGET.limitChars - landing.length >= PROMPT_BUDGET.reserveChars,
+    `запас промпта лендинга кончился: свободно ${PROMPT_BUDGET.limitChars - landing.length}, нужно ${PROMPT_BUDGET.reserveChars}`,
   );
   assert.ok(finance.length > plain.length);
 });

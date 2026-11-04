@@ -559,6 +559,67 @@ export async function compressHistory({
   return result;
 }
 
+/**
+ * Ежемесячное сжатие старого контекста — без модели и без расхода токенов.
+ *
+ * Правило сервиса: контекст не истекает. Переписка и прерванные задачи остаются
+ * навсегда, сколько бы времени ни прошло. Но держать давний диалог в полном
+ * объёме незачем: раз в месяц (срок задаёт `CONTEXT.retain`) его история
+ * сворачивается в конспект. Старые реплики уезжают в `.history/…` проекта —
+ * полный текст остаётся читаемым через read_file, — а в памяти диалога
+ * остаются последние реплики и короткая сводка.
+ *
+ * Почему без модели: сжатие ради экономии токенов не должно тратить токены
+ * само. Поэтому здесь та же детерминированная выжимка «начало + конец», что и
+ * в аварийном пути `compressHistory`, а не обращение к модели.
+ *
+ * @param {object} params
+ * @param {{history: Array, memory?: string}} params.chat
+ * @param {string} params.workspace папка проекта (куда писать `.history/`)
+ * @param {number} params.budget до какого объёма сжимать историю, в токенах
+ * @param {number} [params.keepRecent] сколько последних сообщений оставить
+ * @param {object} [params.pinned] сообщение текущей задачи — его не срезаем
+ * @param {number} [params.memoryChars] потолок памяти диалога
+ * @param {object} [params.config]
+ * @returns {{compacted: boolean, removed: number, before: number, after: number,
+ *            spill: string|null, memoryChars: number}}
+ */
+export function compactStaleHistory({
+  chat,
+  workspace,
+  budget,
+  keepRecent = 12,
+  pinned = null,
+  memoryChars = 2200,
+  config = {},
+}) {
+  const settings = resolveTrimConfig(config);
+  const before = historyTokens(chat?.history);
+  const idle = { compacted: false, removed: 0, before, after: before, spill: null, memoryChars: (chat?.memory || '').length };
+  const removed = dropHistory(chat?.history, { budget, keepRecent, pinned });
+  if (!removed.length) return idle;
+
+  const text = renderRemoved(removed);
+  /* Ничего не теряем: срез целиком ложится файлом в папку проекта. */
+  const spill = spillText({ workspace, label: 'history', text, config: settings, history: true });
+  const flat = text.replace(/\s+/g, ' ').trim();
+  const head = flat.slice(0, 700);
+  const tail = flat.length > 1200 ? flat.slice(-420) : '';
+  const summary = `Ранее в разговоре (сжато): ${head}${tail ? ` … ${tail}` : flat.length > 700 ? '…' : ''}`;
+  const pointer = spill ? `Полный текст срезанной части: ${spill}` : '';
+  const fresh = [summary, pointer].filter(Boolean).join('\n');
+  const limit = Math.max(400, Number(memoryChars) || 2200);
+  chat.memory = composeMemory({ previous: chat.memory, fresh, limit, workspace, config: settings, result: null });
+  return {
+    compacted: true,
+    removed: removed.length,
+    before,
+    after: historyTokens(chat?.history),
+    spill,
+    memoryChars: chat.memory.length,
+  };
+}
+
 /** Счётчики для отчёта и логов: сколько сэкономили и сколько раз выгружали. */
 export function createTrimStats() {
   return {
