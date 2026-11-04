@@ -1563,15 +1563,10 @@ function renderMessage(message) {
   head.querySelector('.work-label').textContent = message.streaming && message.workNote ? message.workNote : 'работаю…';
   wrap.appendChild(head);
 
-  /* Ответ на длинную задачу идёт минутами, и человек успевает уйти в чтение
-     прошлых сообщений. Подпись «отвечаю на …» прямо в шапке показывает, что
-     работа идёт именно по последнему запросу, а не по вчерашнему. */
-  if (message.streaming && message.replyTo) {
-    const ask = el('div', 'msg-ask');
-    const text = String(message.replyTo).replace(/\s+/g, ' ').trim();
-    ask.textContent = `Отвечаю на: «${text.length > 90 ? `${text.slice(0, 90).trimEnd()}…` : text}»`;
-    wrap.appendChild(ask);
-  }
+  /* Запрос здесь не цитируем: просьба человека стоит своим пузырём прямо над
+     ответом, и вторая копия того же текста в шапке только мешала — читать
+     приходилось два раза одну и ту же строку. Что работа идёт, видно по
+     индикатору и подписи шага в шапке. */
 
   if (message.streaming) wrap.classList.add('streaming');
   else wrap.classList.remove('streaming');
@@ -1643,12 +1638,7 @@ function renderThread() {
     return;
   }
   thread.innerHTML = '';
-  /* Какой запрос сейчас в работе: подпись нужна самому ответу, а не ленте,
-     поэтому храним её в сообщении (переживает перерисовку потока). */
-  let lastRequest = '';
   for (const message of state.chat.messages) {
-    if (message.role === 'user') lastRequest = message.content || '';
-    else if (message.role === 'assistant' && message.streaming) message.replyTo = lastRequest;
     thread.appendChild(renderMessage(message));
   }
   syncQueuedBubbles();
@@ -4955,7 +4945,10 @@ async function openNarration(item) {
     if (job.status === 'queued') parts.push('В очереди — ждёт свободный поток');
     else if (job.stage) parts.push(job.stage);
     if (job.chunks > 1) parts.push(`${job.doneChunks} из ${job.chunks} фраз`);
-    if (job.files?.length) parts.push(`готово частей: ${job.files.length} из ${job.parts?.length || 1}`);
+    if (job.files?.length) {
+      const totalParts = job.parts?.length || 1;
+      parts.push(totalParts > 1 ? `готово частей: ${job.files.length} из ${totalParts}` : 'файл готов');
+    }
     progressText.textContent = `${parts.join(' · ') || 'Синтез'} — ${percent}%`;
     const notes = [];
     if (job.etaSeconds && job.status === 'running') notes.push(`осталось примерно ${ttsWait(job.etaSeconds)}`);
@@ -5028,7 +5021,9 @@ async function openNarration(item) {
 
     const where = el('p', 'tts-hint');
     where.textContent = job.word
-      ? `Файлы лежат в папке проекта: части MP3 и «${job.word.name}» с текстом книги.`
+      ? parts.length > 1
+        ? `Файлы лежат в папке проекта: ${parts.length} частей MP3 и «${job.word.name}» с текстом книги.`
+        : `Файлы лежат в папке проекта: один MP3 и «${job.word.name}» с текстом книги.`
       : `Файл «${parts[0]?.name || 'озвучка.mp3'}» лежит в папке проекта, рядом с документом.`;
     result.appendChild(where);
 
@@ -5269,7 +5264,7 @@ async function openNarration(item) {
       planLine.textContent =
         plan.parts.length > 1
           ? `${plan.chars.toLocaleString('ru-RU')} знаков ≈ ${totalHuman} звука. Получится ${plan.parts.length} частей ${shape} (до ${longest} мин) и Word «${plan.word}» с текстом.`
-          : `${plan.chars.toLocaleString('ru-RU')} знаков ≈ ${totalHuman} звука. Получится один MP3 на ${longest} мин и Word «${plan.word}» с текстом.`;
+          : `${plan.chars.toLocaleString('ru-RU')} знаков ≈ ${totalHuman} звука. Запись короткая — получится один MP3 на ${longest} мин (делить на части не нужно) и Word «${plan.word}» с текстом.`;
     } catch (error) {
       if (request !== planRequest) return;
       planLine.textContent = `Части не рассчитались (${error.message}) — озвучка всё равно работает.`;

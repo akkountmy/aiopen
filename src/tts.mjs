@@ -687,6 +687,16 @@ export function estimateNarration(text) {
 export const PART_MINUTES = 30;
 const CHARS_PER_MINUTE = 750;
 
+/**
+ * Короче этого — один MP3, даже если в тексте есть главы.
+ *
+ * Делить получасовую выжимку на «часть 1 из 2» незачем: она и так укладывается
+ * в одну дорогу, а лишнее имя только мешает искать запись в папке. Порог равен
+ * верхней границе части (45 минут), поэтому правило одно: умещается в одну
+ * часть — один файл, не умещается — режем по главам.
+ */
+export const SINGLE_FILE_MINUTES = 45;
+
 /* Заголовок раздела: короткая строка без точки в конце, капсом или с ключевым
    словом. Границу слова задаём явно: `\b` в JavaScript считает словесными
    только латиницу с цифрами, поэтому после «глава» кириллица границы не даёт
@@ -750,6 +760,26 @@ export function choosePartMinutes(raw) {
 }
 
 /**
+ * Сколько файлов и каких получится из документа — единственное место, где
+ * решается «резать или не резать», чтобы окно озвучки, сервер и инструмент
+ * агента отвечали одинаково.
+ *
+ * Правила:
+ *   • короткая выжимка (до SINGLE_FILE_MINUTES) — всегда один MP3, даже если
+ *     в ней есть главы: тридцать минут звука делить не на что;
+ *   • длинная книга — части по её структуре (choosePartMinutes);
+ *   • явный размер части (minutes из чата) уважаем как заказ: если модель
+ *     осознанно просит по 10 минут — режем по 10, даже короткий текст.
+ */
+export function narrationParts(raw, { minutes } = {}) {
+  const text = normalizeText(raw);
+  if (!text) return [];
+  const requested = Number(minutes) > 0 ? Math.min(90, Math.max(5, Number(minutes))) : 0;
+  if (!requested && text.length / CHARS_PER_MINUTE <= SINGLE_FILE_MINUTES) return [text];
+  return splitIntoParts(text, { minutes: requested || choosePartMinutes(text) });
+}
+
+/**
  * Режет документ на части по ~30 минут звука, стараясь рвать по границам
  * разделов: слушателю важно начинать часть с заголовка, а не с середины фразы.
  * Возвращает массив строк — по одной на часть. Одна часть — когда документ
@@ -797,8 +827,8 @@ export function splitIntoParts(raw, { minutes = PART_MINUTES } = {}) {
 }
 
 /** План частей для интерфейса: размеры и длительность без синтеза. */
-export function planParts(raw, { minutes = PART_MINUTES } = {}) {
-  return splitIntoParts(raw, { minutes }).map((text, index) => ({
+export function planParts(raw, { minutes } = {}) {
+  return narrationParts(raw, { minutes }).map((text, index) => ({
     index: index + 1,
     chars: text.length,
     minutes: Math.round((text.length / CHARS_PER_MINUTE) * 10) / 10,

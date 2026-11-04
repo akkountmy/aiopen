@@ -7,7 +7,7 @@ import { checkDocument, formatCheckReport } from './doccheck.mjs';
 import { memoryToolReply } from './memory.mjs';
 import { skillBody, skillIds } from './skills.mjs';
 import { detectKind, extractDocumentText } from './docparse.mjs';
-import { DEFAULT_RATE, DEFAULT_VOICE, MAX_TTS_CHARS, PART_MINUTES, choosePartMinutes, splitIntoParts, startNarration } from './tts.mjs';
+import { DEFAULT_RATE, DEFAULT_VOICE, MAX_TTS_CHARS, narrationParts, startNarration } from './tts.mjs';
 import { claimNarrationFiles } from './narration-plan.mjs';
 import { writeNarrationWord } from './narration-word.mjs';
 import { analyzeData, formatAnalysis } from './analysis.mjs';
@@ -854,7 +854,7 @@ export const TOOL_DEFS = [
     function: {
       name: 'narrate_document',
       description:
-        'Озвучить документ проекта нейроголосом: книга или отчёт превращаются в несколько MP3-частей по ~30 минут и один Word с текстом — файлы появляются в разделе «Файлы проекта». Синтез идёт в фоне минутами, инструмент возвращает номер задания сразу. Используй, когда просят «озвучь», «сделай аудиокнигу», «синтезируй речь», «пусть можно послушать».',
+        'Озвучить документ проекта нейроголосом: короткая выжимка (до 45 минут звука) становится одним MP3, большая книга — несколькими MP3-частями по ~30 минут, плюс один Word с текстом; файлы появляются в разделе «Файлы проекта». Синтез идёт в фоне минутами, инструмент возвращает номер задания сразу. Используй, когда просят «озвучь», «сделай аудиокнигу», «синтезируй речь», «пусть можно послушать».',
       parameters: {
         type: 'object',
         properties: {
@@ -867,7 +867,7 @@ export const TOOL_DEFS = [
           minutes: {
             type: 'number',
             description:
-              'Необязательно: длина одной части в минутах (5..90). Если не указывать, длина выводится из глав книги — короткие главы собираются, длинные режутся.',
+              'Необязательно: длина одной части в минутах (5..90). Если не указывать, короткая выжимка (до 45 минут звука) озвучивается одним файлом, а длина частей большой книги выводится из её глав. Указывать только когда человек прямо просит резать по столько-то минут.',
           },
         },
         required: ['path'],
@@ -1765,6 +1765,13 @@ export function toolSummary(name, args) {
     }
     case 'page_template':
       return 'готовый каркас';
+    /* Без этих двух строк шаг в ленте выглядел как «Навык» и «Проверка» без
+       подробностей: пользователь не видел, какой навык открыли и какой файл
+       проверили, а разбор качества не мог понять, сработал ли навык. */
+    case 'use_skill':
+      return String(args.id || '');
+    case 'check_document':
+      return args.path || '';
     case 'analyze_data':
       return `${args.path || ''}${args.mode ? ` · ${args.mode}` : ''}`;
     case 'extract_archive':
@@ -2076,12 +2083,11 @@ async function executeToolInner(name, args, ctx) {
           `Документ ${text.length.toLocaleString('ru-RU')} знаков — больше потолка озвучки (${MAX_TTS_CHARS.toLocaleString('ru-RU')}). Разделите книгу на тома и озвучьте по очереди.`,
         );
       }
-      /* Длину части модель выбирает по самой книге (её главам), а не спрашивает
-         человека: если в вызове minutes нет — смотрим, как нарезан документ. */
-      const minutes = Number(args.minutes) > 0
-        ? Math.min(90, Math.max(5, Number(args.minutes)))
-        : choosePartMinutes(text);
-      const chapters = splitIntoParts(text, { minutes });
+      /* Сколько файлов — решает narrationParts, а не сам вызов: короткую
+         выжимку (до 45 минут звука) отдаём одним MP3, даже если в ней есть
+         главы; длинную книгу режем по её структуре. Явный minutes из чата
+         считается заказом модели и уважается как есть. */
+      const chapters = narrationParts(text, { minutes: args.minutes });
       const files = claimNarrationFiles(full, chapters.length, { root });
       const word = writeNarrationWord(files.word, path.basename(full, path.extname(full)), text);
       const job = startNarration({
@@ -2120,6 +2126,10 @@ async function executeToolInner(name, args, ctx) {
       };
     }
     case 'read_document': {
+      /* Путь приводим так же, как в остальных файловых инструментах: раньше
+         здесь читалась переменная full, которой в этой ветке нет, и разбор
+         документа падал на любом вызове («full is not defined»). */
+      const full = assertInside(root, resolveSafe(root, args.path));
       const stat = fs.statSync(full);
       if (!stat.isFile()) throw new Error('Это не файл');
       /* Разбор документа — работа в памяти на сотни мегабайт: у общего сервиса

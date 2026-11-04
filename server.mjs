@@ -38,17 +38,16 @@ import {
   DEFAULT_RATE,
   DEFAULT_VOICE,
   MAX_TTS_CHARS,
-  PART_MINUTES,
   RATE_CHOICES,
   VOICE_CHOICES,
   cancelJob,
   choosePartMinutes,
   getJob,
   jobsFor,
+  narrationParts,
   planParts,
   publicJob,
   splitBlocks,
-  splitIntoParts,
   startNarration,
   voiceCatalog,
 } from './src/tts.mjs';
@@ -125,7 +124,8 @@ import { squeezeStaleContext, startContextCompactor } from './src/contextkeep.mj
 import { describeProfile } from './src/model.mjs';
 import { describeReview } from './src/review.mjs';
 import { recordQuality, qualityRecord, readQuality, summarizeQuality, formatQuality, kindLabel as qualityKindLabel } from './src/quality.mjs';
-import { BusyError, createGate, createLoopMonitor, memoryStats } from './src/capacity.mjs';
+import { BusyError, createGate, createLoopMonitor, memoryPressure, memoryStats } from './src/capacity.mjs';
+import { startWatchdog, startHardWatchdog } from './src/watchdog.mjs';
 import { attachText, storeAttachText } from './src/attachtext.mjs';
 
 ensureDirs();
@@ -178,13 +178,79 @@ const runGate = createGate({
   waitMs: CAPACITY.runWaitMs,
   maxWaiting: CAPACITY.maxWaiting,
 });
-const loopMonitor = createLoopMonitor();
+/* Потолок на остановку очереди событий: одна тяжёлая задача не должна тихо
+   подвешивать ответы всем. Строка в журнале даёт момент времени, по которому
+   видно, какой запрос шёл рядом. */
+const loopMonitor = createLoopMonitor({
+  onStall: ({ lagMs, at }) => console.warn(`[capacity] очередь событий стояла ${lagMs} мс в ${at}`),
+});
+
+/* Сторож зависания: раз в минуту строка [beat], а если очередь событий встала
+   дольше CAPACITY.watchdogSec — завершение процесса, чтобы платформа подняла
+   сервис заново. Четвёртого ноября сервис один раз молча перестал отвечать на
+   двадцать минут: перезапуск занимает секунды, зависание стоит дороже. */
+const watchdog = startWatchdog({
+  hangMs: CAPACITY.watchdogSec * 1000,
+  onBeat: () => {
+    const memory = memoryStats();
+    const capacity = runGate.stats();
+    console.log(`[beat] прогонов ${capacity.active}, ждут ${capacity.waiting ?? 0}, память ${memory.rssMb} МБ, очередь ${loopMonitor.stats().loopLagMs} мс`);
+  },
+  onHang: ({ blockedMs, at }) => {
+    const seconds = Math.round(blockedMs / 1000);
+    console.error(`[watchdog] очередь событий стояла ${seconds} с (${at}) — перезапускаю сервис`);
+    /* Перед перезапуском закрываем задачи, которые шли в момент зависания: иначе
+       сервис поднимется, снова автоматически продолжит ту же задачу и зависнет
+       второй раз. Четвёртого ноября так и вышло — двадцать минут тишины. */
+    try {
+      let parked = 0;
+      for (const run of runs.values()) {
+        if (run.status !== 'running') continue;
+        if (parkChatAfterHang(run, seconds)) parked += 1;
+      }
+      if (parked) console.error(`[watchdog] остановленных задач помечено: ${parked} — сами не продолжатся`);
+    } catch (error) {
+      console.error(`[watchdog] не удалось пометить задачи: ${error?.message || error}`);
+    }
+    process.exit(1);
+  },
+});
+
+/* Жёсткий сторож: отдельный поток. Нужен ровно для того случая, который мягкий
+   сторож пропускает, — когда главный поток встал синхронно и его таймеры уже
+   не работают. Сторож сам пишет строку в stderr (из потока это работает) и НЕ
+   убивает процесс: проверено в облаке 4 ноября — платформа не поднимает
+   контейнер после SIGKILL, так что убийство только стирает след. Аварию
+   закрывает внешний сторож scripts/health-guard.mjs, который видит молчание и
+   перезапускает проект. */
+const hardWatchdog = startHardWatchdog({
+  stallSec: CAPACITY.hardWatchdogSec,
+  action: CAPACITY.hardWatchdogAction,
+  onAlarm: ({ silentMs, at }) => {
+    const seconds = Math.round(silentMs / 1000);
+    console.error(`[watchdog] главный поток молчал ${seconds} с (${at}) — сервис не отвечает, нужен внешний перезапуск`);
+  },
+});
 
 /* Место для нового ответа на HTTP-пути. Возвращает { slot } или { rejected: true }
    (тогда ответ человеку уже отправлен). Слот передаётся в createRun, а
    возвращает его finishRun — на любом исходе. */
 async function acquireRunSlotOrReject(res) {
   if (!(CAPACITY.maxRuns > 0)) return { slot: null };
+  /* Память проверяем до очереди: если процесс уже на потолке, ждать места
+     бессмысленно — задача начнётся и добьёт контейнер. Отказ дешевле OOM,
+     который убивает весь сервис вместе с чужими диалогами. */
+  const pressure = memoryPressure();
+  if (pressure.over) {
+    console.log(`[capacity] память ${pressure.rssMb} MB выше потолка ${pressure.limitMb} MB — задача отклонена`);
+    sendError(
+      res,
+      503,
+      `Сервис сейчас на пределе памяти (${pressure.rssMb} из ${pressure.limitMb} MB). Это временно: текущие ответы допишутся, память освободится. Повторите через минуту.`,
+      { 'Retry-After': '60' },
+    );
+    return { slot: null, rejected: true };
+  }
   const abortWait = new AbortController();
   const onClose = () => abortWait.abort();
   res.on('close', onClose);
@@ -577,6 +643,35 @@ const RESUME_MAX_ATTEMPTS = 10;
    JSON и заметная работа для единственного процесса. */
 const PROGRESS_SAVE_MS = 20000;
 const resumingChats = new Set();
+
+/**
+ * Закрыть задачу, которая шла в момент зависания сервиса.
+ *
+ * Сторож перезапускает процесс, но пометка «задача идёт» лежит на диске — без
+ * этой функции сервис поднялся бы и продолжил ту же задачу, чтобы зависнуть
+ * снова. Человек увидит в диалоге объяснение и кнопку «продолжить», а не
+ * бесконечные перезапуски.
+ */
+function parkChatAfterHang(run, seconds) {
+  const chatId = run?.chat?.id;
+  const userId = run?.user?.id;
+  if (!chatId || !userId) return false;
+  const chat = store.getChat(chatId, userId);
+  if (!chat) return false;
+  chat.messages.push({
+    role: 'assistant',
+    content: '',
+    error:
+      `Сервис завис на этой задаче и перезапустился (очередь событий стояла ${seconds} с). ` +
+      'Автоматически продолжать не буду, чтобы не зациклиться. Напишите «продолжи» — и я подхвачу работу с сохранённого места.',
+    interrupted: true,
+    resumeFailed: true,
+    at: nowIso(),
+  });
+  store.saveChat(chatId, chatFilePayload(chat));
+  store.setChatRunning(chatId, null);
+  return true;
+}
 
 function chatFilePayload(chat) {
   return {
@@ -3167,12 +3262,17 @@ async function route(req, res) {
           runs: runGate.stats(),
           memory: memoryStats(),
           loopLagMs: loopMonitor.stats().loopLagMs,
+          loopLagPeakMs: loopMonitor.stats().loopLagPeakMs,
+          watchdog: watchdog.stats(),
+          hardWatchdog: hardWatchdog.stats(),
           activeRuns: [...runs.values()].filter((run) => run.status === 'running').length,
           limits: {
             maxRuns: CAPACITY.maxRuns,
             runsPerUser: CAPACITY.runsPerUser,
             runMaxMinutes: Math.round(CAPACITY.runMaxMs / 60000),
             modelTimeoutSeconds: Math.round(CAPACITY.modelTimeoutMs / 1000),
+            maxRssMb: CAPACITY.maxRssMb,
+            rssMb: memoryStats().rssMb,
           },
         },
       });
@@ -3580,6 +3680,8 @@ async function route(req, res) {
         /* Книга отдаётся частями по ~30 минут звука плюс один Word с текстом:
            слушать пять часов одним файлом неудобно, а искать нужное место в
            нём — тем более. Части получают имена «… — часть 2 из 12.mp3».
+           Короткая выжимка (до 45 минут) — исключение: она выходит одним MP3,
+           потому что делить получасовую запись на «части» бессмысленно.
            Длину части человек не выбирает: её задаёт структура самой книги
            (choosePartMinutes — короткие главы собираются, длинные режутся),
            а body.minutes остаётся для вызова из чата, где решение принимает
@@ -3587,7 +3689,7 @@ async function route(req, res) {
         const partMinutes = Number(body.minutes) > 0
           ? Math.min(90, Math.max(5, Number(body.minutes)))
           : choosePartMinutes(text);
-        const chapterParts = splitIntoParts(text, { minutes: partMinutes });
+        const chapterParts = narrationParts(text, { minutes: body.minutes });
         /* Сколько в документе глав: окно пишет «части по главам», только если
            главы действительно нашлись, иначе это было бы обещанием на пустом
            месте (PDF-выгрузка режется по 30 минут, глав там нет). */
@@ -3623,7 +3725,8 @@ async function route(req, res) {
       }
       /* Что получится из документа: сколько частей, сколько это звука и как
          будут называться файлы. Нужен до старта — человек решает, устраивает ли
-         его 12 частей по полчаса, и видит, что Word с текстом тоже будет. */
+         его 12 частей по полчаса, или это короткая выжимка на один MP3, и видит,
+         что Word с текстом тоже будет. */
       if (parts[3] === 'tts-plan' && method === 'GET') {
         const rel = url.searchParams.get('path') || '';
         let full;
@@ -3645,13 +3748,16 @@ async function route(req, res) {
         }
         const requested = Number(url.searchParams.get('minutes')) || 0;
         const planMinutes = requested > 0 ? Math.min(90, Math.max(5, requested)) : choosePartMinutes(text);
-        const plan = planParts(text, { minutes: planMinutes });
+        /* Решает не запрошенный размер, а правило из narrationParts: короткая
+           выжимка получается одним файлом, каким бы ни вышел choosePartMinutes. */
+        const plan = planParts(text, { minutes: requested });
         const files = planNarrationFiles(full, plan.length);
         return sendJson(res, 200, {
           ok: true,
           chars: text.length,
           minutes: Math.round((text.length / 750) * 10) / 10,
           partMinutes: planMinutes,
+          single: plan.length === 1,
           chapters: splitBlocks(text).length,
           parts: plan,
           word: path.basename(files.word),
@@ -4350,7 +4456,7 @@ async function route(req, res) {
       const admin = requireAdmin(req, res);
       if (!admin) return;
       try {
-        const result = snapshotState();
+        const result = await snapshotState();
         console.log(
           `[backup] по кнопке администратора: ${result.id}, диалогов ${result.chats}, ` +
             `проектов ${result.workspaces}, файлов ${result.files}`,
@@ -4485,11 +4591,12 @@ server.listen(PORT, HOST, () => {
   console.log(`  Данные: ${DATA_DIR}`);
   console.log(`  Режим:  ${TRUST_PROXY ? 'за прокси (облако)' : 'локальный'}`);
   console.log(`  Дашборд: ${process.env.DSHOW_DASHBOARD === '0' ? 'выключен' : 'постоянные задания включены'}`);
+  console.log(`  Автопродолжение: ${CAPACITY.autoResume ? 'включено' : 'выключено (DSHOW_AUTO_RESUME=0)'}`);
   console.log('');
   /* Задачи, прерванные перезапуском, продолжаются сами — без входа человека.
      Небольшая задержка даёт серверу принять первые запросы, а нам — не
      стартовать модель одновременно с инициализацией остальных служб. */
-  if (process.env.DSHOW_AUTO_RESUME !== '0') {
+  if (CAPACITY.autoResume) {
     const timer = setTimeout(resumeInterruptedRuns, 300);
     timer.unref?.();
   }

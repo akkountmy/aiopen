@@ -1,11 +1,21 @@
 // Длину части озвучки выбирает не человек, а структура книги: короткие главы
 // собираются в получасовые части, глава на 20–45 минут идёт целиком, простыня
-// режется внутри. Здесь проверяем сам выбор и заодно то, что заголовки глав
-// вообще распознаются — `\b` после кириллицы в JavaScript не срабатывает, и
-// однажды из-за этого главы не находились вовсе, а части резались по предложениям.
+// режется внутри. Отдельное правило — короткая выжимка: если весь текст
+// укладывается в 45 минут звука, это всегда ОДИН MP3, даже когда внутри есть
+// главы: «часть 1 из 2» у получасовой записи только мешает. Здесь проверяем
+// оба правила и заодно то, что заголовки глав вообще распознаются — `\b` после
+// кириллицы в JavaScript не срабатывает, и однажды из-за этого главы не
+// находились вовсе, а части резались по предложениям.
 //
 //   node test/part-length.mjs
-import { choosePartMinutes, splitIntoParts, PART_MINUTES } from '../src/tts.mjs';
+import {
+  PART_MINUTES,
+  SINGLE_FILE_MINUTES,
+  choosePartMinutes,
+  narrationParts,
+  planParts,
+  splitIntoParts,
+} from '../src/tts.mjs';
 
 let passed = 0;
 const failures = [];
@@ -49,6 +59,37 @@ for (const { name, sizes, minutes, pieces } of cases) {
   const minutesOk = minutes === null ? chosen >= 20 && chosen <= 45 : chosen === minutes;
   check(name, minutesOk && parts.length === pieces, `целевая ${chosen} мин, частей ${parts.length}`);
 }
+
+/* Главное правило для выжимок: короткая запись — один файл, даже с главами. */
+const summary = book([6, 5, 7, 6, 6]); // ≈ 30 минут звука, пять глав
+const summaryParts = narrationParts(summary);
+check('выжимка на 30 минут с главами — один MP3', summaryParts.length === 1, `частей ${summaryParts.length}`);
+check('план той же выжимки — одна часть', planParts(summary).length === 1, `частей ${planParts(summary).length}`);
+
+/* Порог 45 минут: ровно на нём ещё один файл, чуть больше — уже части. */
+const atThreshold = 'Слово. '.repeat(Math.floor((SINGLE_FILE_MINUTES * 750) / 7));
+check(
+  `выжимка на ${SINGLE_FILE_MINUTES} минут — ещё один MP3`,
+  narrationParts(atThreshold).length === 1,
+  `${(atThreshold.length / 750).toFixed(1)} мин, частей ${narrationParts(atThreshold).length}`,
+);
+const overThreshold = 'Слово. '.repeat(Math.ceil(((SINGLE_FILE_MINUTES + 5) * 750) / 7));
+check(
+  'длиннее порога — режется на части',
+  narrationParts(overThreshold).length > 1,
+  `${(overThreshold.length / 750).toFixed(1)} мин, частей ${narrationParts(overThreshold).length}`,
+);
+check(
+  'большая книга с главами — несколько частей',
+  narrationParts(book([20, 22, 18, 21])).length > 1,
+  `частей ${narrationParts(book([20, 22, 18, 21])).length}`,
+);
+/* Явный размер части — заказ, его не перебивает правило короткой выжимки. */
+check(
+  'явные минуты режут и короткий текст',
+  narrationParts(book([9]), { minutes: 3 }).length >= 2,
+  `частей ${narrationParts(book([9]), { minutes: 3 }).length}`,
+);
 
 /* Ни одна часть не выходит за разумные рамки: две части вместо одной и наоборот. */
 const longBook = book([12, 30, 18, 9, 41]);
