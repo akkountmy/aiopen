@@ -5262,9 +5262,13 @@ async function openNarration(item) {
       }
       const totalHuman = ttsHuman(plan.minutes * 60);
       const longest = Math.round(Math.max(...plan.parts.map((part) => Number(part.minutes) || 0)));
+      /* «По главам» пишем, только когда главы действительно нашлись: PDF-выгрузка
+         без заголовков режется по получасу, и обещать главы там нечестно. */
+      const byChapters = Number(plan.chapters) >= 2;
+      const shape = byChapters ? 'по главам' : `примерно по ${Math.round(Number(plan.partMinutes) || longest)} мин`;
       planLine.textContent =
         plan.parts.length > 1
-          ? `${plan.chars.toLocaleString('ru-RU')} знаков ≈ ${totalHuman} звука. Получится ${plan.parts.length} частей по главам (до ${longest} мин) и Word «${plan.word}» с текстом.`
+          ? `${plan.chars.toLocaleString('ru-RU')} знаков ≈ ${totalHuman} звука. Получится ${plan.parts.length} частей ${shape} (до ${longest} мин) и Word «${plan.word}» с текстом.`
           : `${plan.chars.toLocaleString('ru-RU')} знаков ≈ ${totalHuman} звука. Получится один MP3 на ${longest} мин и Word «${plan.word}» с текстом.`;
     } catch (error) {
       if (request !== planRequest) return;

@@ -351,7 +351,7 @@ try {
       planCheck.found && planCheck.selects === 2
         ? ok('длину части не выбирают вручную', 'в окне только голос и темп')
         : fail('в окне лишний выбор длины', JSON.stringify(planCheck));
-      /знаков/.test(planCheck.line || '') && /(по главам|один MP3)/.test(planCheck.line || '')
+      /знаков/.test(planCheck.line || '') && /(по главам|примерно по|один MP3)/.test(planCheck.line || '')
         ? ok('план собран по главам книги', planCheck.line.slice(0, 90))
         : fail('план частей', JSON.stringify(planCheck));
 

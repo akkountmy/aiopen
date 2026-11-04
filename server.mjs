@@ -47,6 +47,7 @@ import {
   jobsFor,
   planParts,
   publicJob,
+  splitBlocks,
   splitIntoParts,
   startNarration,
   voiceCatalog,
@@ -3587,6 +3588,10 @@ async function route(req, res) {
           ? Math.min(90, Math.max(5, Number(body.minutes)))
           : choosePartMinutes(text);
         const chapterParts = splitIntoParts(text, { minutes: partMinutes });
+        /* Сколько в документе глав: окно пишет «части по главам», только если
+           главы действительно нашлись, иначе это было бы обещанием на пустом
+           месте (PDF-выгрузка режется по 30 минут, глав там нет). */
+        const chapters = splitBlocks(text).length;
         const files = claimNarrationFiles(full, chapterParts.length, { root: workspace });
         const word = writeNarrationWord(files.word, path.basename(full, path.extname(full)), text);
         const job = startNarration({
@@ -3611,6 +3616,7 @@ async function route(req, res) {
             parts: chapterParts.length,
             minutes: Math.round((text.length / 750) * 10) / 10,
             partMinutes,
+            chapters,
             word: { name: word.name, size: word.size },
           },
         });
@@ -3646,6 +3652,7 @@ async function route(req, res) {
           chars: text.length,
           minutes: Math.round((text.length / 750) * 10) / 10,
           partMinutes: planMinutes,
+          chapters: splitBlocks(text).length,
           parts: plan,
           word: path.basename(files.word),
           names: files.parts.map((part) => path.basename(part.path)),
