@@ -8,7 +8,7 @@ import { memoryToolReply } from './memory.mjs';
 import { skillBody, skillIds } from './skills.mjs';
 import { detectKind, extractDocumentText } from './docparse.mjs';
 import { DEFAULT_RATE, DEFAULT_VOICE, MAX_TTS_CHARS, PART_MINUTES, splitIntoParts, startNarration } from './tts.mjs';
-import { planNarrationFiles } from './narration-plan.mjs';
+import { claimNarrationFiles } from './narration-plan.mjs';
 import { writeNarrationWord } from './narration-word.mjs';
 import { analyzeData, formatAnalysis } from './analysis.mjs';
 import { createDocumentPdf, createPresentationPdf } from './pdf.mjs';
@@ -2074,7 +2074,7 @@ async function executeToolInner(name, args, ctx) {
       }
       const minutes = Math.min(90, Math.max(5, Number(args.minutes) || PART_MINUTES));
       const chapters = splitIntoParts(text, { minutes });
-      const files = planNarrationFiles(full, chapters.length);
+      const files = claimNarrationFiles(full, chapters.length, { root });
       const word = writeNarrationWord(files.word, path.basename(full, path.extname(full)), text);
       const job = startNarration({
         ownerId: ctx?.ownerId || null,

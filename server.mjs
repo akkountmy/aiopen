@@ -38,6 +38,7 @@ import {
   DEFAULT_RATE,
   DEFAULT_VOICE,
   MAX_TTS_CHARS,
+  PART_MINUTES,
   RATE_CHOICES,
   VOICE_CHOICES,
   cancelJob,
@@ -50,7 +51,7 @@ import {
   voiceCatalog,
 } from './src/tts.mjs';
 import { detectKind, extractDocumentText, kindLabel } from './src/docparse.mjs';
-import { planNarrationFiles } from './src/narration-plan.mjs';
+import { claimNarrationFiles, planNarrationFiles } from './src/narration-plan.mjs';
 import { writeNarrationWord } from './src/narration-word.mjs';
 import { previewDocument } from './src/docpreview.mjs';
 import { projectFilesBrief } from './src/filebrief.mjs';
@@ -3576,9 +3577,12 @@ async function route(req, res) {
         }
         /* Книга отдаётся частями по ~30 минут звука плюс один Word с текстом:
            слушать пять часов одним файлом неудобно, а искать нужное место в
-           нём — тем более. Части получают имена «… — часть 2 из 12.mp3». */
-        const chapterParts = splitIntoParts(text);
-        const files = planNarrationFiles(full, chapterParts.length);
+           нём — тем более. Части получают имена «… — часть 2 из 12.mp3».
+           Длину части можно задать в body.minutes (5..90) — так удобнее, если
+           документ будут слушать короткими подходами. */
+        const partMinutes = Math.min(90, Math.max(5, Number(body.minutes) || PART_MINUTES));
+        const chapterParts = splitIntoParts(text, { minutes: partMinutes });
+        const files = claimNarrationFiles(full, chapterParts.length, { root: workspace });
         const word = writeNarrationWord(files.word, path.basename(full, path.extname(full)), text);
         const job = startNarration({
           ownerId: user.id,
@@ -3627,7 +3631,8 @@ async function route(req, res) {
             reason: (parsed.warnings || [])[0] || 'В документе нет текста, который можно прочитать вслух.',
           });
         }
-        const plan = planParts(text);
+        const planMinutes = Math.min(90, Math.max(5, Number(url.searchParams.get('minutes')) || PART_MINUTES));
+        const plan = planParts(text, { minutes: planMinutes });
         const files = planNarrationFiles(full, plan.length);
         return sendJson(res, 200, {
           ok: true,

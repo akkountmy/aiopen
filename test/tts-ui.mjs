@@ -20,6 +20,10 @@ const PASS = process.env.DSHOW_PASS || 'Test-pass-2026';
 const OUT = process.env.DSHOW_SHOT_DIR || '';
 const SOURCE = process.env.DSHOW_TTS_FILE || 'Глава первая.txt';
 const EMPTY = process.env.DSHOW_TTS_EMPTY || 'пусто.txt';
+/* Какие проекты перебирать в поисках файла. По умолчанию — проекты тестового
+   стенда («Озвучка 04689»); на живом сервере с одним своим проектом фильтр
+   задаётся через DSHOW_PROJECT_RE, иначе тест не найдёт ни одного проекта. */
+const PROJECT_RE = new RegExp(process.env.DSHOW_PROJECT_RE || 'озвучка', 'i');
 /* Озвучка называется по исходнику (одна часть — просто «книга.mp3», книга
    целиком — «книга — часть 2 из 12.mp3») и всегда идёт вместе с Word. */
 const SOURCE_BASE = SOURCE.replace(/\.[^.]+$/, '');
@@ -186,10 +190,11 @@ try {
       if (drawer) await sleep(300);
       return waitFor(`document.querySelectorAll('.file-row').length > 0`, 8000);
     };
-    const count = await evaluate(`[...document.querySelectorAll('nav button, aside button')].filter((button) => /озвучка/i.test(button.textContent || '')).length`);
+    const PROJECT_FILTER = `(button) => ${PROJECT_RE}.test(button.textContent || '')`;
+    const count = await evaluate(`[...document.querySelectorAll('nav button, aside button')].filter(${PROJECT_FILTER}).length`);
     for (let index = 0; index < Math.max(1, count); index += 1) {
       const picked = await evaluate(`(() => {
-        const buttons = [...document.querySelectorAll('nav button, aside button')].filter((button) => /озвучка/i.test(button.textContent || ''));
+        const buttons = [...document.querySelectorAll('nav button, aside button')].filter(${PROJECT_FILTER});
         const target = buttons[${index}];
         if (!target) return false;
         target.click();
@@ -320,6 +325,38 @@ try {
         : fail('окно шире экрана', JSON.stringify({ width: controls.width, inner: controls.inner, overflow: controls.overflow }));
       await shot('tts-390-form.png');
 
+      /* Длина части: список есть, и смена сразу пересчитывает план — до старта
+         человек видит, сколько файлов получится. Признак пересчёта — строка на
+         мгновение честно пишет «Считаю объём и части…»: у короткого документа
+         любой вариант даёт один MP3, поэтому сравнивать сам текст плана нельзя. */
+      const partCheck = await evaluate(`(async () => {
+        const modal = document.querySelector('#modalRoot .modal.tts-modal');
+        const selects = [...modal.querySelectorAll('select.tts-select')];
+        const part = selects[2];
+        const line = modal.querySelector('.tts-hint');
+        if (!part || !line) return { found: false };
+        const labels = [...part.options].map((option) => option.textContent.trim());
+        const atThirty = line.textContent.trim();
+        part.value = '15';
+        part.dispatchEvent(new Event('change', { bubbles: true }));
+        const counting = line.textContent.trim();
+        await new Promise((done) => setTimeout(done, 1600));
+        const atFifteen = line.textContent.trim();
+        part.value = '30';
+        part.dispatchEvent(new Event('change', { bubbles: true }));
+        await new Promise((done) => setTimeout(done, 1600));
+        return { found: true, labels, atThirty, counting, atFifteen, back: line.textContent.trim() };
+      })()`);
+      partCheck.found && partCheck.labels.length === 4 && partCheck.labels.includes('Полчаса')
+        ? ok('длина части выбирается', partCheck.labels.join(' / '))
+        : fail('список длины части', JSON.stringify(partCheck));
+      /Считаю/.test(partCheck.counting || '')
+        ? ok('смена длины пересчитывает план')
+        : fail('пересчёт плана при смене длины', JSON.stringify(partCheck));
+      partCheck.found && /знаков/.test(partCheck.atFifteen || '') && /знаков/.test(partCheck.back || '')
+        ? ok('план на месте после пересчёта', partCheck.atFifteen.slice(0, 60))
+        : fail('план после пересчёта', JSON.stringify(partCheck));
+
       /* 3. Пустой файл: синтез не начинается, а причина видна в окне.
             Пустой файл лежит в соседнем проекте, поэтому сначала переключаемся
             на проект, где он есть, — как это сделал бы человек. */
@@ -402,7 +439,9 @@ try {
           ? ok('готовый MP3 в плеере', player.src)
           : fail('плеер', JSON.stringify(player));
         player.hasSave && player.hasAgain ? ok('есть «Скачать MP3» и «Озвучить ещё раз»') : fail('кнопки результата', JSON.stringify(player));
-        /\d+:\d\d|\d+\s*с/.test(player.meta) ? ok('длительность и размер показаны', player.meta) : fail('подпись результата', player.meta);
+        /* Короткая запись подписана минутами («всего 15 мин»), длинная —
+           часами и минутами: годится любая подпись с длительностью. */
+        /\d+\s*(мин|с)|\d+:\d\d/.test(player.meta) ? ok('длительность и размер показаны', player.meta) : fail('подпись результата', player.meta);
         /* Метаданные браузера: сервер отдаёт файл частями, поэтому duration
               должен появиться без полной загрузки. */
         const metaLoaded = await waitFor(

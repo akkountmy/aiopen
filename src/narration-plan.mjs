@@ -9,11 +9,13 @@
  * иначе папка проекта зарастает копиями одной книги.
  */
 
+import fs from 'node:fs';
 import path from 'node:path';
 
 /** Длина имени без расширения: длинный заголовок книги усекаем многоточием. */
 const MAX_BASE = 62;
 const ELLIPSIS = '…';
+const LEDGER = path.join('.dshow', 'narration-own.json');
 
 export function trimBase(base, limit = MAX_BASE) {
   const value = String(base || 'озвучка').replace(/[\\/:*?"<>|]+/g, ' ').replace(/\s+/g, ' ').trim();
@@ -41,4 +43,50 @@ export function planNarrationFiles(full, total) {
     parts,
     word: path.join(dir, `${trimBase(base)}.docx`),
   };
+}
+
+/**
+ * План файлов плюс уборка прошлой озвучки того же исходника.
+ *
+ * Если книга подросла или человек выбрал другую длину части, число частей
+ * меняется — и от прошлого раза остаются «часть 13 из 13.mp3» рядом с новыми
+ * «часть 13 из 14.mp3». Убираем только то, что создали сами: в `.dshow/
+ * narration-own.json` лежит список файлов, выданных для этого исходника.
+ */
+export function claimNarrationFiles(full, total, { root } = {}) {
+  const plan = planNarrationFiles(full, total);
+  const projectRoot = root ? path.resolve(root) : '';
+  if (!projectRoot) return plan;
+
+  const ledgerPath = path.join(projectRoot, LEDGER);
+  let ledger = {};
+  try {
+    ledger = JSON.parse(fs.readFileSync(ledgerPath, 'utf8')) || {};
+  } catch {
+    ledger = {};
+  }
+  const key = path.relative(projectRoot, path.resolve(full)) || path.basename(full);
+  const next = [...plan.parts.map((part) => path.relative(projectRoot, part.path)), path.relative(projectRoot, plan.word)];
+  const previous = Array.isArray(ledger[key]) ? ledger[key] : [];
+
+  for (const rel of previous) {
+    if (next.includes(rel)) continue;
+    const abs = path.resolve(projectRoot, rel);
+    /* Только внутри проекта и только файлы: чужое не трогаем никогда. */
+    if (!abs.startsWith(`${projectRoot}${path.sep}`)) continue;
+    try {
+      if (fs.statSync(abs).isFile()) fs.rmSync(abs);
+    } catch {
+      /* файла уже нет — убирать нечего */
+    }
+  }
+
+  ledger[key] = next;
+  try {
+    fs.mkdirSync(path.dirname(ledgerPath), { recursive: true });
+    fs.writeFileSync(ledgerPath, JSON.stringify(ledger, null, 2), 'utf8');
+  } catch {
+    /* без списка озвучка всё равно работает — просто не уберём лишнее */
+  }
+  return plan;
 }
