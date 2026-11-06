@@ -110,6 +110,9 @@ const state = {
      более глубокие папки подгружаются при раскрытии. */
   filesLoaded: new Set(),
   filesLoading: false,
+  /* Дизайн-проект выбранного проекта: спек и листы. Приходит одним запросом
+     вместе с деревом файлов — панель дизайна показывает их над списком. */
+  design: null,
   dragOut: false,
   expanded: new Set(),
   collapsedWorkflows: new Set(),
@@ -3663,6 +3666,10 @@ const FILES_UI_KEY = 'dshow:files-ui';
 function resetFilesTree() {
   state.filesExpanded.clear();
   state.filesLoaded.clear();
+  /* Панель дизайна принадлежит проекту: в проекте без дизайна не должны
+     оставаться листы прошлого. */
+  state.design = null;
+  renderDesign();
 }
 
 function saveFilesUi() {
@@ -3769,6 +3776,9 @@ async function loadFiles() {
     state.filesLoaded = new Set(['.']);
     pruneFilesExpanded();
     renderFiles();
+    /* Дизайн спрашиваем вместе с деревом: панель листов появляется сама, как
+       только в проекте есть design.json или собранные листы. */
+    loadDesign();
   } catch (error) {
     if (projectId !== filesProjectId()) return;
     list.innerHTML = '';
@@ -3815,6 +3825,1497 @@ function renderFiles() {
   }
   for (const node of filesTreeNodes('.')) list.appendChild(node);
   list.scrollTop = scrollTop;
+}
+
+/* ------------------------- дизайн-проект и 3D-сцена -------------------------
+   Человек просит «сделай дизайн студии на 40 квадратов» и ждёт листы, а не
+   текст. Листы собирает сервер из спека `design.json` (инструмент build_design),
+   но увидеть их и поправить нужно здесь, в проекте: галерея открывает каждый
+   лист в окне просмотра — план мебели, полы, потолок со светильниками,
+   аксонометрию и живую 3D-сцену, — «Правка» показывает спек, а «Пересобрать»
+   применяет правку за секунду. Модель для этого не нужна, поэтому «Готово.»
+   с пустой папкой больше не требует ждать и переспрашивать. */
+
+/* Панель живёт над списком файлов: дизайн — главное в проекте, а не папка
+   `design/`, которую ещё надо найти и раскрыть. */
+function designHasContent(design) {
+  if (!design) return false;
+  if (design.hasSpec) return true;
+  return (design.artifacts || []).some((item) => item.exists);
+}
+
+function designNote(text, hideAfter = 9000) {
+  const node = $('#designNote');
+  if (!node) return;
+  clearTimeout(designNote.timer);
+  node.textContent = text;
+  node.classList.toggle('hidden', !text);
+  if (text && hideAfter > 0) designNote.timer = setTimeout(() => node.classList.add('hidden'), hideAfter);
+}
+
+/* Спек читает сервер: он же знает, что разбирается как JSON и что в нём есть
+   стены и комнаты. Клиенту остаётся показать галерею и цифры. */
+async function loadDesign() {
+  const projectId = filesProjectId();
+  if (!projectId) {
+    state.design = null;
+    renderDesign();
+    return;
+  }
+  try {
+    const data = await api(`/api/projects/${projectId}/design`);
+    if (projectId !== filesProjectId()) return;
+    state.design = data.design || null;
+  } catch {
+    if (projectId !== filesProjectId()) return;
+    /* Панель дизайна — не главное в проекте: без спека сервер всё равно
+       отвечает, поэтому сбой запроса прячет панель, а не рушит панель файлов. */
+    state.design = null;
+  }
+  renderDesign();
+}
+
+function renderDesign() {
+  const panel = $('#designPanel');
+  if (!panel) return;
+  const design = state.design;
+  const show = Boolean(filesProjectId()) && designHasContent(design);
+  panel.classList.toggle('hidden', !show);
+  if (!show) return;
+  const lead = $('#designLead');
+  if (lead) {
+    const spec = design.spec;
+    const bits = [];
+    if (spec) bits.push(`${spec.rooms.length} комн.`);
+    if (design.area) bits.push(`${String(design.area).replace('.', ',')} м²`);
+    lead.textContent = bits.length ? bits.join(' · ') : 'спек не читается';
+    const more = spec && spec.furniture ? `· ${spec.furniture.length} предм. мебели` : '';
+    lead.title = [spec ? spec.project : '', bits.join(' · '), more].filter(Boolean).join(' ');
+  }
+  const gallery = $('#designGallery');
+  if (!gallery) return;
+  gallery.innerHTML = '';
+  for (const artifact of design.artifacts || []) gallery.appendChild(designCard(artifact));
+  /* Строку состояния не гасим при каждом обновлении панели: сразу после
+     сохранения она говорит, что листы пересобраны, а перерисовка панели
+     приходит следом за сохранением и раньше стирала это сообщение. */
+  if (design.error) designNote(design.error, 0);
+  else if (design.fixes && design.fixes.length) designNote(`Замечания к спеку: ${design.fixes.join('; ')}`, 0);
+}
+
+function designCard(artifact) {
+  const ready = Boolean(artifact.exists);
+  const card = el('button', `design-card${ready ? '' : ' is-missing'}`);
+  card.type = 'button';
+  card.dataset.key = artifact.key;
+  card.title = ready
+    ? `${artifact.title} — открыть (${fmtSize(artifact.bytes)})`
+    : `${artifact.title} — лист не собран. Нажмите, чтобы собрать`;
+  const shot = el('span', 'design-shot');
+  if (ready && artifact.kind === 'svg') {
+    /* Миниатюра — сам SVG из проекта: лист видно сразу, без генерации картинок
+       на сервере и без лишних файлов в папке. */
+    const img = el('img', 'design-thumb');
+    img.src = fileUrl(artifact.file, false);
+    img.alt = artifact.title;
+    img.loading = 'lazy';
+    shot.appendChild(img);
+  } else if (ready) {
+    shot.appendChild(el('span', 'design-3d', '3D'));
+  } else {
+    shot.appendChild(el('span', 'design-none', '—'));
+  }
+  card.appendChild(shot);
+  card.appendChild(el('span', 'design-name', artifact.title));
+  card.appendChild(el('span', 'design-meta', ready ? fmtSize(artifact.bytes) : 'не собран'));
+  card.addEventListener('click', () => {
+    if (!ready) {
+      designRebuild({ only: [artifact.key] });
+      return;
+    }
+    openFilePreview({ path: artifact.file, name: artifact.file.split('/').pop(), size: artifact.bytes });
+  });
+  return card;
+}
+
+/* Сборка листов. Ничего не выдумывает: сервер запускает генераторы навыка, а
+   мы показываем, что получилось и что не получилось, с причиной. */
+let designBuilding = false;
+
+function setDesignBusy(busy) {
+  for (const id of ['#designBuildBtn', '#designEditBtn']) {
+    const node = $(id);
+    if (!node) continue;
+    node.disabled = busy;
+  }
+  const build = $('#designBuildBtn');
+  if (build) build.textContent = busy ? 'Собираю…' : 'Пересобрать';
+}
+
+async function designRebuild({ only = null, silent = false } = {}) {
+  const projectId = filesProjectId();
+  if (!projectId || designBuilding) return;
+  designBuilding = true;
+  setDesignBusy(true);
+  if (!silent) designNote(only ? 'Собираю лист…' : 'Собираю листы из спека…', 0);
+  try {
+    const data = await api(`/api/projects/${projectId}/design`, { method: 'POST', body: only ? { only } : {} });
+    if (projectId !== filesProjectId()) return;
+    state.design = data.design || state.design;
+    renderDesign();
+    const results = data.results || [];
+    const failed = results.filter((item) => !item.ok);
+    if (failed.length) {
+      designNote(`Не собралось: ${failed.map((item) => `${item.title} — ${item.error}`).join('; ')}`, 0);
+    } else {
+      const seconds = Math.max(1, Math.round((data.ms || 0) / 1000));
+      designNote(`Листы обновлены: ${results.length} из ${results.length} за ${seconds} с.`, 6000);
+    }
+    await loadFiles();
+  } catch (error) {
+    designNote(error.message, 0);
+  } finally {
+    designBuilding = false;
+    setDesignBusy(false);
+  }
+}
+
+/* ------------------------------ редактор кода ------------------------------
+   Здесь человек правит файлы проекта руками: спек дизайна (design.json), листы
+   (design/*.svg), страницу 3D и вообще любой текстовый файл.
+
+   Почему свой редактор, а не CodeMirror/Monaco: у сервиса нет сборки и нет
+   интернета в рантайме — библиотеку пришлось бы положить в vendor/ и тащить
+   полмегабайта ради подсветки JSON. Устроено так же, как в CodeSnap и Sema:
+   прозрачное поле ввода лежит ровно поверх подсвеченного текста, шрифт,
+   кегль, высота строки и отступы у них совпадают до пикселя. Печатает и
+   хранит курсор настоящий textarea (значит работают вставка, выделение,
+   мобильная клавиатура и автозамена), а цвет рисует <pre> под ним. Прокрутку
+   тоже держит textarea: подсветку и нумерацию строк мы двигаем вслед за ней
+   трансформацией, поэтому номера не разъезжаются с текстом.
+
+   Что взято из чужих редакторов (Lovable, v0, Bolt, CodeSandbox, StackBlitz):
+   горячие клавиши Ctrl+S / Ctrl+Z / Ctrl+Shift+Z, Tab и Shift+Tab для отступа,
+   автопродолжение отступа по Enter, нумерация строк, горизонтальная прокрутка
+   без переносов, «грязная» точка у вкладки, отказ закрывать окно с
+   несохранёнными правками и предупреждение, если файл успели изменить снаружи
+   (у нас это ассистент). Ошибку JSON показываем строкой и символом и не даём
+   сохранить такой спек: из него всё равно не собрать листы. */
+
+/* Язык по имени файла: от него зависят и подсветка, и проверка перед записью. */
+function codeLangOf(name) {
+  const ext = String(name || '').toLowerCase().split('.').pop();
+  if (ext === 'json' || ext === 'webmanifest' || ext === 'map' || ext === 'jsonl') return 'json';
+  if (ext === 'svg' || ext === 'xml') return 'xml';
+  if (ext === 'html' || ext === 'htm') return 'html';
+  if (ext === 'css') return 'css';
+  if (ext === 'js' || ext === 'mjs') return 'js';
+  if (ext === 'md' || ext === 'markdown') return 'md';
+  return 'text';
+}
+
+const CODE_LANG_TITLE = { json: 'JSON', xml: 'SVG', html: 'HTML', css: 'CSS', js: 'JavaScript', md: 'Markdown', text: 'текст' };
+
+/* Те же расширения, что пускает сервер: список нужен, чтобы не предлагать
+   «Править код» у картинки или PDF — их текстом не открыть. */
+const CODE_TEXT_EXT = /\.(json|jsonl|svg|html?|css|js|mjs|md|markdown|txt|csv|tsv|xml|ya?ml|toml|ini|map|webmanifest|sql|sh|ps1|bat|py|viki)$/i;
+
+function codeEditableName(name) {
+  return CODE_TEXT_EXT.test(String(name || ''));
+}
+
+/* Файл больше этого не подсвечиваем: текст разбирается заново на каждый ввод,
+   и на мегабайте браузер начинал задумываться на каждой букве. Такой файл всё
+   равно открывается и правится — просто без цвета. */
+const CODE_HIGHLIGHT_LIMIT = 200 * 1024;
+
+/* Потолок отмены: 300 шагов хватает на любую сессию правки, а память не ест. */
+const CODE_UNDO_LIMIT = 300;
+
+function codeEsc(text) {
+  return String(text).replace(/[&<>]/g, (ch) => (ch === '&' ? '&amp;' : ch === '<' ? '&lt;' : '&gt;'));
+}
+
+function codePlural(count, one, few, many) {
+  const mod10 = count % 10;
+  const mod100 = count % 100;
+  if (mod10 === 1 && mod100 !== 11) return one;
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return few;
+  return many;
+}
+
+function codeBytes(text) {
+  try {
+    return new TextEncoder().encode(String(text)).length;
+  } catch {
+    return String(text).length;
+  }
+}
+
+function codeCountLines(text) {
+  const value = String(text || '');
+  if (!value) return 1;
+  let lines = 1;
+  for (let i = 0; i < value.length; i += 1) {
+    if (value.charCodeAt(i) === 10) lines += 1;
+  }
+  return lines;
+}
+
+function codeTime(value) {
+  if (!value) return '';
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  try {
+    return date.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  } catch {
+    return date.toTimeString().slice(0, 8);
+  }
+}
+
+/* Ошибка JSON приходит в виде «Expected ',' or '}' ... in JSON at position 42».
+   Человеку нужен номер строки: по нему он найдёт место в тексте. */
+function codeJsonError(error, text) {
+  const message = String((error && error.message) || error);
+  const match = /position (\d+)/.exec(message);
+  if (!match) return message;
+  const pos = Math.min(Number(match[1]), String(text).length);
+  const before = String(text).slice(0, pos);
+  const line = codeCountLines(before);
+  const column = pos - before.lastIndexOf('\n');
+  return `${message.replace(/\s*\(line \d+ column \d+\)$/, '')} — строка ${line}, символ ${column}`;
+}
+
+/* ---------------------------- подсветка ----------------------------
+
+   Каждая функция получает исходный текст и возвращает HTML: экранированные
+   куски текста плюс <span class="code-ln-…">. Разметку собираем строкой, а не
+   деревом — так на каждый ввод не создаётся тысяча узлов. Гарантия одна:
+   видимый текст после снятия тегов равен исходному символ в символ (иначе
+   подсветка «съехала» бы относительно поля ввода). */
+
+function codeHighlightJson(text) {
+  let out = '';
+  let last = 0;
+  const re = /("(?:[^"\\]|\\.)*")(\s*:)?|(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)|\b(true|false|null)\b|(\/\/[^\n]*|\/\*[\s\S]*?\*\/)/g;
+  let match = re.exec(text);
+  while (match) {
+    if (match.index > last) out += codeEsc(text.slice(last, match.index));
+    if (match[1] !== undefined) {
+      if (match[2] !== undefined) {
+        /* Ключ — только строка перед двоеточием; остальные строки это значения. */
+        out += `<span class="code-ln-key">${codeEsc(match[1])}</span><span class="code-ln-punct">${codeEsc(match[2])}</span>`;
+      } else {
+        out += `<span class="code-ln-str">${codeEsc(match[1])}</span>`;
+      }
+    } else if (match[3] !== undefined) {
+      out += `<span class="code-ln-num">${codeEsc(match[3])}</span>`;
+    } else if (match[4] !== undefined) {
+      out += `<span class="code-ln-lit">${codeEsc(match[4])}</span>`;
+    } else {
+      out += `<span class="code-ln-com">${codeEsc(match[5])}</span>`;
+    }
+    last = re.lastIndex;
+    match = re.exec(text);
+  }
+  out += codeEsc(text.slice(last));
+  return out;
+}
+
+/* Один тег целиком: имя, атрибуты со значениями, косые черты. SVG читается
+   именно тегами, поэтому разделяем их по смыслу, а не одной регуляркой. */
+function codeHighlightTag(tag) {
+  let inside = '';
+  let i = 0;
+  const nameMatch = /^<\/?([A-Za-z_][\w:.-]*)/.exec(tag);
+  const name = nameMatch ? nameMatch[1] : '';
+  if (nameMatch) {
+    inside += codeEsc(tag.slice(0, nameMatch[0].length - name.length));
+    inside += `<span class="code-ln-tag">${codeEsc(name)}</span>`;
+    i = nameMatch[0].length;
+  }
+  const size = tag.length;
+  while (i < size) {
+    const ch = tag[i];
+    if (ch === '"' || ch === "'") {
+      let j = i + 1;
+      while (j < size && tag[j] !== ch) j += 1;
+      const stop = Math.min(size, j + 1);
+      inside += `<span class="code-ln-str">${codeEsc(tag.slice(i, stop))}</span>`;
+      i = stop;
+      continue;
+    }
+    if (/[A-Za-z_:]/.test(ch)) {
+      let j = i;
+      while (j < size && /[\w:.-]/.test(tag[j])) j += 1;
+      inside += `<span class="code-ln-attr">${codeEsc(tag.slice(i, j))}</span>`;
+      i = j;
+      continue;
+    }
+    inside += codeEsc(ch);
+    i += 1;
+  }
+  return inside;
+}
+
+function codeHighlightXml(text) {
+  let out = '';
+  let i = 0;
+  const size = text.length;
+  while (i < size) {
+    const lt = text.indexOf('<', i);
+    if (lt < 0) {
+      out += codeEsc(text.slice(i));
+      break;
+    }
+    if (lt > i) out += codeEsc(text.slice(i, lt));
+    if (text.startsWith('<!--', lt)) {
+      const end = text.indexOf('-->', lt + 4);
+      const stop = end < 0 ? size : end + 3;
+      out += `<span class="code-ln-com">${codeEsc(text.slice(lt, stop))}</span>`;
+      i = stop;
+      continue;
+    }
+    if (text.startsWith('<![CDATA[', lt)) {
+      const end = text.indexOf(']]>', lt + 9);
+      const stop = end < 0 ? size : end + 3;
+      out += `<span class="code-ln-str">${codeEsc(text.slice(lt, stop))}</span>`;
+      i = stop;
+      continue;
+    }
+    /* <!DOCTYPE> и <?xml?> — не теги, а объявления: красим целиком серым. */
+    if (text.startsWith('<!', lt) || text.startsWith('<?', lt)) {
+      const end = text.indexOf('>', lt);
+      const stop = end < 0 ? size : end + 1;
+      out += `<span class="code-ln-com">${codeEsc(text.slice(lt, stop))}</span>`;
+      i = stop;
+      continue;
+    }
+    const gt = text.indexOf('>', lt);
+    const stop = gt < 0 ? size : gt + 1;
+    out += codeHighlightTag(text.slice(lt, stop));
+    i = stop;
+  }
+  return out;
+}
+
+function codeHighlightCss(text) {
+  let out = '';
+  let last = 0;
+  const re = /(\/\*[\s\S]*?\*\/)|("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')|(@[A-Za-z-]+)|(#[0-9a-fA-F]{3,8}\b)|(-?\d*\.?\d+(?:[a-zA-Z%]+)?)|([A-Za-z-]+)(\s*:)|([{}();:,])/g;
+  let match = re.exec(text);
+  while (match) {
+    if (match.index > last) out += codeEsc(text.slice(last, match.index));
+    if (match[1] !== undefined) out += `<span class="code-ln-com">${codeEsc(match[1])}</span>`;
+    else if (match[2] !== undefined) out += `<span class="code-ln-str">${codeEsc(match[2])}</span>`;
+    else if (match[3] !== undefined) out += `<span class="code-ln-kw">${codeEsc(match[3])}</span>`;
+    else if (match[4] !== undefined || match[5] !== undefined) out += `<span class="code-ln-num">${codeEsc(match[4] || match[5])}</span>`;
+    else if (match[6] !== undefined) out += `<span class="code-ln-attr">${codeEsc(match[6])}</span><span class="code-ln-punct">${codeEsc(match[7])}</span>`;
+    else out += `<span class="code-ln-punct">${codeEsc(match[8])}</span>`;
+    last = re.lastIndex;
+    match = re.exec(text);
+  }
+  out += codeEsc(text.slice(last));
+  return out;
+}
+
+const CODE_JS_WORDS = new Set([
+  'const', 'let', 'var', 'function', 'return', 'if', 'else', 'for', 'while', 'do', 'switch', 'case', 'break',
+  'continue', 'new', 'class', 'extends', 'super', 'this', 'typeof', 'instanceof', 'in', 'of', 'null', 'undefined',
+  'true', 'false', 'try', 'catch', 'finally', 'throw', 'async', 'await', 'yield', 'import', 'export', 'default',
+  'from', 'delete', 'void', 'static', 'get', 'set', 'document', 'window', 'Math', 'JSON', 'Object', 'Array',
+]);
+
+function codeHighlightJs(text) {
+  let out = '';
+  let last = 0;
+  const re = /(\/\/[^\n]*|\/\*[\s\S]*?\*\/)|("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`)|(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)|([A-Za-z_$][\w$]*)/g;
+  let match = re.exec(text);
+  while (match) {
+    if (match.index > last) out += codeEsc(text.slice(last, match.index));
+    if (match[1] !== undefined) out += `<span class="code-ln-com">${codeEsc(match[1])}</span>`;
+    else if (match[2] !== undefined) out += `<span class="code-ln-str">${codeEsc(match[2])}</span>`;
+    else if (match[3] !== undefined) out += `<span class="code-ln-num">${codeEsc(match[3])}</span>`;
+    else if (CODE_JS_WORDS.has(match[4])) out += `<span class="code-ln-kw">${codeEsc(match[4])}</span>`;
+    else out += codeEsc(match[4]);
+    last = re.lastIndex;
+    match = re.exec(text);
+  }
+  out += codeEsc(text.slice(last));
+  return out;
+}
+
+/* Внутри строки Markdown: код в обратных кавычках, жирный, ссылка. Разметка
+   ставится уже по экранированному тексту, поэтому угловые скобки безопасны. */
+function codeInlineMd(text) {
+  return codeEsc(text)
+    .replace(/`([^`]+)`/g, '<span class="code-ln-str">`$1`</span>')
+    .replace(/\*\*([^*]+)\*\*/g, '<span class="code-ln-key">**$1**</span>')
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<span class="code-ln-tag">[$1]</span>(<span class="code-ln-attr">$2</span>)');
+}
+
+function codeHighlightMd(text) {
+  const lines = String(text).split('\n');
+  const out = [];
+  let fence = false;
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (/^```/.test(trimmed)) {
+      out.push(`<span class="code-ln-com">${codeEsc(line)}</span>`);
+      fence = !fence;
+      continue;
+    }
+    if (fence) {
+      out.push(codeEsc(line));
+      continue;
+    }
+    if (/^#{1,6}\s/.test(trimmed)) {
+      out.push(`<span class="code-ln-kw">${codeEsc(line)}</span>`);
+      continue;
+    }
+    const bullet = /^(\s*)([-*+]|\d+\.)(\s+)([\s\S]*)$/.exec(line);
+    if (bullet) {
+      out.push(`${codeEsc(bullet[1])}<span class="code-ln-tag">${codeEsc(bullet[2])}</span>${codeEsc(bullet[3])}${codeInlineMd(bullet[4])}`);
+      continue;
+    }
+    out.push(codeInlineMd(line));
+  }
+  return out.join('\n');
+}
+
+function codeHighlight(text, lang) {
+  const value = String(text || '');
+  if (!value) return '';
+  if (value.length > CODE_HIGHLIGHT_LIMIT) return codeEsc(value);
+  try {
+    if (lang === 'json') return codeHighlightJson(value);
+    if (lang === 'xml' || lang === 'html') return codeHighlightXml(value);
+    if (lang === 'css') return codeHighlightCss(value);
+    if (lang === 'js') return codeHighlightJs(value);
+    if (lang === 'md') return codeHighlightMd(value);
+  } catch {
+    /* Кривой текст не должен ронять окно: покажем его без цвета — читать и
+       править всё равно можно. */
+  }
+  return codeEsc(value);
+}
+
+/* ---------------------------- своя отмена ----------------------------
+
+   У textarea есть родная отмена, но она живёт «пузырями» браузера: после
+   вставки из буфера или автозамены на телефоне восстанавливает не то, что
+   человек ждёт, и стирается при программной установке value (а мы её делаем
+   при переключении вкладок). Поэтому журнал свой: снимок текста до правки. */
+
+function codeUndoNew(initial) {
+  return { past: [], future: [], since: 0, start: String(initial || '') };
+}
+
+/* Печать слова — это десятки событий ввода; склеиваем их в одну ступень,
+   иначе Ctrl+Z отменяет по букве и до нужного места не дойти. */
+function codeUndoPush(stack, before) {
+  const now = Date.now();
+  if (!stack.past.length || now - stack.since > 700) {
+    stack.past.push(String(before));
+    if (stack.past.length > CODE_UNDO_LIMIT) stack.past.shift();
+  }
+  stack.since = now;
+  stack.future.length = 0;
+}
+
+/* Площадь комнаты по полигону в миллиметрах — для сводки по спеку. */
+function codePolyArea(poly) {
+  if (!Array.isArray(poly) || poly.length < 3) return 0;
+  let sum = 0;
+  for (let i = 0; i < poly.length; i += 1) {
+    const a = poly[i] || [0, 0];
+    const b = poly[(i + 1) % poly.length] || [0, 0];
+    sum += Number(a[0] || 0) * Number(b[1] || 0) - Number(b[0] || 0) * Number(a[1] || 0);
+  }
+  return Math.abs(sum) / 2 / 1e6;
+}
+
+/* ---------------------------- само окно ---------------------------- */
+
+/* Открыть редактор.
+   paths   — какие файлы положить вкладками (первый откроется сразу);
+   active  — какая вкладка активна, если не первая;
+   projectId — проект; по умолчанию тот, что открыт в панели файлов;
+   quick   — показывать быстрые поля спека (формат листа, высоты);
+   onClose — вернуть управление тому, кто открыл. */
+async function codeEditorOpen({ paths = [], active = null, title = 'Правка кода', subtitle = '', projectId = null, quick = false, onClose = null } = {}) {
+  const pid = projectId || filesProjectId();
+  const list = [];
+  for (const item of paths || []) {
+    const path = String(item || '').trim();
+    if (path && !list.includes(path)) list.push(path);
+  }
+  if (!pid || !list.length) return null;
+
+  const tabs = new Map();
+  for (const path of list) {
+    tabs.set(path, {
+      path,
+      name: path.split('/').pop(),
+      lang: codeLangOf(path),
+      text: '',
+      saved: '',
+      hash: null,
+      bytes: 0,
+      at: null,
+      versions: 0,
+      editable: true,
+      reason: '',
+      loaded: false,
+      loading: false,
+      error: null,
+      undo: null,
+      pref: null,
+    });
+  }
+
+  const st = {
+    projectId: pid,
+    active: active && tabs.has(active) ? active : list[0],
+    previewChoice: null,
+    forceClose: false,
+    paintTimer: null,
+    fillTimer: null,
+  };
+
+  /* ---- разметка ---- */
+  const shell = el('div', 'code-shell');
+  const tabsBar = el('div', 'code-tabs');
+  tabsBar.setAttribute('role', 'tablist');
+  tabsBar.setAttribute('aria-label', 'Файлы проекта');
+
+  const edit = el('div', 'code-edit');
+  const bar = el('div', 'code-bar');
+  const pathLabel = el('span', 'code-path');
+  const metaLabel = el('span', 'code-meta');
+  const tools = el('div', 'code-tools');
+  bar.append(pathLabel, metaLabel, tools);
+
+  const quickBox = el('div', 'code-quick hidden');
+
+  const editorBox = el('div', 'code-editor');
+  const gutter = el('div', 'code-gutter');
+  const gutterIn = el('div', 'code-gutter-in');
+  gutter.appendChild(gutterIn);
+  const stage = el('div', 'code-stage');
+  const pre = el('pre', 'code-hl');
+  pre.setAttribute('aria-hidden', 'true');
+  const codeNode = el('code');
+  pre.appendChild(codeNode);
+  const area = el('textarea', 'code-input');
+  area.spellcheck = false;
+  area.wrap = 'off';
+  area.setAttribute('autocapitalize', 'off');
+  area.setAttribute('autocomplete', 'off');
+  area.setAttribute('autocorrect', 'off');
+  area.setAttribute('aria-label', 'Код файла');
+  stage.append(pre, area);
+  editorBox.append(gutter, stage);
+
+  const status = el('div', 'code-status');
+  status.setAttribute('aria-live', 'polite');
+  const statusText = el('span', 'code-status-text', 'Открываю…');
+  const statusKeys = el('span', 'code-keys', 'Ctrl+S — сохранить');
+  status.append(statusText, statusKeys);
+
+  /* Полоски-вопросы внутри окна, а не отдельным окном: второе окно закрыло бы
+     редактор, и «Отмена» в подтверждении стирала бы правки, которые человек
+     как раз и хотел сохранить. */
+  const asks = [];
+  function makeBar(text) {
+    const node = el('div', 'code-ask');
+    const label = el('span', 'code-ask-text', text);
+    node.appendChild(label);
+    const pick = {};
+    const add = (key, caption, kind, handler) => {
+      const button = el('button', `btn ${kind === 'primary' ? 'btn-primary' : 'btn-quiet'}`, caption);
+      button.type = 'button';
+      button.addEventListener('click', handler);
+      node.appendChild(button);
+      pick[key] = button;
+      return button;
+    };
+    asks.push(node);
+    return { node, label, add, pick };
+  }
+
+  const askDirty = makeBar('В файле есть несохранённые правки. Закрыть окно и потерять их?');
+  askDirty.add('save', 'Сохранить', 'primary', async () => {
+    if (await saveActive()) {
+      st.forceClose = true;
+      closeModal();
+    }
+  });
+  askDirty.add('drop', 'Выйти без сохранения', 'quiet', () => {
+    for (const tab of tabs.values()) tab.saved = tab.text;
+    st.forceClose = true;
+    closeModal();
+  });
+  askDirty.add('stay', 'Остаться', 'quiet', () => hideAsks());
+
+  const askStale = makeBar('Файл изменился, пока вы его правили: его переписал ассистент или другое окно.');
+  askStale.add('reload', 'Взять версию из файла', 'primary', () => reloadFromDisk());
+  askStale.add('over', 'Сохранить поверх', 'quiet', async () => {
+    hideAsks();
+    await saveActive(true);
+  });
+  askStale.add('cancel', 'Отмена', 'quiet', () => hideAsks());
+
+  const askVersions = makeBar('Вернуть прошлую версию файла? Текущий текст в окне заменится тем, что был до последнего сохранения.');
+  askVersions.add('yes', 'Вернуть', 'primary', () => restoreLatest());
+  askVersions.add('no', 'Отмена', 'quiet', () => hideAsks());
+
+  function hideAsks() {
+    for (const node of asks) node.classList.remove('is-open');
+  }
+
+  function showAsk(node) {
+    hideAsks();
+    node.classList.add('is-open');
+  }
+
+  const previewBox = el('div', 'code-preview');
+  const previewHead = el('div', 'code-preview-head');
+  const previewTitle = el('span', 'code-preview-title', 'Предпросмотр');
+  const previewReload = el('button', 'code-tool', 'Обновить');
+  const previewOpen = el('button', 'code-tool', 'В окне');
+  previewReload.type = 'button';
+  previewOpen.type = 'button';
+  previewHead.append(previewTitle, previewReload, previewOpen);
+  const previewBody = el('div', 'code-preview-body');
+  previewBox.append(previewHead, previewBody);
+
+  const panes = el('div', 'code-panes');
+  panes.append(edit, previewBox);
+  shell.append(tabsBar, panes);
+  edit.append(bar, quickBox, editorBox, status, askDirty.node, askStale.node, askVersions.node);
+
+  /* ---- кнопки над кодом ---- */
+  const toolFormat = el('button', 'code-tool', 'Формат');
+  const toolQuick = el('button', 'code-tool', 'Параметры');
+  const toolVersions = el('button', 'code-tool', 'Версии');
+  const toolDownload = el('button', 'code-tool', 'Скачать');
+  const toolPreview = el('button', 'code-tool', 'Просмотр');
+  for (const button of [toolFormat, toolQuick, toolVersions, toolDownload, toolPreview]) button.type = 'button';
+  tools.append(toolFormat, toolQuick, toolVersions, toolDownload, toolPreview);
+
+  const langBadge = el('span', 'code-lead', 'КОД');
+
+  /* ---- служебное ---- */
+  function activeTab() {
+    return tabs.get(st.active) || null;
+  }
+
+  function isDirty(tab) {
+    return Boolean(tab) && tab.loaded && tab.editable && tab.text !== tab.saved;
+  }
+
+  function anyDirty() {
+    for (const tab of tabs.values()) if (isDirty(tab)) return true;
+    return false;
+  }
+
+  function setStatus(text, kind = '') {
+    statusText.textContent = text || '';
+    status.classList.toggle('is-ok', kind === 'ok');
+    status.classList.toggle('is-bad', kind === 'bad');
+    status.classList.toggle('is-dirty', kind === 'dirty');
+  }
+
+  function setMeta(tab) {
+    const text = area.value;
+    const lines = codeCountLines(text);
+    pathLabel.textContent = tab.path;
+    pathLabel.title = tab.path;
+    metaLabel.textContent = `${CODE_LANG_TITLE[tab.lang] || 'текст'} · ${lines} ${codePlural(lines, 'строка', 'строки', 'строк')} · ${fmtSize(codeBytes(text))}`;
+  }
+
+  let gutterLines = -1;
+  let gutterPath = '';
+
+  function paint(tab) {
+    const text = area.value;
+    codeNode.innerHTML = codeHighlight(text, tab.lang);
+    const lines = codeCountLines(text);
+    if (lines !== gutterLines || tab.path !== gutterPath) {
+      gutterLines = lines;
+      gutterPath = tab.path;
+      let html = '';
+      for (let i = 1; i <= lines; i += 1) html += `<span class="code-line">${i}</span>`;
+      gutterIn.innerHTML = html;
+    }
+    codeNode.style.transform = `translate(${-area.scrollLeft}px, ${-area.scrollTop}px)`;
+    gutterIn.style.transform = `translateY(${-area.scrollTop}px)`;
+    setMeta(tab);
+  }
+
+  function updateDirtyUi(tab) {
+    if (tab) setMeta(tab);
+    const dirty = anyDirty();
+    const changed = (tabsBar.dataset.dirty === '1') !== dirty;
+    tabsBar.dataset.dirty = dirty ? '1' : '0';
+    if (changed) renderTabs();
+    if (dirty) setStatus('Есть несохранённые правки — Ctrl+S сохраняет, Esc спросит про выход.', 'dirty');
+  }
+
+  function renderTabs() {
+    tabsBar.innerHTML = '';
+    for (const path of list) {
+      const tab = tabs.get(path);
+      const button = el('button', `code-tab${path === st.active ? ' is-active' : ''}`);
+      button.type = 'button';
+      button.setAttribute('role', 'tab');
+      button.setAttribute('aria-selected', String(path === st.active));
+      button.title = path;
+      button.appendChild(el('span', 'code-tab-name', tab.name));
+      if (isDirty(tab)) {
+        const dot = el('span', 'code-tab-dot');
+        dot.title = 'Есть несохранённые правки';
+        button.appendChild(dot);
+      }
+      button.addEventListener('click', () => selectTab(path));
+      tabsBar.appendChild(button);
+    }
+  }
+
+  function updateTools(tab) {
+    const editable = Boolean(tab) && tab.loaded && tab.editable;
+    toolFormat.classList.toggle('hidden', !tab || tab.lang !== 'json');
+    toolQuick.classList.toggle('hidden', st.active !== quickPath);
+    toolFormat.disabled = !editable;
+    toolVersions.disabled = !editable || !(tab && tab.versions);
+    toolDownload.disabled = !tab || !tab.loaded;
+    const kind = previewKind(tab);
+    toolPreview.classList.toggle('hidden', kind === 'none');
+    toolPreview.classList.toggle('is-on', previewOn(tab));
+    quickBox.classList.toggle('hidden', tab ? !st.quickOpen || st.active !== quickPath : true);
+  }
+
+  /* Быстрые поля нужны только спеку дизайна: остальные файлы правят текстом. */
+  const quickPath = list.includes('design.json') ? 'design.json' : null;
+  st.quickOpen = Boolean(quick) && Boolean(quickPath);
+
+  /* ---- загрузка файла ---- */
+  async function ensureLoaded(tab) {
+    if (tab.loaded || tab.loading) return;
+    tab.loading = true;
+    tab.error = null;
+    try {
+      const data = await api(`/api/projects/${st.projectId}/file-text?path=${encodeURIComponent(tab.path)}`);
+      tab.editable = data.editable !== false;
+      tab.reason = data.reason || '';
+      tab.bytes = data.bytes || 0;
+      tab.at = data.at || null;
+      tab.versions = data.history && typeof data.history.count === 'number' ? data.history.count : 0;
+      tab.text = tab.editable ? String(data.text || '') : '';
+      tab.saved = tab.text;
+      tab.hash = data.hash || null;
+      tab.loaded = true;
+    } catch (error) {
+      tab.error = error.message;
+    } finally {
+      tab.loading = false;
+    }
+  }
+
+  /* ---- предпросмотр ---- */
+  function previewKind(tab) {
+    if (!tab) return 'none';
+    if (tab.lang === 'xml') return 'image';
+    if (tab.lang === 'html') return 'page';
+    if (tab.lang === 'json') return 'summary';
+    return 'none';
+  }
+
+  function previewOn(tab) {
+    if (!tab) return false;
+    if (tab.pref !== null) return Boolean(tab.pref);
+    const kind = previewKind(tab);
+    return kind === 'image' || kind === 'page';
+  }
+
+  function renderJsonSummary() {
+    let data;
+    try {
+      data = JSON.parse(area.value);
+    } catch (error) {
+      previewBody.appendChild(el('p', 'code-preview-note', `JSON пока не читается: ${codeJsonError(error, area.value)}.`));
+      return;
+    }
+    if (!data || typeof data !== 'object') {
+      previewBody.appendChild(el('p', 'code-preview-note', 'В файле не объект и не массив — показывать нечего.'));
+      return;
+    }
+    const box = el('div', 'code-summary');
+    const row = (label, value) => {
+      const line = el('div', 'code-summary-row');
+      line.append(el('span', 'code-summary-label', label), el('span', 'code-summary-value', String(value)));
+      box.appendChild(line);
+    };
+    const rooms = Array.isArray(data.rooms) ? data.rooms : null;
+    if (rooms) {
+      const area = rooms.reduce((sum, room) => sum + codePolyArea(room && room.poly), 0);
+      row('Комнат', rooms.length);
+      row('Площадь', `${String(Math.round(area * 10) / 10).replace('.', ',')} м²`);
+      row('Формат листа', `${data.paper || '—'} ${data.orientation === 'portrait' ? 'книжный' : 'альбомный'}`);
+      row('Стены', `${data.heights && data.heights.wall ? data.heights.wall : '—'} мм`);
+      row('Потолок', `${data.heights && data.heights.ceiling ? data.heights.ceiling : '—'} мм`);
+      if (Array.isArray(data.walls)) row('Стен', data.walls.length);
+      if (Array.isArray(data.openings)) row('Проёмов', data.openings.length);
+      if (Array.isArray(data.furniture)) row('Мебели', data.furniture.length);
+      if (Array.isArray(data.lighting)) row('Светильников', data.lighting.length);
+      const seat = el('ul', 'code-summary-list');
+      for (const room of rooms) {
+        const item = el('li');
+        item.append(el('span', '', String((room && room.name) || 'комната')));
+        item.append(el('span', '', `${String(Math.round(codePolyArea(room && room.poly) * 10) / 10).replace('.', ',')} м²`));
+        seat.appendChild(item);
+      }
+      if (rooms.length) box.appendChild(seat);
+    } else {
+      const keys = Object.keys(data);
+      row('Ключей', keys.length);
+      row('Размер', fmtSize(codeBytes(area.value)));
+      const seat = el('ul', 'code-summary-list');
+      for (const key of keys.slice(0, 24)) {
+        const value = data[key];
+        const kind = Array.isArray(value) ? `${value.length} эл.` : value === null ? 'пусто' : typeof value === 'object' ? 'объект' : String(value).slice(0, 40);
+        const item = el('li');
+        item.append(el('span', '', key));
+        item.append(el('span', '', kind));
+        seat.appendChild(item);
+      }
+      box.appendChild(seat);
+    }
+    previewBody.appendChild(box);
+  }
+
+  function renderPreview() {
+    const tab = activeTab();
+    const kind = previewKind(tab);
+    const visible = Boolean(tab) && kind !== 'none' && previewOn(tab);
+    modal.classList.toggle('preview-on', visible);
+    toolPreview.classList.toggle('is-on', visible);
+    if (!visible) return;
+    previewBody.innerHTML = '';
+    previewTitle.textContent = tab.name;
+    if (kind === 'image') {
+      const img = el('img', 'code-preview-img');
+      img.alt = tab.name;
+      img.src = `${fileUrl(tab.path)}&t=${Date.now()}`;
+      img.addEventListener('load', () => {
+        previewTitle.textContent = `${tab.name} · ${img.naturalWidth}×${img.naturalHeight}`;
+      });
+      img.addEventListener('error', () => {
+        previewBody.innerHTML = '';
+        previewBody.appendChild(el('p', 'code-preview-note', 'Картинка не собралась: в SVG есть ошибка. Сохранили и пересобрали — обновите предпросмотр.'));
+      });
+      previewBody.appendChild(img);
+    } else if (kind === 'page') {
+      const frame = el('iframe', 'code-preview-frame');
+      frame.setAttribute('sandbox', 'allow-scripts allow-popups allow-forms allow-modals');
+      frame.setAttribute('referrerpolicy', 'no-referrer');
+      frame.setAttribute('title', `Просмотр ${tab.name}`);
+      frame.src = `/api/projects/${st.projectId}/file-page?path=${encodeURIComponent(tab.path)}&t=${Date.now()}`;
+      previewBody.appendChild(frame);
+    } else {
+      renderJsonSummary();
+    }
+  }
+
+  /* ---- вкладки ---- */
+  async function showTab() {
+    const tab = activeTab();
+    if (!tab) return;
+    if (!tab.loaded && !tab.loading) {
+      area.value = '';
+      codeNode.innerHTML = '';
+      gutterIn.innerHTML = '';
+      gutterLines = -1;
+      area.readOnly = true;
+      setStatus(tab.path === quickPath ? 'Читаю спек дизайна…' : 'Читаю файл…', '');
+      await ensureLoaded(tab);
+    }
+    if (tab.error) {
+      area.value = '';
+      area.readOnly = true;
+      codeNode.innerHTML = '';
+      gutterIn.innerHTML = '';
+      gutterLines = -1;
+      pathLabel.textContent = tab.path;
+      metaLabel.textContent = '';
+      setStatus(tab.error, 'bad');
+      updateTools(tab);
+      renderPreview();
+      return;
+    }
+    langBadge.textContent = (CODE_LANG_TITLE[tab.lang] || 'КОД').slice(0, 4).toUpperCase();
+    if (!tab.editable) {
+      /* Бинарный файл или слишком большой: показываем причину, а не пустое
+         поле. Скачать его всё равно можно — об этом говорит «Скачать». */
+      area.value = '';
+      area.readOnly = true;
+      codeNode.textContent = '';
+      gutterIn.innerHTML = '';
+      gutterLines = -1;
+      pathLabel.textContent = tab.path;
+      pathLabel.title = tab.path;
+      setMeta(tab);
+      setStatus(tab.reason || 'Этот файл нельзя править текстом.', 'bad');
+      updateTools(tab);
+      renderPreview();
+      return;
+    }
+    area.readOnly = false;
+    if (!tab.undo) tab.undo = codeUndoNew(tab.text);
+    area.value = tab.text;
+    area.scrollTop = 0;
+    area.scrollLeft = 0;
+    paint(tab);
+    if (tab.path === quickPath) {
+      buildQuick();
+      fillQuick();
+    }
+    const when = codeTime(tab.at);
+    const parts = ['Прочитан'];
+    if (when) parts.push(`в ${when}`);
+    if (tab.versions) parts.push(`${tab.versions} ${codePlural(tab.versions, 'версия', 'версии', 'версий')} в запасе`);
+    setStatus(parts.join(' '), '');
+    updateDirtyUi(tab);
+    updateTools(tab);
+    renderPreview();
+  }
+
+  async function selectTab(path) {
+    if (path === st.active) return;
+    const current = activeTab();
+    if (current && current.loaded && current.editable) current.text = area.value;
+    st.active = path;
+    hideAsks();
+    renderTabs();
+    await showTab();
+  }
+
+  /* ---- быстрые поля спека ---- */
+  const quickFields = {};
+
+  function buildQuick() {
+    if (quickFields.paper) return;
+    const field = (key, label, options, fallback) => {
+      /* Подпись отдельным label с for: если завернуть select в label, его имя
+         для скринридера склеится с текстом всех вариантов. */
+      const row = el('div', 'design-field');
+      const id = `code-quick-${key}`;
+      const caption = el('label', 'design-label', label);
+      caption.htmlFor = id;
+      row.appendChild(caption);
+      let input;
+      if (options) {
+        input = el('select', 'design-input');
+        for (const option of options) {
+          const value = typeof option === 'object' ? option.value : option;
+          const item = el('option', '', typeof option === 'object' ? option.label : String(option));
+          item.value = String(value);
+          input.appendChild(item);
+        }
+      } else {
+        input = el('input', 'design-input');
+        input.type = 'number';
+        input.min = '0';
+        input.step = '10';
+      }
+      input.id = id;
+      input.value = String(fallback);
+      input.addEventListener('change', applyQuick);
+      row.appendChild(input);
+      quickBox.appendChild(row);
+      quickFields[key] = input;
+    };
+    field('paper', 'Формат листа', ['A4', 'A3', 'A2', 'A1', 'A0'], 'A3');
+    field('orientation', 'Ориентация', [{ value: 'landscape', label: 'Альбомная' }, { value: 'portrait', label: 'Книжная' }], 'landscape');
+    field('wall', 'Высота стен, мм', null, 2700);
+    field('ceiling', 'Высота потолка, мм', null, 2650);
+  }
+
+  function fillQuick() {
+    if (!quickFields.paper) return;
+    let parsed;
+    try {
+      parsed = JSON.parse(area.value);
+    } catch {
+      return;
+    }
+    if (!parsed || typeof parsed !== 'object') return;
+    quickFields.paper.value = String(parsed.paper || 'A3');
+    quickFields.orientation.value = String(parsed.orientation || 'landscape');
+    quickFields.wall.value = String((parsed.heights && parsed.heights.wall) ?? 2700);
+    quickFields.ceiling.value = String((parsed.heights && parsed.heights.ceiling) ?? 2650);
+  }
+
+  /* Поля подставляют значения в сам текст спека: единственный источник правды —
+     текст в поле. Так человек может и выбрать A2 из списка, и дописать стену
+     руками, и это не разъедется на два разных значения. */
+  function applyQuick() {
+    const tab = activeTab();
+    if (!tab || !tab.loaded) return;
+    let parsed;
+    try {
+      parsed = JSON.parse(area.value);
+    } catch (error) {
+      fillQuick();
+      setStatus(`Параметры не подставить: в JSON ошибка — ${codeJsonError(error, area.value)}`, 'bad');
+      return;
+    }
+    if (!parsed || typeof parsed !== 'object') return;
+    parsed.paper = quickFields.paper.value;
+    parsed.orientation = quickFields.orientation.value;
+    parsed.heights = {
+      ...(parsed.heights && typeof parsed.heights === 'object' ? parsed.heights : {}),
+      wall: Number(quickFields.wall.value) || 2700,
+      ceiling: Number(quickFields.ceiling.value) || 2650,
+    };
+    const next = JSON.stringify(parsed, null, 2);
+    if (next === area.value) return;
+    codeUndoPush(tab.undo, area.value);
+    tab.text = next;
+    area.value = next;
+    paint(tab);
+    updateDirtyUi(tab);
+    setStatus('Параметры листа подставлены в спек. Сохраните — листы пересоберутся.', 'dirty');
+  }
+
+  /* ---- сохранение ---- */
+  async function saveActive(force = false) {
+    const tab = activeTab();
+    if (!tab || !tab.loaded || !tab.editable || tab.saving) return false;
+    const text = area.value;
+    tab.text = text;
+    /* design.json существует только чтобы из него собрать листы: нечитаемый
+       спек запишется на диск и сломает пересборку. Поэтому проверяем и
+       показываем, где ошибка, а не сохраняем «как есть». */
+    if (tab.lang === 'json' && text.trim()) {
+      try {
+        JSON.parse(text);
+      } catch (error) {
+        setStatus(`Не сохраняю: в JSON ошибка — ${codeJsonError(error, text)}`, 'bad');
+        area.focus();
+        return false;
+      }
+    }
+    tab.saving = true;
+    hideAsks();
+    setStatus('Сохраняю…', '');
+    try {
+      const data = await api(`/api/projects/${st.projectId}/file-text`, {
+        method: 'POST',
+        body: { path: tab.path, text, hash: tab.hash, force: Boolean(force) },
+      });
+      /* Пока запрос летел, человек мог продолжать печатать. Тогда tab.text уже
+         новее отправленного, и объявлять вкладку чистой нельзя: правки после
+         Ctrl+S остались бы в поле, но потерялись бы при закрытии окна. Поэтому
+         «сохранённым» помечаем ровно то, что ушло на диск. */
+      tab.saved = text;
+      tab.hash = data.hash || tab.hash;
+      tab.bytes = data.bytes || tab.bytes;
+      tab.at = data.at || tab.at;
+      if (data.history && typeof data.history.count === 'number') tab.versions = data.history.count;
+      if (data.design && state.design) {
+        state.design = data.design;
+        renderDesign();
+      }
+      const failed = (data.results || []).filter((item) => !item.ok);
+      /* Если правили спек, панель дизайна должна сказать, что листы
+         пересобрались: строка «сохранено» в редакторе этого не видит. */
+      if (Array.isArray(data.results) && data.results.length) {
+        if (failed.length) {
+          designNote(`Спек сохранён, но не всё собралось: ${failed.map((item) => `${item.title} — ${item.error}`).join('; ')}`, 0);
+        } else {
+          designNote(`Спек сохранён, листы пересобраны: ${data.results.length} из ${data.results.length}.`, 6000);
+        }
+      } else if (data.rebuildError) {
+        designNote(`Спек сохранён, но листы не собрались: ${data.rebuildError}`, 0);
+      }
+      updateDirtyUi(tab);
+      updateTools(tab);
+      renderPreview();
+      setStatus(data.text || 'Файл сохранён.', failed.length ? 'bad' : 'ok');
+      /* Список файлов показывает размеры и время правки — после записи его
+         надо обновить, иначе человек видит старое «изменён вчера». */
+      loadFiles();
+      return true;
+    } catch (error) {
+      if (error.status === 409) {
+        /* Файл переписали снаружи: молча затирать чужую версию нельзя —
+           показываем выбор из двух честных путей. */
+        setStatus('Файл изменился, пока вы его правили. Выберите: взять версию из файла или сохранить свою поверх.', 'bad');
+        showAsk(askStale.node);
+        return false;
+      }
+      setStatus(error.message, 'bad');
+      return false;
+    } finally {
+      tab.saving = false;
+    }
+  }
+
+  async function reloadFromDisk() {
+    const tab = activeTab();
+    if (!tab) return;
+    hideAsks();
+    setStatus('Читаю файл заново…', '');
+    tab.loaded = false;
+    tab.error = null;
+    await ensureLoaded(tab);
+    if (tab.error) {
+      setStatus(tab.error, 'bad');
+      return;
+    }
+    tab.undo = codeUndoNew(tab.text);
+    area.value = tab.text;
+    paint(tab);
+    updateDirtyUi(tab);
+    updateTools(tab);
+    renderPreview();
+    if (tab.path === quickPath) fillQuick();
+    setStatus('Взята версия из файла. Ваши правки в окне заменены — их можно вернуть через «Версии».', '');
+  }
+
+  async function restoreLatest() {
+    const tab = activeTab();
+    if (!tab) return;
+    if (!tab.versions) {
+      hideAsks();
+      setStatus('Прошлых версий нет: файл ещё ни разу не сохраняли из редактора.', '');
+      return;
+    }
+    hideAsks();
+    setStatus('Возвращаю прошлую версию…', '');
+    try {
+      const data = await api(`/api/projects/${st.projectId}/file-text`, {
+        method: 'POST',
+        body: { path: tab.path, restore: true },
+      });
+      if (data.history && typeof data.history.count === 'number') tab.versions = data.history.count;
+      /* В ответе на восстановление `text` — это сообщение для строки
+         состояния, а не содержимое файла. Содержимое читаем заново: так окно
+         видит ровно то, что теперь на диске. */
+      tab.loaded = false;
+      tab.error = null;
+      await ensureLoaded(tab);
+      if (tab.error) {
+        setStatus(tab.error, 'bad');
+        return;
+      }
+      tab.undo = codeUndoNew(tab.text);
+      area.value = tab.text;
+      paint(tab);
+      updateDirtyUi(tab);
+      updateTools(tab);
+      renderPreview();
+      if (tab.path === quickPath) fillQuick();
+      loadFiles();
+      const stamp = data.history && data.history.restoredFrom ? codeTime(data.history.restoredFrom) : '';
+      setStatus(`Прошлая версия возвращена в файл${stamp ? ` (сохранена в ${stamp})` : ''}.`, 'ok');
+    } catch (error) {
+      setStatus(error.message, 'bad');
+    }
+  }
+
+  /* ---- отмена и повтор ---- */
+  function undoStep() {
+    const tab = activeTab();
+    if (!tab || !tab.undo) return;
+    if (!tab.undo.past.length) {
+      setStatus('Отменять нечего: это начало правки файла.', '');
+      return;
+    }
+    const previous = tab.undo.past.pop();
+    tab.undo.future.push(area.value);
+    tab.undo.since = 0;
+    tab.text = previous;
+    area.value = previous;
+    paint(tab);
+    updateDirtyUi(tab);
+    setStatus('Правка отменена — Ctrl+Shift+Z вернёт.', '');
+  }
+
+  function redoStep() {
+    const tab = activeTab();
+    if (!tab || !tab.undo) return;
+    if (!tab.undo.future.length) {
+      setStatus('Возвращать нечего: отменённых правок нет.', '');
+      return;
+    }
+    const next = tab.undo.future.pop();
+    tab.undo.past.push(area.value);
+    tab.undo.since = 0;
+    tab.text = next;
+    area.value = next;
+    paint(tab);
+    updateDirtyUi(tab);
+    setStatus('Правка возвращена.', '');
+  }
+
+  /* Вставка текста на место курсора — общая для Tab, Enter и автопары. */
+  function insertText(chunk) {
+    const tab = activeTab();
+    if (!tab || !tab.loaded) return;
+    codeUndoPush(tab.undo, area.value);
+    const start = area.selectionStart;
+    const end = area.selectionEnd;
+    area.setRangeText(chunk, start, end, 'end');
+    tab.text = area.value;
+    paint(tab);
+    updateDirtyUi(tab);
+  }
+
+  /* Отступ выделенных строк: Tab и Shift+Tab работают как в любом редакторе —
+     двигают весь блок, а не ставят пробелы в первую строку. */
+  function indentBlock(outdent) {
+    const tab = activeTab();
+    if (!tab || !tab.loaded) return;
+    const value = area.value;
+    const start = area.selectionStart;
+    const end = area.selectionEnd;
+    const from = value.lastIndexOf('\n', start - 1) + 1;
+    let to = value.indexOf('\n', end);
+    if (to < 0) to = value.length;
+    const block = value.slice(from, to);
+    const lines = block.split('\n');
+    const done = lines.map((line) => {
+      if (!outdent) return line ? `  ${line}` : line;
+      if (line.startsWith('\t')) return line.slice(1);
+      return line.replace(/^ {1,2}/, '');
+    });
+    const next = done.join('\n');
+    if (next === block) return;
+    codeUndoPush(tab.undo, value);
+    area.setRangeText(next, from, to, 'end');
+    area.setSelectionRange(from, from + next.length);
+    tab.text = area.value;
+    paint(tab);
+    updateDirtyUi(tab);
+  }
+
+  /* ---- клавиатура ---- */
+  area.addEventListener('keydown', (event) => {
+    if (event.key === 'Tab') {
+      event.preventDefault();
+      const multiline = area.selectionStart !== area.selectionEnd || area.value.slice(area.selectionStart, area.selectionEnd).includes('\n');
+      if (multiline) indentBlock(event.shiftKey);
+      else if (event.shiftKey) indentBlock(true);
+      else insertText('  ');
+      return;
+    }
+    if (event.key === 'Enter' && !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey) {
+      /* Enter внутри блока продолжает отступ: в JSON и SVG это нужно на каждой
+         второй строке, а без него правка превращается в расстановку пробелов. */
+      const value = area.value;
+      const start = area.selectionStart;
+      if (start === area.selectionEnd) {
+        const lineStart = value.lastIndexOf('\n', start - 1) + 1;
+        const line = value.slice(lineStart, start);
+        const indent = (/^[\t ]*/.exec(line) || [''])[0];
+        const extra = /[{[(]$/.test(line.trim()) ? '  ' : '';
+        if (indent || extra) {
+          event.preventDefault();
+          insertText(`\n${indent}${extra}`);
+        }
+      }
+      return;
+    }
+  });
+
+  area.addEventListener('input', () => {
+    const tab = activeTab();
+    if (!tab || !tab.loaded || !tab.editable) return;
+    if (tab.text !== area.value) codeUndoPush(tab.undo, tab.text);
+    tab.text = area.value;
+    clearTimeout(st.paintTimer);
+    /* Подсветка на каждый символ — лишняя работа: 70 мс незаметны глазу, но
+       склеивают быструю печать в одну перерисовку. */
+    st.paintTimer = setTimeout(() => paint(tab), 70);
+    updateDirtyUi(tab);
+  });
+
+  area.addEventListener('scroll', () => {
+    codeNode.style.transform = `translate(${-area.scrollLeft}px, ${-area.scrollTop}px)`;
+    gutterIn.style.transform = `translateY(${-area.scrollTop}px)`;
+  }, { passive: true });
+
+  /* Ctrl+S ловим на документе, а не на поле: человек мог нажать его, стоя
+     курсором на кнопке. В браузере эта комбинация сохраняет страницу — гасим. */
+  const onDocKey = (event) => {
+    const meta = event.ctrlKey || event.metaKey;
+    if (!meta) return;
+    const key = String(event.key || '').toLowerCase();
+    if (key === 's') {
+      event.preventDefault();
+      saveActive();
+      return;
+    }
+    if (key === 'z' && !event.shiftKey) {
+      event.preventDefault();
+      undoStep();
+      return;
+    }
+    if ((key === 'z' && event.shiftKey) || key === 'y') {
+      event.preventDefault();
+      redoStep();
+    }
+  };
+  document.addEventListener('keydown', onDocKey);
+
+  /* ---- кнопки ---- */
+  toolFormat.addEventListener('click', () => {
+    const tab = activeTab();
+    if (!tab || !tab.loaded) return;
+    let parsed;
+    try {
+      parsed = JSON.parse(area.value);
+    } catch (error) {
+      setStatus(`Формат не поставить: в JSON ошибка — ${codeJsonError(error, area.value)}`, 'bad');
+      return;
+    }
+    const pretty = JSON.stringify(parsed, null, 2);
+    if (pretty === area.value) {
+      setStatus('Отступы уже ровные.', '');
+      return;
+    }
+    codeUndoPush(tab.undo, area.value);
+    tab.text = pretty;
+    area.value = pretty;
+    paint(tab);
+    updateDirtyUi(tab);
+    setStatus('Отступы выровнены. Ctrl+S — сохранить.', 'dirty');
+  });
+
+  toolQuick.addEventListener('click', () => {
+    st.quickOpen = !st.quickOpen;
+    quickBox.classList.toggle('hidden', !st.quickOpen);
+    toolQuick.classList.toggle('is-on', st.quickOpen);
+    if (st.quickOpen) {
+      buildQuick();
+      fillQuick();
+    }
+  });
+
+  toolVersions.addEventListener('click', () => {
+    const tab = activeTab();
+    if (!tab) return;
+    if (!tab.versions) {
+      setStatus('Прошлых версий нет: файл ещё ни разу не сохраняли из редактора.', '');
+      return;
+    }
+    showAsk(askVersions.node);
+  });
+
+  toolDownload.addEventListener('click', () => {
+    const tab = activeTab();
+    if (!tab) return;
+    /* Скачиваем то, что видно в окне, а не версию с диска: если есть правки,
+       человек ждёт файл со своими изменениями. */
+    saveBlob(new Blob([area.value], { type: 'text/plain;charset=utf-8' }), tab.name);
+    setStatus(`Файл «${tab.name}» сохраняется в загрузки.`, '');
+  });
+
+  toolPreview.addEventListener('click', () => {
+    const tab = activeTab();
+    if (!tab) return;
+    tab.pref = !previewOn(tab);
+    renderPreview();
+  });
+
+  previewReload.addEventListener('click', () => renderPreview());
+  previewOpen.addEventListener('click', () => {
+    const tab = activeTab();
+    if (!tab) return;
+    const url = tab.lang === 'html'
+      ? `/api/projects/${st.projectId}/file-page?path=${encodeURIComponent(tab.path)}`
+      : fileUrl(tab.path);
+    window.open(url, '_blank', 'noopener');
+  });
+
+  /* ---- само окно ---- */
+  const modal = openModal({
+    title,
+    subtitle: subtitle || `${list.length} ${codePlural(list.length, 'файл', 'файла', 'файлов')} · правка сохраняется прямо в проект`,
+    headLead: langBadge,
+    body: shell,
+    className: 'file-preview-modal code-modal',
+    rootClass: 'preview-open',
+    actions: [
+      { label: 'Закрыть', kind: 'quiet' },
+      {
+        label: 'Сохранить',
+        kind: 'primary',
+        onClick: async () => {
+          await saveActive();
+          return false;
+        },
+      },
+    ],
+    beforeClose: () => {
+      if (st.forceClose) return true;
+      if (!anyDirty()) return true;
+      showAsk(askDirty.node);
+      return false;
+    },
+    onClose: () => {
+      document.removeEventListener('keydown', onDocKey);
+      clearTimeout(st.paintTimer);
+      if (typeof onClose === 'function') {
+        try {
+          onClose();
+        } catch {
+          /* закрытие окна не должно падать из-за чужого обработчика */
+        }
+      }
+    },
+  });
+
+  if (st.quickOpen) toolQuick.classList.add('is-on');
+  renderTabs();
+  await showTab();
+  return modal;
+}
+
+/* «Правка» в блоке дизайна. Открывает тот же редактор, но со списком файлов
+   проекта дизайна: спек и листы, которые из него собираются. */
+async function openDesignEditor() {
+  const projectId = filesProjectId();
+  const design = state.design;
+  if (!projectId || !design) return;
+  if (!design.hasSpec) {
+    designNote('Спека ещё нет — попросите агента собрать дизайн-проект, и он появится здесь для правки.', 0);
+    return;
+  }
+  const paths = ['design.json'];
+  for (const artifact of design.artifacts || []) {
+    if (!artifact || !artifact.file || artifact.file === 'design.json') continue;
+    if (artifact.exists === false) continue;
+    if (!paths.includes(artifact.file)) paths.push(artifact.file);
+  }
+  const rooms = (design.spec && Array.isArray(design.spec.rooms) && design.spec.rooms.length) || 0;
+  await codeEditorOpen({
+    paths,
+    active: 'design.json',
+    quick: true,
+    projectId,
+    title: 'Правка дизайн-проекта',
+    subtitle: `${rooms ? `${rooms} комн. · ` : ''}спек и ${codePlural(Math.max(0, paths.length - 1), 'лист', 'листа', 'листов')} · сохранение пересоберёт листы`,
+  });
+}
+
+/* Правка файла из панели файлов и из просмотра: один файл, без быстрых полей. */
+async function openFileEditor(item) {
+  if (!item || !item.path) return;
+  await codeEditorOpen({ paths: [item.path], active: item.path, projectId: filesProjectId() });
 }
 
 function filesTreeNodes(parent) {
@@ -4799,6 +6300,30 @@ function openFilePreview(item) {
   /* Окно открывается поверх панели файлов, а не вместо неё: после «Закрыть»
      человек остаётся там же, где выбирал файл. */
   const reopenDrawer = Boolean(state.filesDrawerOpen) && filesNarrow();
+  /* У текстовых файлов (спек дизайна, листы SVG, страница 3D, любой .json/.md)
+     первой кнопкой стоит «Править код»: до сих пор такой файл можно было
+     только скачать и править в блокноте, а потом загрузить назад. Страница
+     HTML раньше открывалась вовсе без кнопок — теперь у неё есть хотя бы эта. */
+  const actions = [];
+  if (codeEditableName(item.name)) {
+    actions.push({
+      label: 'Править код',
+      onClick: () => {
+        closeModal();
+        openFileEditor(item);
+        return false;
+      },
+    });
+  }
+  if (kind !== 'web') {
+    actions.push({
+      label: 'Скачать',
+      onClick: () => {
+        openFileViewer(item);
+      },
+    });
+    actions.push({ label: 'Закрыть', kind: 'primary' });
+  }
   openModal({
     title: item.name,
     headLead: pvBadge(item.name),
@@ -4807,22 +6332,10 @@ function openFilePreview(item) {
     wide: true,
     /* Ширина и высота окна — по виду файла: таблица разворачивается по
        горизонту, документ Word держит удобную строку, страница идёт во всю
-       высоту экрана без нижней полосы кнопок (закрыть можно крестиком в шапке,
-       клавишей Esc или тапом мимо окна). */
+       высоту экрана. */
     className: `file-preview-modal pv-kind-${kind}`,
     rootClass: 'preview-open',
-    actions:
-      kind === 'web'
-        ? []
-        : [
-            {
-              label: 'Скачать',
-              onClick: () => {
-                openFileViewer(item);
-              },
-            },
-            { label: 'Закрыть', kind: 'primary' },
-          ],
+    actions,
     onClose: () => {
       if (reopenDrawer && !state.filesDrawerOpen) {
         state.filesDrawerOpen = true;
@@ -5471,7 +6984,7 @@ function openContextMenu(anchor, items, head = null) {
   }, 0);
 }
 
-function openModal({ title, subtitle, headLead, body, actions = [], wide = false, className = '', rootClass = '', onMount, onClose }) {
+function openModal({ title, subtitle, headLead, body, actions = [], wide = false, className = '', rootClass = '', onMount, onClose, beforeClose }) {
   const root = $('#modalRoot');
   hideSwipeHint();
   root.innerHTML = '';
@@ -5531,6 +7044,10 @@ function openModal({ title, subtitle, headLead, body, actions = [], wide = false
   if (actions.length) modal.appendChild(foot);
   root.appendChild(modal);
   modalCloseHook = typeof onClose === 'function' ? onClose : null;
+  /* Окну можно запретить закрываться: у редактора кода есть несохранённые
+     правки, и терять их из-за случайного Esc нельзя. Функция возвращает false,
+     чтобы окно осталось открытым, и сама показывает человеку вопрос. */
+  modalBeforeClose = typeof beforeClose === 'function' ? beforeClose : null;
 
   root.onmousedown = (event) => {
     if (event.target === root) closeModal();
@@ -5615,6 +7132,9 @@ function enableSheetDrag(modal) {
 
 let modalCloseHook = null;
 let modalPreviousFocus = null;
+/* Проверка «окно можно закрыть?» — её ставит окно правки кода, когда в нём есть
+   несохранённые правки. */
+let modalBeforeClose = null;
 
 /* Первое поле ввода в окне — то, куда человек собирается печатать. */
 function inputFocusTarget(modal) {
@@ -5626,6 +7146,23 @@ function inputFocusTarget(modal) {
 
 function closeModal() {
   const root = $('#modalRoot');
+  /* Сначала спрашиваем окно, можно ли его закрывать. Обработчик снимаем до
+     вызова, чтобы вопрос «сохранить правки?» мог открыть своё окно и не
+     зациклить закрытие; если окно просит остаться — возвращаем всё как было. */
+  if (modalBeforeClose) {
+    const guard = modalBeforeClose;
+    modalBeforeClose = null;
+    let allow = true;
+    try {
+      allow = guard() !== false;
+    } catch {
+      allow = true;
+    }
+    if (!allow) {
+      modalBeforeClose = guard;
+      return;
+    }
+  }
   if (!root || root.classList.contains('hidden')) {
     const hook = modalCloseHook;
     modalCloseHook = null;
@@ -9559,6 +11096,9 @@ $('#filesPanelInput').addEventListener('change', (event) => {
   uploadToProject(event.target.files);
   event.target.value = '';
 });
+/* Панель дизайна: пересборка листов и правка спека — прямо в окне проекта. */
+$('#designBuildBtn').addEventListener('click', () => designRebuild());
+$('#designEditBtn').addEventListener('click', () => openDesignEditor());
 $('#sidebarToggle').addEventListener('click', () => {
   toggleSidebarDrawer();
 });

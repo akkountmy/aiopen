@@ -69,6 +69,7 @@ const LIVE = {
   'ui-scroll.mjs': 'браузер',
   'ui-swipe.mjs': 'браузер',
   'ui-version.mjs': 'браузер',
+  'ui-code-editor.mjs': 'браузер и проект с design.json',
   'typo-visual.mjs': 'браузер и эталон типографики'
 };
 

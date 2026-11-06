@@ -114,7 +114,7 @@ import { store } from './src/store.mjs';
 import { listTree, resolveSafe } from './src/tools.mjs';
 import { listSkills } from './src/skills.mjs';
 import { pipeZip } from './src/zip.mjs';
-import { nowIso, safeName, uid, uniqueFileName } from './src/util.mjs';
+import { atomicWrite, formatBytes, nowIso, safeName, sha256, uid, uniqueFileName } from './src/util.mjs';
 import { describeImage } from './src/vision.mjs';
 import { webSearch, fetchUrl, assertPublicUrl, assertResolvesPublic } from './src/search.mjs';
 import { browserStatus } from './src/browser.mjs';
@@ -127,6 +127,7 @@ import { recordQuality, qualityRecord, readQuality, summarizeQuality, formatQual
 import { BusyError, createGate, createLoopMonitor, memoryPressure, memoryStats } from './src/capacity.mjs';
 import { startWatchdog, startHardWatchdog } from './src/watchdog.mjs';
 import { attachText, storeAttachText } from './src/attachtext.mjs';
+import { buildArtifacts as buildDesignArtifacts, describeDesign, designView, readSpec as readDesignSpec, writeSpec as writeDesignSpec } from './src/design.mjs';
 
 ensureDirs();
 store.init({ adminUsername: ADMIN.username, adminPassword: ADMIN.password });
@@ -984,6 +985,135 @@ const MEDIA_EXT = new Set(['.mp3', '.m4a', '.wav', '.ogg', '.oga', '.opus', '.mp
    при этом сама страница остаётся полноценной. */
 const PAGE_SANDBOX_CSP =
   "sandbox allow-scripts allow-popups allow-forms allow-modals; frame-ancestors 'self'; base-uri 'none'";
+
+/* ------------------------- правка текста в браузере -------------------------
+   До редактора файлы можно было только смотреть и скачивать: поправить строку
+   в плане или цифру в design.json приходилось в блокноте на компьютере, а потом
+   загружать файл обратно. Эти помощники обслуживают редактор в приложении:
+   прочитать текст, записать текст, отдать прошлую версию.
+
+   Границы выбраны по тому, что реально правят руками. Текстовые расширения —
+   спек, листы, страницы, стили, скрипты, заметки; всё остальное (документы,
+   картинки, архивы) редактор не открывает: там не текст, и портить двоичный
+   файл строкой нельзя. Потолок в 2 МБ — выше браузер уже неприятно подсвечивать
+   и сохранять, а листы дизайна весят десятки килобайт. */
+const EDIT_TEXT_EXT = new Set([
+  '.json',
+  '.jsonl',
+  '.svg',
+  '.html',
+  '.htm',
+  '.css',
+  '.js',
+  '.mjs',
+  '.md',
+  '.markdown',
+  '.txt',
+  '.csv',
+  '.tsv',
+  '.xml',
+  '.yml',
+  '.yaml',
+  '.toml',
+  '.ini',
+  '.map',
+  '.webmanifest',
+  '.sql',
+  '.sh',
+  '.ps1',
+  '.bat',
+  '.py',
+  '.viki',
+]);
+const EDIT_MAX_BYTES = 2 * 1024 * 1024;
+/* Сколько прошлых версий держим на файл: десятка хватает отменить неудачную
+   правку недельной давности, а место в /data не растёт бесконечно. */
+const EDIT_HISTORY_KEEP = 10;
+
+function editTextKind(relPath) {
+  const ext = path.extname(String(relPath || '')).toLowerCase();
+  if (ext === '.json' || ext === '.jsonl' || ext === '.map' || ext === '.webmanifest') return 'json';
+  if (ext === '.svg' || ext === '.xml') return 'xml';
+  if (ext === '.html' || ext === '.htm') return 'html';
+  if (ext === '.css') return 'css';
+  if (ext === '.js' || ext === '.mjs' || ext === '.ts') return 'js';
+  if (ext === '.md' || ext === '.markdown') return 'md';
+  return 'text';
+}
+
+/* Двоичный файл узнаём по нулевому байту в начале: настоящий текст его не
+   содержит, а PNG, DOCX, PDF и ZIP начинаются с него почти всегда. */
+function looksBinary(buf) {
+  const limit = Math.min(buf.length, 8000);
+  for (let i = 0; i < limit; i++) if (buf[i] === 0) return true;
+  return false;
+}
+
+/* Короткая метка содержимого: по ней сервер понимает, что файл не изменился,
+   пока человек печатал, и не затирает чужую правку молча. */
+function editTextHash(text) {
+  return sha256(String(text)).slice(0, 24);
+}
+
+/* История правок лежит вне рабочей папки проекта: иначе она попадала бы в
+   список файлов, в архив проекта и в контекст агента. Ключ каталога — путь
+   файла в base64url, поэтому вложенные папки не разъезжаются по уровням. */
+function editHistoryDir(projectId, relPath) {
+  const key = Buffer.from(String(relPath), 'utf8').toString('base64url').slice(0, 120);
+  return path.join(DATA_DIR, 'file-edits', String(projectId), key);
+}
+
+function editHistoryList(projectId, relPath) {
+  const dir = editHistoryDir(projectId, relPath);
+  let names = [];
+  try {
+    names = fs
+      .readdirSync(dir)
+      .filter((name) => /^\d{13}\.txt$/.test(name))
+      .sort()
+      .reverse();
+  } catch {
+    return [];
+  }
+  return names.map((name) => {
+    const file = path.join(dir, name);
+    let at = null;
+    let bytes = 0;
+    try {
+      const stat = fs.statSync(file);
+      at = stat.mtime.toISOString();
+      bytes = stat.size;
+    } catch {
+      /* файл исчез между чтением списка и проверкой — покажем только имя */
+    }
+    return { file, at, bytes, stamp: Number(name.slice(0, -4)) };
+  });
+}
+
+/* Перед записью кладём прежний текст в историю. Возвращаем число версий, чтобы
+   окно правки могло показать «есть прошлая версия» и предложить возврат. */
+function editHistoryPush(projectId, relPath, text) {
+  if (typeof text !== 'string') return editHistoryList(projectId, relPath).length;
+  const dir = editHistoryDir(projectId, relPath);
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, `${Date.now()}.txt`);
+    atomicWrite(file, text);
+    const all = editHistoryList(projectId, relPath);
+    for (const item of all.slice(EDIT_HISTORY_KEEP)) {
+      try {
+        fs.unlinkSync(item.file);
+      } catch {
+        /* уже удалён — не мешает */
+      }
+    }
+    return Math.min(all.length, EDIT_HISTORY_KEEP);
+  } catch {
+    /* История — удобство, а не условие сохранения: не смогли записать
+       копию — сохраняем сам файл, человеку об этом молчать незачем. */
+    return 0;
+  }
+}
 
 const SECURITY_HEADERS = {
   'X-Content-Type-Options': 'nosniff',
@@ -3273,6 +3403,14 @@ async function route(req, res) {
             modelTimeoutSeconds: Math.round(CAPACITY.modelTimeoutMs / 1000),
             maxRssMb: CAPACITY.maxRssMb,
             rssMb: memoryStats().rssMb,
+            maxWaitingRuns: CAPACITY.maxWaiting,
+            /* Что дал тариф: по этим числам видно, честно ли выставлены пределы.
+               Вне Linux-контейнера не читается — тогда null, а не выдумка. */
+            containerMemoryMb: (() => {
+              const plan = planLimits();
+              return plan.memoryBytes ? Math.round(plan.memoryBytes / MB) : null;
+            })(),
+            containerCpuCores: planLimits().cpuCores,
           },
         },
       });
@@ -3591,6 +3729,9 @@ async function route(req, res) {
       }
       if (parts.length === 3 && method === 'DELETE') {
         store.deleteProject(project.id);
+        /* Вместе с проектом убираем историю правок: иначе в /data оставались бы
+           тексты удалённых файлов, которых человек больше не увидит. */
+        fs.rm(path.join(DATA_DIR, 'file-edits', project.id), { recursive: true, force: true }, () => {});
         return sendJson(res, 200, { ok: true });
       }
       if (parts[3] === 'chats' && parts.length === 4 && method === 'GET') {
@@ -3609,6 +3750,221 @@ async function route(req, res) {
           return sendJson(res, 200, { path: rel, items });
         } catch (error) {
           return sendError(res, 400, error.message);
+        }
+      }
+      /* Дизайн-проект: спек и листы. Раньше на просьбу «сделай дизайн» агент
+         отвечал «Готово.» с пустой папкой — у него нет оболочки, чтобы запустить
+         генераторы навыка, и не было инструмента, который делает это за него.
+         Теперь листы собирает сервис, а человек может поправить спек и
+         пересобрать их сам, без модели и без ожидания. */
+      if (parts[3] === 'design' && parts.length === 4 && method === 'GET') {
+        try {
+          return sendJson(res, 200, { ok: true, design: designView(workspace) });
+        } catch (error) {
+          return sendError(res, 400, error.message);
+        }
+      }
+      if (parts[3] === 'design' && parts.length === 4 && method === 'POST') {
+        const body = await readJsonBody(req);
+        const started = Date.now();
+        const messages = [];
+        try {
+          if (body.spec && typeof body.spec === 'object') {
+            /* Правка может быть частичной: «поставь потолок 3050» не должна стирать
+               комнаты, мебель и проёмы. Если в присланном спеке нет комнат, а в
+               проекте дизайн уже есть — накладываем правку на сохранённый спек. */
+            let incoming = body.spec;
+            const saved = incoming.rooms ? null : readDesignSpec(workspace);
+            if (saved?.spec?.rooms?.length) {
+              incoming = {
+                ...saved.spec,
+                ...incoming,
+                heights: { ...(saved.spec.heights || {}), ...(incoming.heights || {}) },
+              };
+              messages.push('правка наложена на сохранённый спек');
+            }
+            const written = writeDesignSpec(workspace, incoming);
+            messages.push(...written.fixes);
+          }
+          const only = Array.isArray(body.only) ? body.only.map((key) => String(key)) : null;
+          const results = await buildDesignArtifacts(workspace, { only });
+          const failed = results.filter((item) => !item.ok);
+          if (!results.length) return sendError(res, 400, 'Нечего собирать: спек не передан и design.json в проекте нет.');
+          if (failed.length === results.length) {
+            return sendError(res, 400, `Листы не собрались: ${failed.map((item) => `${item.title} — ${item.error}`).join('; ')}`);
+          }
+          const view = designView(workspace);
+          return sendJson(res, 200, {
+            ok: true,
+            design: view,
+            results,
+            messages,
+            text: describeDesign(view, results),
+            ms: Date.now() - started,
+          });
+        } catch (error) {
+          return sendError(res, 400, error.message);
+        }
+      }
+      /* ------------------------ текст файла для редактора ------------------------
+         Две операции: прочитать текст и записать текст. Обе отдают то, что нужно
+         окну правки: язык подсветки, метку содержимого и число прошлых версий.
+         Файл, который редактор не берёт (картинка, документ, архив), отвечает не
+         ошибкой, а «editable: false» с причиной: окно показывает её человеческим
+         текстом и предлагает скачать файл, а не красную плашку сбоя. */
+      if (parts[3] === 'file-text' && parts.length === 4 && method === 'GET') {
+        const rel = (url.searchParams.get('path') || '').trim();
+        if (!rel) return sendError(res, 400, 'Не указан файл');
+        let full;
+        try {
+          full = resolveSafe(workspace, rel);
+        } catch (error) {
+          return sendError(res, 400, error.message);
+        }
+        if (!fs.existsSync(full)) return sendError(res, 404, 'Файл не найден — возможно, его удалили или переименовали');
+        const stat = fs.statSync(full);
+        if (!stat.isFile()) return sendError(res, 400, 'Это папка, а не файл');
+        const relPath = rel.replace(/\\/g, '/');
+        const base = {
+          ok: true,
+          path: relPath,
+          name: path.basename(full),
+          bytes: stat.size,
+          at: stat.mtime.toISOString(),
+          maxBytes: EDIT_MAX_BYTES,
+          kind: editTextKind(full),
+        };
+        const ext = path.extname(full).toLowerCase();
+        if (!EDIT_TEXT_EXT.has(ext)) {
+          return sendJson(res, 200, {
+            ...base,
+            editable: false,
+            reason: `Файлы ${ext || 'без расширения'} редактор не открывает — это не текст. Их правят программой на компьютере: скачайте файл, поправьте и загрузите обратно.`,
+          });
+        }
+        if (stat.size > EDIT_MAX_BYTES) {
+          return sendJson(res, 200, {
+            ...base,
+            editable: false,
+            reason: `Файл больше ${formatBytes(EDIT_MAX_BYTES)} — редактор столько не держит. Скачайте его и поправьте на компьютере.`,
+          });
+        }
+        const buf = fs.readFileSync(full);
+        if (looksBinary(buf)) {
+          return sendJson(res, 200, {
+            ...base,
+            editable: false,
+            reason: 'Внутри не текст, а двоичные данные. Такой файл правят программой, а не редактором.',
+          });
+        }
+        /* BOM снимаем: с ним JSON.parse в браузере падает на первом же символе,
+           и окно ругалось бы «не читается» на совершенно правильном файле. */
+        const text = buf.toString('utf8').replace(/^\uFEFF/, '');
+        const history = editHistoryList(project.id, relPath);
+        return sendJson(res, 200, {
+          ...base,
+          editable: true,
+          text,
+          hash: editTextHash(text),
+          history: { count: history.length, at: history[0] ? history[0].at : null },
+        });
+      }
+      if (parts[3] === 'file-text' && parts.length === 4 && method === 'POST') {
+        const body = await readJsonBody(req);
+        const rel = String(body.path || '').trim();
+        if (!rel) return sendError(res, 400, 'Не указан файл');
+        let full;
+        try {
+          full = resolveSafe(workspace, rel);
+        } catch (error) {
+          return sendError(res, 400, error.message);
+        }
+        const relPath = rel.replace(/\\/g, '/');
+        const ext = path.extname(full).toLowerCase();
+        if (!EDIT_TEXT_EXT.has(ext)) {
+          return sendError(res, 415, `Файлы ${ext || 'без расширения'} редактор не сохраняет — это не текст.`);
+        }
+        const wantsRestore = body.restore === true;
+        let text = typeof body.text === 'string' ? body.text : null;
+        let restoredFrom = null;
+        if (wantsRestore) {
+          const history = editHistoryList(project.id, relPath);
+          if (!history.length) return sendError(res, 404, 'Прошлых версий пока нет: файл ещё не правили в редакторе.');
+          try {
+            text = fs.readFileSync(history[0].file, 'utf8');
+          } catch (error) {
+            return sendError(res, 500, `Прошлую версию не прочитать: ${error.message}`);
+          }
+          restoredFrom = history[0].at;
+        }
+        if (text === null) return sendError(res, 400, 'Текст правки не передан');
+        const bytes = Buffer.byteLength(text, 'utf8');
+        if (bytes > EDIT_MAX_BYTES) {
+          return sendError(
+            res,
+            413,
+            `Файл получится ${formatBytes(bytes)} — больше ${formatBytes(EDIT_MAX_BYTES)} редактор не сохраняет. Разделите его на части или правьте на компьютере.`,
+          );
+        }
+        let previous = null;
+        if (fs.existsSync(full)) {
+          const stat = fs.statSync(full);
+          if (!stat.isFile()) return sendError(res, 400, 'Это папка, а не файл');
+          if (stat.size <= EDIT_MAX_BYTES) {
+            const buf = fs.readFileSync(full);
+            if (!looksBinary(buf)) previous = buf.toString('utf8').replace(/^\uFEFF/, '');
+          }
+          /* Чужую правку не затираем молча: пока человек печатал, файл мог
+             переписать ассистент, навык или другое окно. Номер версии пришёл из
+             окна правки; не совпал — просим решение у человека. Возврат прошлой
+             версии и «сохранить поверх» проверку осознанно обходят: там человек
+             уже выбрал сторону. */
+          if (!wantsRestore && !body.force && previous !== null && body.hash && editTextHash(previous) !== String(body.hash)) {
+            return sendJson(res, 409, {
+              ok: false,
+              code: 'stale',
+              error: 'Файл изменился, пока вы его правили: его переписал ассистент или другое окно. Обновите текст или сохраните свою версию поверх.',
+              bytes: stat.size,
+              hash: editTextHash(previous),
+            });
+          }
+        }
+        try {
+          const versions = editHistoryPush(project.id, relPath, previous);
+          atomicWrite(full, text);
+          /* design.json — единственный файл, после которого нужно что-то ещё:
+             листы собраны из него, и человек правил его как раз ради листов. */
+          const designed = relPath === 'design.json';
+          let design = null;
+          let results = null;
+          let rebuildError = null;
+          if (designed) {
+            try {
+              results = await buildDesignArtifacts(workspace);
+              design = designView(workspace);
+            } catch (error) {
+              rebuildError = error.message;
+            }
+          }
+          const failed = (results || []).filter((item) => !item.ok);
+          let note = 'Файл сохранён.';
+          if (failed.length) note = `Файл сохранён, но не всё собралось: ${failed.map((item) => `${item.title} — ${item.error}`).join('; ')}`;
+          else if (designed && results) note = `Спек сохранён, листы пересобраны: ${results.length} из ${results.length}.`;
+          else if (designed && rebuildError) note = `Спек сохранён, но листы не пересобрались: ${rebuildError}`;
+          return sendJson(res, 200, {
+            ok: true,
+            path: relPath,
+            bytes,
+            hash: editTextHash(text),
+            at: new Date().toISOString(),
+            history: { count: versions, restoredFrom },
+            design,
+            results,
+            rebuildError,
+            text: note,
+          });
+        } catch (error) {
+          return sendError(res, 500, `Файл не сохранился: ${error.message}`);
         }
       }
       if (parts[3] === 'preview' && method === 'GET') {
@@ -4592,6 +4948,28 @@ server.listen(PORT, HOST, () => {
   console.log(`  Режим:  ${TRUST_PROXY ? 'за прокси (облако)' : 'локальный'}`);
   console.log(`  Дашборд: ${process.env.DSHOW_DASHBOARD === '0' ? 'выключен' : 'постоянные задания включены'}`);
   console.log(`  Автопродолжение: ${CAPACITY.autoResume ? 'включено' : 'выключено (DSHOW_AUTO_RESUME=0)'}`);
+  /* Тариф и пределы — одной строкой: сразу видно, честно ли они выставлены.
+     На ноутбуке cgroup нет, поэтому часть чисел будет «?». */
+  {
+    const plan = planLimits();
+    const planMb = plan.memoryBytes ? Math.round(plan.memoryBytes / MB) : null;
+    console.log(
+      `  Тариф:  ${planMb ? `${planMb} МБ ОЗУ` : '?'}, ${plan.cpuCores ? `${plan.cpuCores} ядра` : '?'} · ` +
+        `прогонов ${CAPACITY.maxRuns}, очередь ${CAPACITY.maxWaiting}, потолок памяти ${CAPACITY.maxRssMb} МБ`,
+    );
+    if (planMb && CAPACITY.maxRssMb > planMb) {
+      console.warn(
+        `[capacity] потолок памяти ${CAPACITY.maxRssMb} МБ выше ОЗУ тарифа (${planMb} МБ) — ` +
+          'тормоз не сработает раньше OOM-убийцы, поднимите тариф или задайте DSHOW_MAX_RSS_MB',
+      );
+    }
+    if (planMb && planMb <= 600 && CAPACITY.maxRuns > 8) {
+      console.warn(
+        `[capacity] тариф ${planMb} МБ ОЗУ держит не больше 8–12 живых ответов с инструментами; ` +
+          `прогонов разрешено ${CAPACITY.maxRuns} — лишние упрутся в потолок памяти и получат 503`,
+      );
+    }
+  }
   console.log('');
   /* Задачи, прерванные перезапуском, продолжаются сами — без входа человека.
      Небольшая задержка даёт серверу принять первые запросы, а нам — не

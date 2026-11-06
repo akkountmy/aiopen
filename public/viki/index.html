@@ -1,0 +1,734 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Вика Хамицевич — психолог, транзактный анализ | Онлайн и офлайн</title>
+<meta name="description" content="Психолог-консультант в модальности транзактного анализа. Отношения с собой и другими, кризисы, самооценка, поиск себя. Онлайн и офлайн. Запись — в Telegram.">
+<link rel="canonical" href="https://dshopen-vladimir00177.msk1.amvera.tech/viki/">
+<meta name="theme-color" content="#0A2126">
+<meta property="og:type" content="website">
+<meta property="og:locale" content="ru_RU">
+<meta property="og:site_name" content="Вика Хамицевич">
+<meta property="og:title" content="Не переделывать себя. Возвращать себе себя.">
+<meta property="og:description" content="Психолог в модальности транзактного анализа. Работаю с отношениями, кризисами и поиском себя — бережно и в вашем темпе.">
+<meta property="og:url" content="https://dshopen-vladimir00177.msk1.amvera.tech/viki/">
+<meta property="og:image" content="https://dshopen-vladimir00177.msk1.amvera.tech/viki/og.jpg">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Вика Хамицевич — психолог, транзактный анализ">
+<meta name="twitter:description" content="Пространство, где можно быть собой — в отношениях с собой, близкими и делом.">
+<meta name="twitter:image" content="https://dshopen-vladimir00177.msk1.amvera.tech/viki/og.jpg">
+<link rel="icon" href="favicon.png" type="image/png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="preload" href="fonts/cormorant-normal-cyrillic.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="fonts/manrope-cyrillic.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="assets/hero-800.webp" as="image" media="(max-width: 980px)">
+<link rel="stylesheet" href="fonts.css">
+<style>
+/* ---------- tokens ---------- */
+:root{
+  --ink:#0A2126;
+  --ink-2:#0D2A30;
+  --sea:#1D5B5F;
+  --mist:#9FCFC8;
+  --salt:#F2ECDF;
+  --paper:#F8F4EC;
+  --sand:#E7DBCA;
+  --copper:#C08355;
+  --copper-soft:#D9A87F;
+  --muted:#5B6966;
+  --line:rgba(10,33,38,.14);
+  --line-soft:rgba(10,33,38,.08);
+  --line-light:rgba(242,236,223,.16);
+  --max:1280px;
+  --gutter:clamp(22px,4.4vw,72px);
+  --serif:"Cormorant Garamond",Georgia,"Times New Roman",serif;
+  --sans:"Manrope",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;
+  --ease:cubic-bezier(.22,.61,.36,1);
+}
+*,*::before,*::after{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%;scroll-behavior:smooth;scroll-padding-top:96px}
+body{
+  margin:0;background:var(--paper);color:var(--ink);
+  font-family:var(--sans);font-weight:400;font-size:16px;line-height:1.7;
+  -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;
+  overflow-x:hidden;
+}
+::selection{background:var(--copper);color:#fff}
+img{max-width:100%;display:block}
+a{color:inherit;text-decoration:none}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+h1,h2,h3,p,figure,blockquote{margin:0}
+ul,ol{margin:0;padding:0;list-style:none}
+:focus-visible{outline:2px solid var(--copper);outline-offset:4px;border-radius:2px}
+.skip{position:absolute;left:-9999px;top:12px;z-index:200;background:var(--salt);color:var(--ink);padding:12px 18px;border-radius:999px;font-size:14px}
+.skip:focus{left:16px}
+.container{width:min(var(--max),calc(100% - var(--gutter)*2));margin-inline:auto}
+.grain{
+  position:fixed;inset:0;z-index:90;pointer-events:none;opacity:.035;mix-blend-mode:multiply;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)' opacity='.55'/%3E%3C/svg%3E");
+}
+/* ---------- type ---------- */
+.display{font-family:var(--serif);font-weight:500;line-height:.98;letter-spacing:-.015em}
+.eyebrow{
+  font-family:var(--sans);font-size:11px;font-weight:600;letter-spacing:.22em;
+  text-transform:uppercase;display:flex;align-items:center;gap:14px;
+}
+.eyebrow::before{content:"";width:38px;height:1px;background:currentColor;opacity:.5}
+.section{padding:clamp(76px,9vw,140px) 0;position:relative}
+.section--paper{background:var(--paper)}
+.section--sand{background:var(--sand)}
+.section--ink{background:var(--ink);color:var(--salt)}
+.sec-head{display:grid;grid-template-columns:repeat(12,1fr);gap:24px;align-items:end;margin-bottom:clamp(44px,5vw,72px)}
+.sec-head__label{grid-column:1/-1;display:flex;align-items:center;gap:18px;color:var(--muted);margin-bottom:clamp(20px,2.5vw,34px)}
+.sec-head__num{font-family:var(--serif);font-style:italic;font-size:20px;color:var(--copper);letter-spacing:.04em}
+.sec-head__name{font-size:11px;font-weight:600;letter-spacing:.22em;text-transform:uppercase}
+.sec-head__rule{flex:1;height:1px;background:var(--line)}
+.sec-head h2{grid-column:1/span 7;font-family:var(--serif);font-weight:500;font-size:clamp(38px,5.2vw,70px);line-height:1.02;letter-spacing:-.015em}
+.sec-head__intro{grid-column:9/span 4;color:var(--muted);font-size:15.5px;line-height:1.75;padding-bottom:6px}
+.section--ink .sec-head__label{color:rgba(242,236,223,.6)}
+.section--ink .sec-head__rule{background:var(--line-light)}
+.section--ink .sec-head__intro{color:rgba(242,236,223,.72)}
+/* ---------- reveal ---------- */
+.reveal{opacity:0;transform:translateY(26px);transition:opacity .9s var(--ease),transform .9s var(--ease);transition-delay:var(--d,0ms)}
+.reveal.in{opacity:1;transform:none}
+@media (prefers-reduced-motion:reduce){
+  html{scroll-behavior:auto}
+  .reveal{opacity:1;transform:none;transition:none}
+  *{animation-duration:.001ms !important;animation-iteration-count:1 !important;transition-duration:.001ms !important}
+}
+/* ---------- header ---------- */
+.header{position:fixed;top:0;left:0;right:0;z-index:100;color:var(--salt);transition:color .35s var(--ease),background-color .35s var(--ease),box-shadow .35s var(--ease),padding .35s var(--ease);padding:clamp(18px,2vw,28px) 0}
+.header::before{content:"";position:absolute;inset:0;z-index:-1;pointer-events:none;background:linear-gradient(180deg,rgba(7,26,30,.52),rgba(7,26,30,0));transition:opacity .35s ease}
+.header.is-solid::before{opacity:0}
+.header__in{display:flex;align-items:center;justify-content:space-between;gap:24px}
+.brand{display:flex;align-items:center;gap:13px;min-width:0}
+.brand img{width:42px;height:42px;border-radius:50%;object-fit:cover;border:1px solid rgba(242,236,223,.35);transition:border-color .35s ease}
+.brand__text{display:flex;flex-direction:column;line-height:1.25;min-width:0}
+.brand__text strong{font-family:var(--serif);font-size:20px;font-weight:600;letter-spacing:.01em;white-space:nowrap}
+.brand__text small{font-size:9.5px;letter-spacing:.16em;text-transform:uppercase;opacity:.62;white-space:nowrap}
+.nav{display:flex;gap:clamp(18px,2.4vw,38px);font-size:12.5px;letter-spacing:.06em}
+.nav a{position:relative;padding:6px 0;opacity:.78;transition:opacity .25s ease}
+.nav a::after{content:"";position:absolute;left:0;right:0;bottom:0;height:1px;background:currentColor;transform:scaleX(0);transform-origin:left;transition:transform .35s var(--ease)}
+.nav a:hover,.nav a.is-active{opacity:1}
+.nav a:hover::after,.nav a.is-active::after{transform:scaleX(1)}
+.header__cta{display:inline-flex;align-items:center;gap:10px;border:1px solid rgba(242,236,223,.35);background:rgba(7,26,30,.42);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);border-radius:999px;padding:12px 20px;font-size:12px;font-weight:500;letter-spacing:.04em;white-space:nowrap;transition:background-color .3s ease,color .3s ease,border-color .3s ease}
+.header__cta svg{width:13px;height:13px;transition:transform .3s var(--ease)}
+.header__cta:hover{background:var(--salt);color:var(--ink);border-color:var(--salt)}
+.header__cta:hover svg{transform:translate(2px,-2px)}
+.header.is-solid{background:rgba(248,244,236,.92);color:var(--ink);box-shadow:0 1px 0 var(--line-soft),0 18px 40px -32px rgba(10,33,38,.5);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);padding:12px 0}
+.header.is-solid .brand img{border-color:var(--line)}
+.header.is-solid .header__cta{border-color:var(--line);background:transparent;backdrop-filter:none;-webkit-backdrop-filter:none}
+.header.is-solid .header__cta:hover{background:var(--ink);color:var(--salt);border-color:var(--ink)}
+/* ---------- hero ---------- */
+.hero{position:relative;display:grid;grid-template-columns:minmax(0,1.04fr) minmax(0,.96fr);min-height:100svh;background:var(--ink);color:var(--salt);overflow:hidden}
+.hero::before{content:"";position:absolute;inset:0;background:radial-gradient(80% 70% at 12% 62%,rgba(29,91,95,.42),transparent 68%);pointer-events:none;z-index:1}
+.hero::after{content:"";position:absolute;inset:0;z-index:2;pointer-events:none;background:linear-gradient(90deg,var(--ink) 0%,rgba(10,33,38,.94) 42%,rgba(10,33,38,.55) 54%,rgba(10,33,38,.12) 65%,rgba(10,33,38,0) 74%)}
+.hero__content{position:relative;z-index:3;display:flex;flex-direction:column;justify-content:center;padding:150px clamp(24px,3vw,48px) 64px max(var(--gutter),calc((100vw - var(--max))/2))}
+.hero__eyebrow{color:var(--mist);margin-bottom:30px}
+.hero h1{font-family:var(--serif);font-weight:500;font-size:clamp(42px,5vw,72px);line-height:1.01;letter-spacing:-.018em}
+.hero h1 em{display:block;font-style:italic;color:var(--mist)}
+.hero-br{display:none}
+@media (min-width:1201px){.hero-br{display:inline}}
+.hero__lead{margin-top:30px;max-width:44ch;font-size:clamp(15px,1.25vw,17px);line-height:1.75;color:rgba(242,236,223,.74);font-weight:300}
+.hero__actions{display:flex;flex-wrap:wrap;align-items:center;gap:14px;margin-top:38px}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:12px;min-height:54px;padding:0 28px;border-radius:999px;font-family:var(--sans);font-size:13px;font-weight:500;letter-spacing:.03em;transition:transform .35s var(--ease),background-color .35s ease,color .35s ease,box-shadow .35s ease,border-color .35s ease}
+.btn svg{width:14px;height:14px;flex:none;transition:transform .35s var(--ease)}
+.btn:hover svg{transform:translate(3px,-3px)}
+.btn--light{background:var(--salt);color:var(--ink)}
+.btn--light:hover{background:#fff;transform:translateY(-2px);box-shadow:0 16px 34px -20px rgba(0,0,0,.65)}
+.btn--ghost{border:1px solid rgba(242,236,223,.28);color:var(--salt)}
+.btn--ghost:hover{background:rgba(242,236,223,.08);border-color:rgba(242,236,223,.55);transform:translateY(-2px)}
+.hero__meta{display:flex;flex-wrap:wrap;align-items:center;gap:10px 18px;margin-top:36px;font-size:10.5px;letter-spacing:.16em;text-transform:uppercase;color:rgba(242,236,223,.55)}
+.hero__meta li{display:flex;align-items:center;gap:18px}
+.hero__meta li+li::before{content:"";width:3px;height:3px;border-radius:50%;background:var(--copper-soft);opacity:.85}
+.hero__sign{margin-top:auto;padding-top:54px;display:flex;align-items:center;gap:14px;font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:rgba(242,236,223,.5)}
+.hero__sign i{display:block;width:44px;height:1px;background:rgba(242,236,223,.28)}
+.hero__sign b{font-weight:500;color:rgba(242,236,223,.78)}
+.hero__media{position:relative;min-height:100svh;overflow:hidden;-webkit-mask-image:linear-gradient(90deg,transparent 0,#000 14%);mask-image:linear-gradient(90deg,transparent 0,#000 14%)}
+.hero__media picture,.hero__media img{position:absolute;inset:0;width:100%;height:100%}
+.hero__media img{object-fit:cover;object-position:50% 42%;will-change:transform}
+.hero__media::before{content:"";position:absolute;inset:0;z-index:1;background:linear-gradient(90deg,var(--ink) 0%,rgba(10,33,38,.55) 12%,rgba(10,33,38,0) 46%),linear-gradient(0deg,rgba(7,26,30,.86) 0%,rgba(7,26,30,0) 42%)}
+.hero__tag{position:absolute;z-index:4;left:34px;bottom:30px;display:inline-flex;align-items:center;gap:9px;font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:rgba(242,236,223,.78);padding:8px 0;border-bottom:1px solid rgba(242,236,223,.28);transition:color .3s ease,border-color .3s ease}
+.hero__tag:hover{color:var(--salt);border-color:var(--copper-soft)}
+.hero__tag svg{width:12px;height:12px}
+.hero__rail{position:absolute;z-index:3;left:26px;top:50%;transform:translateY(-50%);display:flex;flex-direction:column;align-items:center;gap:16px;font-size:9px;letter-spacing:.28em;text-transform:uppercase;color:rgba(242,236,223,.4);writing-mode:vertical-rl}
+.hero__rail i{display:block;width:1px;height:58px;background:rgba(242,236,223,.22)}
+@media (min-width:1600px){.hero__rail{display:none}}
+/* ---------- ticker ---------- */
+.ticker{background:var(--sand);color:var(--ink);border-top:1px solid rgba(10,33,38,.08);border-bottom:1px solid rgba(10,33,38,.08);overflow:hidden;padding:18px 0}
+.ticker__track{display:flex;width:max-content;animation:ticker 48s linear infinite}
+.ticker:hover .ticker__track{animation-play-state:paused}
+.ticker__group{display:flex;align-items:center;gap:34px;padding-right:34px}
+.ticker span{font-family:var(--serif);font-style:italic;font-size:clamp(20px,2vw,28px);white-space:nowrap;color:rgba(10,33,38,.72)}
+.ticker i{width:5px;height:5px;border-radius:50%;background:var(--copper);flex:none}
+@keyframes ticker{from{transform:translateX(0)}to{transform:translateX(-50%)}}
+/* ---------- requests ---------- */
+.req-grid{display:grid;grid-template-columns:repeat(3,1fr);border-top:1px solid var(--line);border-left:1px solid var(--line)}
+.req{position:relative;padding:clamp(26px,3vw,42px);border-right:1px solid var(--line);border-bottom:1px solid var(--line);transition:background-color .4s var(--ease)}
+.req::after{content:"";position:absolute;left:0;top:-1px;width:0;height:2px;background:var(--copper);transition:width .5s var(--ease)}
+.req:hover{background:rgba(255,255,255,.5)}
+.req:hover::after{width:100%}
+.req__top{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:clamp(34px,4vw,58px)}
+.req__ico{width:34px;height:34px;color:var(--sea);stroke-width:1.2;transition:color .35s ease,transform .5s var(--ease)}
+.req:hover .req__ico{color:var(--copper);transform:translateY(-3px)}
+.req__n{font-family:var(--serif);font-style:italic;font-size:15px;color:var(--copper);letter-spacing:.06em}
+.req h3{font-family:var(--serif);font-weight:600;font-size:clamp(23px,2vw,28px);line-height:1.12;letter-spacing:-.005em;margin-bottom:12px;max-width:15ch}
+.req p{font-size:14px;line-height:1.72;color:var(--muted);max-width:30ch}
+.req-note{display:flex;gap:16px;align-items:flex-start;margin-top:34px;padding:20px 24px;border-left:2px solid var(--copper);background:rgba(192,131,85,.07);font-size:13.5px;line-height:1.7;color:var(--muted);max-width:900px}
+.req-note strong{color:var(--ink);font-weight:600}
+/* ---------- approach ---------- */
+.approach{position:relative;overflow:hidden;background:var(--ink);color:var(--salt)}
+.approach::before{content:"";position:absolute;width:60vw;height:60vw;right:-24vw;top:-24vw;border-radius:50%;background:radial-gradient(circle,rgba(29,91,95,.38),transparent 65%);pointer-events:none}
+.approach .sec-head{position:relative;z-index:1}
+.approach__grid{display:grid;grid-template-columns:minmax(0,.86fr) minmax(0,1.14fr);gap:clamp(36px,6vw,96px);align-items:start;position:relative;z-index:1}
+.approach__figure{position:relative;margin:0;overflow:hidden;border-radius:2px}
+.approach__figure img{width:100%;height:100%;aspect-ratio:4/5;object-fit:cover;filter:saturate(.78) contrast(1.03);transition:transform 1.2s var(--ease)}
+.approach__figure:hover img{transform:scale(1.035)}
+.approach__figure::after{content:"";position:absolute;inset:0;background:linear-gradient(0deg,rgba(7,26,30,.68),transparent 46%);pointer-events:none}
+.approach__cap{position:absolute;z-index:2;left:24px;right:24px;bottom:22px;display:flex;justify-content:space-between;gap:14px;font-size:9.5px;letter-spacing:.18em;text-transform:uppercase;color:rgba(242,236,223,.62)}
+.principles{counter-reset:p}
+.principle{display:grid;grid-template-columns:52px 1fr;gap:clamp(14px,2vw,30px);padding:clamp(24px,3vw,34px) 0;border-top:1px solid var(--line-light)}
+.principle:last-child{border-bottom:1px solid var(--line-light)}
+.principle__n{font-family:var(--serif);font-style:italic;font-size:17px;color:var(--copper-soft);letter-spacing:.05em;padding-top:4px}
+.principle h3{font-family:var(--serif);font-weight:500;font-size:clamp(24px,2.4vw,32px);line-height:1.15;margin-bottom:10px;letter-spacing:-.005em}
+.principle p{font-size:14.5px;line-height:1.75;color:rgba(242,236,223,.66);max-width:48ch}
+.approach__quote{margin:clamp(56px,7vw,96px) 0 0;padding:clamp(30px,4vw,52px) 0 0;border-top:1px solid var(--line-light);display:grid;grid-template-columns:repeat(12,1fr);gap:24px;position:relative;z-index:1}
+.quote__mark{grid-column:1/span 1;font-family:var(--serif);font-size:80px;line-height:.6;color:var(--copper-soft);opacity:.8}
+.approach blockquote{grid-column:2/span 8;font-family:var(--serif);font-style:italic;font-weight:500;font-size:clamp(26px,3.3vw,44px);line-height:1.22;letter-spacing:-.01em}
+.approach blockquote span{color:var(--mist)}
+.approach__by{grid-column:2/span 8;display:flex;align-items:center;gap:14px;margin-top:6px;font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:rgba(242,236,223,.55)}
+.approach__by a{border-bottom:1px solid rgba(242,236,223,.25);padding-bottom:3px;transition:color .3s ease,border-color .3s ease}
+.approach__by a:hover{color:var(--salt);border-color:var(--copper-soft)}
+/* ---------- steps ---------- */
+.steps{display:grid;grid-template-columns:repeat(3,1fr);gap:clamp(20px,3.4vw,54px);counter-reset:s}
+.step{position:relative;padding-top:26px;border-top:1px solid var(--line)}
+.step::before{content:"";position:absolute;left:0;top:-1px;width:34px;height:2px;background:var(--copper)}
+.step__n{font-family:var(--serif);font-style:italic;font-size:clamp(40px,4vw,58px);line-height:1;color:rgba(10,33,38,.16);letter-spacing:-.02em}
+.step h3{font-family:var(--serif);font-weight:600;font-size:clamp(22px,2vw,27px);line-height:1.2;margin:16px 0 10px}
+.step p{font-size:14px;line-height:1.72;color:var(--muted);max-width:34ch}
+.step__foot{margin-top:clamp(36px,4vw,54px);display:flex;align-items:center;gap:18px;font-family:var(--serif);font-style:italic;font-size:clamp(19px,2vw,24px);color:var(--muted);max-width:860px}
+.step__foot::before{content:"";width:42px;height:1px;background:var(--copper);flex:none}
+/* ---------- about ---------- */
+.about{display:grid;grid-template-columns:repeat(12,1fr);gap:24px;align-items:start}
+.about__side{grid-column:1/span 4;position:sticky;top:120px}
+.about__avatar{width:86px;height:86px;border-radius:50%;object-fit:cover;margin-bottom:22px;border:1px solid rgba(10,33,38,.16)}
+.about__side h2{font-family:var(--serif);font-weight:500;font-size:clamp(34px,3.6vw,48px);line-height:1.02;letter-spacing:-.01em}
+.about__role{margin-top:12px;font-size:10.5px;letter-spacing:.18em;text-transform:uppercase;color:var(--muted)}
+.about__links{margin-top:28px;display:flex;flex-direction:column;gap:10px;align-items:flex-start}
+.about__links a{display:inline-flex;align-items:center;gap:8px;font-size:12.5px;border-bottom:1px solid var(--line);padding-bottom:4px;transition:border-color .3s ease,color .3s ease}
+.about__links a:hover{color:var(--sea);border-color:var(--sea)}
+.about__links svg{width:11px;height:11px}
+.about__body{grid-column:6/span 7}
+.about__body p{font-size:clamp(15px,1.3vw,17px);line-height:1.8;color:#35433F;margin-bottom:18px}
+.about__body p strong{font-weight:600;color:var(--ink)}
+.about__quote{margin:30px 0 36px;padding:26px 0 26px 28px;border-left:2px solid var(--copper);font-family:var(--serif);font-style:italic;font-size:clamp(21px,2.2vw,27px);line-height:1.4;color:var(--ink)}
+.about__quote span{display:block;margin-top:12px;font-family:var(--sans);font-style:normal;font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:var(--muted)}
+.edu{list-style:none;border-top:1px solid var(--line)}
+.edu li{display:grid;grid-template-columns:30px 1fr auto;gap:16px;align-items:baseline;padding:16px 0;border-bottom:1px solid var(--line)}
+.edu__i{font-family:var(--serif);font-style:italic;font-size:13px;color:var(--copper)}
+.edu__t{font-size:14.5px;line-height:1.55;color:#35433F}
+.edu__s{font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);white-space:nowrap}
+/* ---------- faq ---------- */
+.faq{display:grid;grid-template-columns:repeat(12,1fr);gap:24px;align-items:start}
+.faq__head{grid-column:1/span 4;position:sticky;top:120px}
+.faq__head h2{font-family:var(--serif);font-weight:500;font-size:clamp(34px,4vw,52px);line-height:1.05;letter-spacing:-.01em;margin-bottom:22px}
+.faq__head p{font-size:14.5px;color:var(--muted);line-height:1.75;max-width:30ch}
+.faq__head a{display:inline-flex;align-items:center;gap:8px;margin-top:20px;font-size:12.5px;border-bottom:1px solid var(--line);padding-bottom:4px}
+.faq__head a:hover{color:var(--sea);border-color:var(--sea)}
+.faq__list{grid-column:6/span 7;border-top:1px solid var(--line)}
+.faq details{border-bottom:1px solid var(--line)}
+.faq summary{list-style:none;cursor:pointer;display:flex;align-items:flex-start;justify-content:space-between;gap:24px;padding:24px 0;font-family:var(--serif);font-weight:600;font-size:clamp(19px,1.8vw,23px);line-height:1.3;transition:color .3s ease}
+.faq summary::-webkit-details-marker{display:none}
+.faq summary:hover{color:var(--sea)}
+.faq__plus{position:relative;width:18px;height:18px;flex:none;margin-top:3px}
+.faq__plus::before,.faq__plus::after{content:"";position:absolute;background:currentColor;transition:transform .35s var(--ease),opacity .35s ease}
+.faq__plus::before{left:0;top:8.5px;width:18px;height:1px}
+.faq__plus::after{left:8.5px;top:0;width:1px;height:18px}
+.faq details[open] .faq__plus::after{transform:scaleY(0);opacity:0}
+.faq details[open] summary{color:var(--ink)}
+.faq__a{padding:0 42px 26px 0;font-size:14.5px;line-height:1.8;color:var(--muted);max-width:62ch}
+.faq__a a{border-bottom:1px solid var(--line);color:var(--ink)}
+/* ---------- cta ---------- */
+.cta{position:relative;background:var(--ink);color:var(--salt);overflow:hidden;padding:clamp(88px,11vw,160px) 0}
+.cta__bg{position:absolute;inset:0;opacity:.66}
+.cta__bg img{width:100%;height:100%;object-fit:cover;object-position:58% 50%;filter:saturate(.72) brightness(.9)}
+.cta::after{content:"";position:absolute;inset:0;background:linear-gradient(90deg,rgba(7,26,30,.97) 0%,rgba(7,26,30,.7) 42%,rgba(7,26,30,.38) 64%,rgba(7,26,30,.75) 100%),radial-gradient(60% 80% at 70% 20%,rgba(29,91,95,.4),transparent 70%);pointer-events:none}
+.cta__in{position:relative;z-index:2;display:grid;grid-template-columns:repeat(12,1fr);gap:24px;align-items:end}
+.cta__label{grid-column:1/-1;color:var(--mist);margin-bottom:clamp(22px,3vw,38px)}
+.cta h2{grid-column:1/span 8;font-family:var(--serif);font-weight:500;font-size:clamp(44px,6.4vw,88px);line-height:.98;letter-spacing:-.018em}
+.cta h2 em{font-style:italic;color:var(--mist)}
+.cta__p{grid-column:1/span 5;margin-top:24px;font-size:15px;line-height:1.75;color:rgba(242,236,223,.7);max-width:42ch}
+.cta__actions{grid-column:1/-1;display:flex;flex-wrap:wrap;align-items:center;gap:16px 28px;margin-top:34px}
+.cta__actions .btn{min-height:60px;padding:0 34px;font-size:13.5px}
+.cta__handle{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:rgba(242,236,223,.5)}
+.cta__channel{display:inline-flex;align-items:center;gap:7px;font-size:12px;border-bottom:1px solid rgba(242,236,223,.3);padding-bottom:3px;margin-left:auto;transition:border-color .3s ease,color .3s ease}
+.cta__channel:hover{color:var(--salt);border-color:var(--copper-soft)}
+.cta__channel svg{width:11px;height:11px}
+.cta__note{grid-column:1/-1;margin-top:28px;font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:rgba(242,236,223,.38)}
+/* ---------- footer ---------- */
+.footer{background:var(--paper);padding:clamp(48px,5vw,72px) 0 34px;border-top:1px solid var(--line)}
+.footer__top{display:grid;grid-template-columns:repeat(12,1fr);gap:24px;align-items:start;padding-bottom:40px}
+.footer__brand{grid-column:1/span 5}
+.footer__brand .brand{color:var(--ink)}
+.footer__brand p{margin-top:16px;font-size:13px;line-height:1.7;color:var(--muted);max-width:36ch}
+.footer__nav{grid-column:7/span 3;display:flex;flex-direction:column;gap:9px;font-size:13px;color:var(--muted)}
+.footer__nav a:hover{color:var(--ink)}
+.footer__contact{grid-column:10/span 3;display:flex;flex-direction:column;gap:9px;font-size:13px}
+.footer__contact a{display:inline-flex;align-items:center;gap:6px;width:fit-content;border-bottom:1px solid var(--line);padding-bottom:2px}
+.footer__contact a:hover{color:var(--sea);border-color:var(--sea)}
+.footer__contact svg{width:10px;height:10px}
+.footer__bottom{display:flex;flex-wrap:wrap;justify-content:space-between;gap:12px 24px;padding-top:22px;border-top:1px solid var(--line-soft);font-size:10.5px;line-height:1.6;color:rgba(91,105,102,.9)}
+.footer__bottom p{max-width:72ch}
+.footer__credit a{border-bottom:1px solid var(--line);transition:color .3s ease}
+.footer__credit a:hover{color:var(--ink)}
+/* ---------- floating mobile cta ---------- */
+.mob-cta{position:fixed;left:14px;right:14px;bottom:14px;z-index:95;display:none;opacity:0;transform:translateY(120%);transition:opacity .4s ease,transform .5s var(--ease)}
+.mob-cta.in{opacity:1;transform:none}
+.mob-cta a{display:flex;align-items:center;justify-content:center;gap:10px;min-height:54px;border-radius:999px;background:var(--salt);color:var(--ink);font-size:13px;font-weight:600;letter-spacing:.02em;box-shadow:0 18px 40px -16px rgba(0,0,0,.5)}
+.mob-cta svg{width:14px;height:14px}
+/* ---------- responsive ---------- */
+@media (max-width:1200px){
+  .hero__rail{display:none}
+  .hero__content{padding-right:36px}
+}
+@media (max-width:980px){
+  .hero{grid-template-columns:1fr;min-height:100svh}
+  .hero::after{display:none}
+  .hero__media{position:absolute;inset:0;min-height:100%;-webkit-mask-image:none;mask-image:none}
+  .hero__media img{object-position:52% 30%}
+  .hero__media::before{background:linear-gradient(180deg,rgba(7,26,30,.58) 0%,rgba(7,26,30,.22) 22%,rgba(7,26,30,.6) 42%,rgba(7,26,30,.88) 72%,rgba(7,26,30,.98) 100%),linear-gradient(90deg,rgba(7,26,30,.5),transparent 70%)}
+  .hero__content{min-height:100svh;justify-content:flex-end;padding:150px var(--gutter) 88px;max-width:none}
+  .hero h1{max-width:none;font-size:clamp(36px,9vw,64px)}
+  .hero__lead{max-width:46ch}
+  .hero__sign{display:none}
+  .hero__tag{left:auto;right:var(--gutter);bottom:24px}
+  .sec-head h2{grid-column:1/-1}
+  .sec-head__intro{grid-column:1/span 8;margin-top:4px}
+  .approach__grid{grid-template-columns:1fr;gap:44px}
+  .approach__figure{max-width:560px}
+  .approach__figure img{aspect-ratio:16/11}
+  .about{grid-template-columns:1fr;gap:44px}
+  .about__side{position:static;grid-column:1/-1;display:grid;grid-template-columns:86px 1fr;column-gap:22px;align-items:center}
+  .about__avatar{grid-row:1/span 3;margin:0}
+  .about__role{margin-top:6px}
+  .about__links{grid-column:2;flex-direction:row;flex-wrap:wrap;gap:18px;margin-top:14px}
+  .about__body{grid-column:1/-1}
+  .faq{grid-template-columns:1fr;gap:36px}
+  .faq__head{position:static;grid-column:1/-1}
+  .faq__list{grid-column:1/-1}
+  .req-grid{grid-template-columns:repeat(2,1fr)}
+  .steps{grid-template-columns:1fr;gap:34px}
+  .step p{max-width:52ch}
+}
+@media (max-width:760px){
+  .nav{display:none}
+  .header__cta{padding:11px 17px;font-size:11px}
+  .brand img{width:38px;height:38px}
+  .brand__text strong{font-size:18px}
+  .brand__text small{display:none}
+  .sec-head{grid-template-columns:1fr;gap:18px}
+  .sec-head__intro{grid-column:1/-1;max-width:52ch}
+  .approach__quote{display:block}
+  .quote__mark{font-size:64px;margin-bottom:14px}
+  .approach blockquote{font-size:clamp(24px,5.4vw,32px)}
+  .about__side{grid-template-columns:64px 1fr;column-gap:16px}
+  .about__avatar{width:64px;height:64px}
+  .about__links{grid-column:1/-1;margin-top:16px}
+  .edu li{grid-template-columns:22px 1fr;gap:12px}
+  .edu__s{grid-column:2;margin-top:-6px}
+  .cta__in{display:block}
+  .cta h2{max-width:none}
+  .cta__actions{margin-top:28px;flex-direction:column;align-items:flex-start}
+  .cta__channel{margin-left:0}
+  .footer__top{grid-template-columns:1fr 1fr;gap:30px}
+  .footer__brand{grid-column:1/-1}
+  .footer__nav,.footer__contact{grid-column:auto}
+  .mob-cta{display:block}
+  .ticker{padding:14px 0}
+  .req-grid{border-left:0}
+  .req{border-left:1px solid var(--line)}
+}
+@media (max-width:480px){
+  :root{--gutter:20px}
+  .hero__content{padding-top:132px;padding-bottom:76px}
+  .hero__lead{font-size:14.5px;margin-top:22px}
+  .hero__actions{flex-direction:column;align-items:stretch;gap:10px;margin-top:28px}
+  .hero__actions .btn{width:100%}
+  .hero__meta{font-size:9.5px;gap:8px 12px;margin-top:26px}
+  .hero__meta li{gap:12px}
+  .hero__meta li+li::before{display:none}
+  .hero__tag{display:none}
+  .req-grid{grid-template-columns:1fr}
+  .req{padding:24px 20px}
+  .req__top{margin-bottom:26px}
+  .req h3{max-width:none}
+  .req p{max-width:none}
+  .req-note{padding:16px 18px}
+  .sec-head h2{font-size:clamp(34px,9vw,44px)}
+  .cta__actions .btn{width:100%}
+  .footer__top{grid-template-columns:1fr}
+  .footer__bottom{flex-direction:column}
+}
+@media (prefers-reduced-motion:reduce){
+  .ticker__track{animation:none}
+}
+</style>
+<noscript><style>.reveal{opacity:1!important;transform:none!important}</style></noscript>
+</head>
+<body>
+<a class="skip" href="#main">К содержанию</a>
+<div class="grain" aria-hidden="true"></div>
+
+<header class="header" id="header">
+  <div class="container header__in">
+    <a class="brand" href="#top" aria-label="Вика Хамицевич — на главную">
+      <img src="assets/avatar.jpg" alt="" width="42" height="42">
+      <span class="brand__text">
+        <strong>Вика Хамицевич</strong>
+        <small>психолог · транзактный анализ</small>
+      </span>
+    </a>
+    <nav class="nav" aria-label="Разделы страницы">
+      <a href="#requests">Запросы</a>
+      <a href="#approach">Подход</a>
+      <a href="#about">Обо мне</a>
+      <a href="#faq">Вопросы</a>
+    </nav>
+    <a class="header__cta" href="https://t.me/vika_khamitsevich" target="_blank" rel="noopener">
+      Записаться
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M7 17 17 7M9 7h8v8"/></svg>
+    </a>
+  </div>
+</header>
+
+<main id="main">
+  <section class="hero" id="top">
+    <div class="hero__content">
+      <p class="eyebrow hero__eyebrow reveal">психолог · транзактный анализ</p>
+      <h1 class="reveal" style="--d:80ms">Не переделывать<br class="hero-br"> себя.<em>Возвращать себе себя.</em></h1>
+      <p class="hero__lead reveal" style="--d:160ms">Психологическая работа о том, как быть в отношениях — с собой, близкими и делом — не теряя себя. Бережно, честно и в вашем темпе.</p>
+      <div class="hero__actions reveal" style="--d:240ms">
+        <a class="btn btn--light" href="https://t.me/vika_khamitsevich" target="_blank" rel="noopener">
+          Записаться на встречу
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M7 17 17 7M9 7h8v8"/></svg>
+        </a>
+        <a class="btn btn--ghost" href="https://t.me/vikiwhales" target="_blank" rel="noopener">
+          Заметки психолога
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M7 17 17 7M9 7h8v8"/></svg>
+        </a>
+      </div>
+      <ul class="hero__meta reveal" style="--d:320ms">
+        <li>онлайн и офлайн</li>
+        <li>взрослые</li>
+        <li>кабинет в центре города</li>
+      </ul>
+      <div class="hero__sign reveal" style="--d:380ms"><i></i> <b>Вика Хамицевич</b> · психолог-консультант</div>
+    </div>
+    <div class="hero__media">
+      <picture>
+        <source media="(max-width: 980px)" srcset="assets/hero-800.webp" type="image/webp">
+        <img src="assets/hero-1400.webp" alt="Горбатый кит в глубине океана поднимается к свету" width="1400" height="2098" fetchpriority="high">
+      </picture>
+      <a class="hero__tag" href="https://t.me/vikiwhales" target="_blank" rel="noopener">
+        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M21.9 4.3 18.7 19c-.2 1-.9 1.3-1.8.8l-4.9-3.6-2.3 2.2c-.3.3-.5.5-1 .5l.3-4.9L17 6.2c.4-.3-.1-.5-.6-.2L6.5 12.7l-4.7-1.5c-1-.3-1-1 .2-1.5L19.8 2.6c.9-.3 1.7.2 1.4 1.7z"/></svg>
+        викиныкиты · заметки психолога
+      </a>
+    </div>
+    <div class="hero__rail" aria-hidden="true"><span>психолог</span><i></i><span>контакт</span></div>
+  </section>
+
+  <div class="ticker" aria-hidden="true">
+    <div class="ticker__track">
+      <div class="ticker__group">
+        <span>отношения</span><i></i><span>идентичность</span><i></i><span>кризисы</span><i></i><span>опоры</span><i></i><span>реализация</span><i></i><span>границы</span><i></i><span>контакт</span><i></i><span>смысл</span><i></i>
+      </div>
+      <div class="ticker__group">
+        <span>отношения</span><i></i><span>идентичность</span><i></i><span>кризисы</span><i></i><span>опоры</span><i></i><span>реализация</span><i></i><span>границы</span><i></i><span>контакт</span><i></i><span>смысл</span><i></i>
+      </div>
+    </div>
+  </div>
+
+  <section class="section section--paper" id="requests">
+    <div class="container">
+      <div class="sec-head">
+        <div class="sec-head__label"><span class="sec-head__num">01</span><span class="sec-head__name">Запросы</span><span class="sec-head__rule"></span></div>
+        <h2 class="reveal">С чем приходят</h2>
+        <p class="sec-head__intro reveal" style="--d:100ms">Чаще всего — с тем, что «вроде всё нормально», но внутри давно не нормально. Ниже — темы, с которыми я работаю. Если вашей нет в списке, напишите: честно скажу, смогу ли помочь.</p>
+      </div>
+
+      <div class="req-grid">
+        <article class="req reveal">
+          <div class="req__top">
+            <svg class="req__ico" viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="1.2" aria-hidden="true"><path d="M16 27s-10-6.1-10-13a5.6 5.6 0 0 1 10-3.4A5.6 5.6 0 0 1 26 14c0 6.9-10 13-10 13Z"/><path d="M11.5 15.2c1.8.5 3.4-.3 4.5-2.2 1.1 1.9 2.7 2.7 4.5 2.2"/></svg>
+            <span class="req__n">01</span>
+          </div>
+          <h3>Отношения с собой и другими</h3>
+          <p>Семья, дружба, партнёрство. Повторяющиеся ссоры, обиды, ощущение «я больше не могу так».</p>
+        </article>
+        <article class="req reveal" style="--d:60ms">
+          <div class="req__top">
+            <svg class="req__ico" viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="1.2" aria-hidden="true"><circle cx="16" cy="16" r="10"/><path d="m20.5 11.5-3 6-6 3 3-6 6-3Z"/></svg>
+            <span class="req__n">02</span>
+          </div>
+          <h3>Кризисы и потеря ориентиров</h3>
+          <p>Когда привычное перестало работать, а новое ещё не появилось. И непонятно, куда двигаться.</p>
+        </article>
+        <article class="req reveal" style="--d:120ms">
+          <div class="req__top">
+            <svg class="req__ico" viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="1.2" aria-hidden="true"><path d="M16 4c-4.4 0-8 3.4-8 7.7 0 5.6 8 16.3 8 16.3s8-10.7 8-16.3C24 7.4 20.4 4 16 4Z"/><circle cx="16" cy="12" r="2.6"/></svg>
+            <span class="req__n">03</span>
+          </div>
+          <h3>Поиск идентичности</h3>
+          <p>«Кто я, чего хочу, что моё?» — в профессии, в отношениях, в жизни. Без готовых ответов.</p>
+        </article>
+        <article class="req reveal" style="--d:180ms">
+          <div class="req__top">
+            <svg class="req__ico" viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="1.2" aria-hidden="true"><path d="M16 27V14"/><path d="M16 19c-4 0-7-2.4-7-6 4 0 7 2.4 7 6Zm0-5c4 0 7-2.4 7-6-4 0-7 2.4-7 6Z"/><path d="M11 27h10"/></svg>
+            <span class="req__n">04</span>
+          </div>
+          <h3>Самооценка и внутренние опоры</h3>
+          <p>Когда внутри звучит чужой голос, а собственный — теряется. И хочется наконец на себя опереться.</p>
+        </article>
+        <article class="req reveal" style="--d:240ms">
+          <div class="req__top">
+            <svg class="req__ico" viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="1.2" aria-hidden="true"><rect x="5" y="10" width="22" height="15" rx="1.5"/><path d="M11 10V7.5A1.5 1.5 0 0 1 12.5 6h7A1.5 1.5 0 0 1 21 7.5V10M5 16h22"/></svg>
+            <span class="req__n">05</span>
+          </div>
+          <h3>Реализация и деловые отношения</h3>
+          <p>Границы, договорённости, страх проявляться, выгорание. Когда дело есть, а радости от него — нет.</p>
+        </article>
+        <article class="req reveal" style="--d:300ms">
+          <div class="req__top">
+            <svg class="req__ico" viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="1.2" aria-hidden="true"><path d="M6 20c2.5 3.4 6 5.2 10 5.2s7.5-1.8 10-5.2"/><path d="M10 13.5c0-4 2.5-7 6-7s6 3 6 7"/><path d="M13 14.5v1.8m6-1.8v1.8"/></svg>
+            <span class="req__n">06</span>
+          </div>
+          <h3>Поддержка в трудный период</h3>
+          <p>Когда нужен рядом человек, который выдержит, не обесценит и не станет учить жить.</p>
+        </article>
+      </div>
+
+      <p class="req-note reveal">
+        <span><strong>С чем я не работаю:</strong> несовершеннолетние, РПП, установленные расстройства психики. В этих случаях лучше обратиться к профильному специалисту — это честнее, чем тянуть.</span>
+      </p>
+    </div>
+  </section>
+
+  <section class="section section--ink approach" id="approach">
+    <div class="container">
+      <div class="sec-head">
+        <div class="sec-head__label"><span class="sec-head__num">02</span><span class="sec-head__name">Подход</span><span class="sec-head__rule"></span></div>
+        <h2 class="reveal">Контакт важнее техники</h2>
+        <p class="sec-head__intro reveal" style="--d:100ms">Я работаю в транзактном анализе и учусь интегративной психотерапии, сфокусированной на отношениях. Для меня терапия — не «найти дефект и вырезать».</p>
+      </div>
+
+      <div class="approach__grid">
+        <figure class="approach__figure reveal">
+          <img src="assets/band-1600.webp" alt="Кит в толще воды, освещённый лучами сверху" width="1600" height="1066" loading="lazy">
+          <figcaption class="approach__cap"><span>глубина</span><span>честность</span><span>контакт</span></figcaption>
+        </figure>
+
+        <div class="principles">
+          <article class="principle reveal">
+            <span class="principle__n">01</span>
+            <div><h3>Безопасность — не бонус, а условие</h3><p>Пока нет ощущения, что вас не обесценят, любые слова остаются словами. Поэтому мы идём в вашем темпе — не быстрее, чем можно.</p></div>
+          </article>
+          <article class="principle reveal" style="--d:80ms">
+            <span class="principle__n">02</span>
+            <div><h3>Не «убрать плохое», а вырастить опору</h3><p>То, что сейчас мешает, когда-то помогало выживать. Мы не вырываем страховку — мы постепенно меняем почву под ногами.</p></div>
+          </article>
+          <article class="principle reveal" style="--d:160ms">
+            <span class="principle__n">03</span>
+            <div><h3>Смотреть на отношения, а не на симптом</h3><p>Повторяющийся сценарий виден в контакте: с собой, с близкими, со мной. Там же он и меняется.</p></div>
+          </article>
+        </div>
+      </div>
+
+      <div class="approach__quote reveal">
+        <div class="quote__mark" aria-hidden="true">“</div>
+        <blockquote>Близкий контакт — это всегда риск. <span>Часто первый безопасный контакт у человека бывает именно с психологом.</span></blockquote>
+        <div class="approach__by"><span>Вика</span><i style="width:26px;height:1px;background:rgba(242,236,223,.25);display:block"></i><a href="https://t.me/vikiwhales" target="_blank" rel="noopener">канал «викиныкиты» ↗</a></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section section--paper" id="how">
+    <div class="container">
+      <div class="sec-head">
+        <div class="sec-head__label"><span class="sec-head__num">03</span><span class="sec-head__name">Формат</span><span class="sec-head__rule"></span></div>
+        <h2 class="reveal">Как это устроено</h2>
+        <p class="sec-head__intro reveal" style="--d:100ms">Без анкет на десять страниц и «правильных» формулировок. Достаточно сделать первый шаг — остальное разберём вместе.</p>
+      </div>
+
+      <div class="steps">
+        <article class="step reveal">
+          <div class="step__n">01</div>
+          <h3>Напишите в Telegram</h3>
+          <p>Коротко: что происходит и чего хочется. Можно в двух словах — я задам остальные вопросы.</p>
+        </article>
+        <article class="step reveal" style="--d:90ms">
+          <div class="step__n">02</div>
+          <h3>Договоримся о встрече</h3>
+          <p>Обсудим формат, время и стоимость. Онлайн — из любой точки. Офлайн — кабинет в центре города, адрес пришлю при записи.</p>
+        </article>
+        <article class="step reveal" style="--d:180ms">
+          <div class="step__n">03</div>
+          <h3>Начнём разбираться</h3>
+          <p>Регулярные встречи в вашем ритме. Не «лечить» и не «исправлять» — понимать и постепенно менять.</p>
+        </article>
+      </div>
+
+      <p class="step__foot reveal">Первая встреча — не экзамен. Можно прийти с тем, что пока не складывается в слова.</p>
+    </div>
+  </section>
+
+  <section class="section section--sand" id="about">
+    <div class="container">
+      <div class="sec-head">
+        <div class="sec-head__label"><span class="sec-head__num">04</span><span class="sec-head__name">Обо мне</span><span class="sec-head__rule"></span></div>
+      </div>
+
+      <div class="about">
+        <aside class="about__side reveal">
+          <img class="about__avatar" src="assets/avatar.jpg" alt="Фотография канала «викиныкиты»: два кита в воде" width="86" height="86">
+          <h2>Вика<br>Хамицевич</h2>
+          <p class="about__role">психолог-консультант<br>транзактный анализ</p>
+          <div class="about__links">
+            <a href="https://t.me/vika_khamitsevich" target="_blank" rel="noopener">Написать в Telegram <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M7 17 17 7M9 7h8v8"/></svg></a>
+            <a href="https://t.me/vikiwhales" target="_blank" rel="noopener">Канал «викиныкиты» <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M7 17 17 7M9 7h8v8"/></svg></a>
+          </div>
+        </aside>
+
+        <div class="about__body">
+          <p class="reveal">Меня зовут Вика. Я психолог-консультант в модальности транзактного анализа. <strong>По первому образованию — врач:</strong> привыкла смотреть на человека целиком, а не на отдельный симптом.</p>
+          <p class="reveal" style="--d:80ms">Сейчас параллельно изучаю интегративную психотерапию, сфокусированную на отношениях и возрастном развитии, и прохожу трёхгодичную углублённую программу по транзактному анализу (202) в Московском институте психоанализа — у психиатра-нарколога Дмитрия Ивановича Шустова.</p>
+          <p class="reveal" style="--d:160ms">Моя цель в профессии — международная сертификация в Европейской ассоциации транзактного анализа. Не для статуса, а чтобы работать на уровне, за который не стыдно.</p>
+
+          <blockquote class="about__quote reveal">Мне важно, чтобы в кабинете — и онлайн, и офлайн — можно было быть настоящим. Даже если «настоящий» сейчас устал, злится или не знает, чего хочет.<span>Вика · из канала «викиныкиты»</span></blockquote>
+
+          <ul class="edu reveal">
+            <li><span class="edu__i">01</span><span class="edu__t">Московский институт психоанализа — программа «202» по транзактному анализу, 3 года</span><span class="edu__s">сейчас</span></li>
+            <li><span class="edu__i">02</span><span class="edu__t">Интегративная психотерапия, сфокусированная на отношениях и возрастном развитии</span><span class="edu__s">сейчас</span></li>
+            <li><span class="edu__i">03</span><span class="edu__t">Первое образование — врач</span><span class="edu__s">база</span></li>
+            <li><span class="edu__i">04</span><span class="edu__t">Профессиональная цель — сертификация EATA</span><span class="edu__s">цель</span></li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section section--paper" id="faq">
+    <div class="container">
+      <div class="faq">
+        <div class="faq__head">
+          <div class="sec-head__label" style="margin-bottom:20px"><span class="sec-head__num">05</span><span class="sec-head__name">Вопросы</span></div>
+          <h2 class="reveal">Вопросы, которые задают чаще всего</h2>
+          <p class="reveal">Если своего вопроса не нашли — просто напишите. Отвечаю лично.</p>
+          <a class="reveal" href="https://t.me/vika_khamitsevich" target="_blank" rel="noopener">Задать вопрос в Telegram ↗</a>
+        </div>
+
+        <div class="faq__list reveal">
+          <details open>
+            <summary><span>С чего начать, если я никогда не был(а) у психолога?</span><span class="faq__plus" aria-hidden="true"></span></summary>
+            <div class="faq__a">Просто напишите мне в Telegram. Расскажите в двух-трёх предложениях, что происходит. Дальше я задам несколько вопросов и предложу время. Никаких обязательств до первой встречи.</div>
+          </details>
+          <details>
+            <summary><span>Онлайн или офлайн?</span><span class="faq__plus" aria-hidden="true"></span></summary>
+            <div class="faq__a">И так, и так. Онлайн — из любой точки, нужен только тихий уголок и стабильный интернет. Офлайн — кабинет в центре города; точный адрес пришлю при записи.</div>
+          </details>
+          <details>
+            <summary><span>Сколько длится встреча и сколько стоит?</span><span class="faq__plus" aria-hidden="true"></span></summary>
+            <div class="faq__a">Длительность, стоимость и регулярность мы обсуждаем до первой встречи — чтобы у вас не было сюрпризов. Напишите, и я пришлю актуальные условия.</div>
+          </details>
+          <details>
+            <summary><span>Это конфиденциально?</span><span class="faq__plus" aria-hidden="true"></span></summary>
+            <div class="faq__a">Да. Всё, что происходит на встречах, остаётся между нами. Исключения — только те, что предусмотрены законом и профессиональной этикой; о них я говорю заранее.</div>
+          </details>
+          <details>
+            <summary><span>Чем транзактный анализ отличается от «обычной» терапии?</span><span class="faq__plus" aria-hidden="true"></span></summary>
+            <div class="faq__a">ТА — это не только «Родитель, Взрослый, Ребёнок». Это способ увидеть, как в вашей жизни повторяются одни и те же сценарии, откуда они взялись и как их можно изменить. Мы работаем не с ярлыками, а с конкретными отношениями и решениями.</div>
+          </details>
+          <details>
+            <summary><span>Вы работаете с детьми и подростками?</span><span class="faq__plus" aria-hidden="true"></span></summary>
+            <div class="faq__a">Нет. Я работаю со взрослыми и не беру в работу несовершеннолетних, РПП и установленные расстройства психики. Если ваш запрос из этой области, я подскажу, к кому обратиться.</div>
+          </details>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="cta" id="contact">
+    <div class="cta__bg" aria-hidden="true"><img src="assets/band-1600.webp" alt="" loading="lazy"></div>
+    <div class="container cta__in">
+      <div class="eyebrow cta__label">06 · начать</div>
+      <h2 class="reveal">Первый шаг —<br><em>просто написать.</em></h2>
+      <p class="cta__p reveal" style="--d:100ms">Не нужно готовиться и знать, «как правильно». Напишите пару слов о том, что происходит, — я задам остальные вопросы.</p>
+      <div class="cta__actions reveal" style="--d:180ms">
+        <a class="btn btn--light" href="https://t.me/vika_khamitsevich" target="_blank" rel="noopener">
+          Написать Вике
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M7 17 17 7M9 7h8v8"/></svg>
+        </a>
+        <span class="cta__handle">@vika_khamitsevich</span>
+        <a class="cta__channel" href="https://t.me/vikiwhales" target="_blank" rel="noopener">Читать канал «викиныкиты» <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M7 17 17 7M9 7h8v8"/></svg></a>
+      </div>
+      <p class="cta__note">Онлайн · офлайн · взрослые</p>
+    </div>
+  </section>
+</main>
+
+<footer class="footer">
+  <div class="container">
+    <div class="footer__top">
+      <div class="footer__brand">
+        <a class="brand" href="#top">
+          <img src="assets/avatar.jpg" alt="" width="42" height="42">
+          <span class="brand__text"><strong>Вика Хамицевич</strong><small>психолог · транзактный анализ</small></span>
+        </a>
+        <p>Психолог-консультант. Работаю с отношениями, кризисами и поиском себя — онлайн и в кабинете в центре города.</p>
+      </div>
+      <nav class="footer__nav" aria-label="Навигация в подвале">
+        <a href="#requests">Запросы</a>
+        <a href="#approach">Подход</a>
+        <a href="#about">Обо мне</a>
+        <a href="#faq">Вопросы</a>
+      </nav>
+      <div class="footer__contact">
+        <a href="https://t.me/vika_khamitsevich" target="_blank" rel="noopener">Telegram · запись <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M7 17 17 7M9 7h8v8"/></svg></a>
+        <a href="https://t.me/vikiwhales" target="_blank" rel="noopener">Канал «викиныкиты» <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M7 17 17 7M9 7h8v8"/></svg></a>
+      </div>
+    </div>
+    <div class="footer__bottom">
+      <p>© 2026 Вика Хамицевич. Психологическая консультация не заменяет медицинскую помощь, диагностику и лечение.</p>
+      <p class="footer__credit">Фото: <a href="https://commons.wikimedia.org/wiki/File:HIHWNMS_Humpback_Whale_Underwater_(49530678743).jpg" target="_blank" rel="noopener">Ed Lyman / NOAA</a>, <a href="https://commons.wikimedia.org/wiki/File:Humpback_whale_by_Christopher_Michel.jpg" target="_blank" rel="noopener">Christopher Michel</a> · CC BY 2.0</p>
+    </div>
+  </div>
+</footer>
+
+<div class="mob-cta" id="mobCta">
+  <a href="https://t.me/vika_khamitsevich" target="_blank" rel="noopener">
+    Записаться на встречу
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M7 17 17 7M9 7h8v8"/></svg>
+  </a>
+</div>
+
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "Person",
+  "name": "Вика Хамицевич",
+  "alternateName": "Viktoryia Khamitsevich",
+  "jobTitle": "Психолог-консультант, транзактный анализ",
+  "description": "Психолог-консультант в модальности транзактного анализа. Работа с отношениями, кризисами, самооценкой и поиском идентичности. Онлайн и офлайн.",
+  "url": "https://dshopen-vladimir00177.msk1.amvera.tech/viki/",
+  "image": "https://dshopen-vladimir00177.msk1.amvera.tech/viki/og.jpg",
+  "sameAs": ["https://t.me/vika_khamitsevich", "https://t.me/vikiwhales"],
+  "knowsAbout": ["транзактный анализ", "интегративная психотерапия", "отношения", "самооценка", "кризисы", "идентичность"],
+  "worksFor": {"@type": "Organization", "name": "Частная практика"}
+}
+</script>
+
+<script src="app.js" defer></script>
+</body>
+</html>

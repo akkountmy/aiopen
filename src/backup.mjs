@@ -13,8 +13,15 @@
  * одной копии, начиная с самых свежих.
  */
 import fs from 'node:fs';
+import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { CHATS_DIR, DATA_DIR, WORKSPACES_DIR } from './config.mjs';
+
+/** Отдать очередь событий: следующая порция работы стартует после того, как
+ *  сервис успел ответить на запросы, ждущие в цикле событий. */
+function breathe() {
+  return new Promise((resolve) => setImmediate(resolve));
+}
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 export const BACKUP_DEFAULTS = {
@@ -84,17 +91,24 @@ export function listBackups({ keep = BACKUP_DEFAULTS.keep, maxBytes = BACKUP_DEF
   }
   return names.map((id) => {
     const dir = path.join(backupsDir(), id);
-    const size = dirSize(dir);
     let manifest = null;
     try {
       manifest = JSON.parse(fs.readFileSync(path.join(dir, 'manifest.json'), 'utf8'));
     } catch {
       manifest = null;
     }
+    /* Объём и число файлов берём из манифеста: обход всей копии ради цифры в
+       списке держал очередь событий секундами (на живом сервисе это видели как
+       «очередь событий стояла 3395 мс»). Обход остаётся только там, где
+       манифеста нет — например, копия от старой версии. */
+    const counted =
+      manifest && Number.isFinite(manifest.bytes)
+        ? { total: manifest.bytes, count: (manifest.files || 0) + (manifest.chats || 0) }
+        : dirSize(dir);
     return {
       id,
-      bytes: size.total,
-      files: size.count,
+      bytes: counted.total,
+      files: counted.count,
       createdAt: manifest?.createdAt || null,
       chats: manifest?.chats || 0,
       workspaces: manifest?.workspaces || 0,
@@ -104,7 +118,7 @@ export function listBackups({ keep = BACKUP_DEFAULTS.keep, maxBytes = BACKUP_DEF
 }
 
 /** Удаляет лишние копии: сначала по количеству, затем по суммарному объёму. */
-export function rotateBackups({ keep = BACKUP_DEFAULTS.keep, maxBytes = BACKUP_DEFAULTS.maxBytes, minKeep = BACKUP_DEFAULTS.minKeep } = {}) {
+export async function rotateBackups({ keep = BACKUP_DEFAULTS.keep, maxBytes = BACKUP_DEFAULTS.maxBytes, minKeep = BACKUP_DEFAULTS.minKeep } = {}) {
   const items = listBackups();
   const removed = [];
   let total = items.reduce((sum, item) => sum + item.bytes, 0);
@@ -115,51 +129,62 @@ export function rotateBackups({ keep = BACKUP_DEFAULTS.keep, maxBytes = BACKUP_D
     const tooHeavy = maxBytes > 0 && total > maxBytes;
     if ((!tooMany && !tooHeavy) || left <= minKeep) continue;
     try {
-      fs.rmSync(path.join(backupsDir(), item.id), { recursive: true, force: true });
+      /* Удаление старой копии — тоже работа на живом сервисе: сотни мегабайт
+         не должны держать очередь событий. */
+      await fsp.rm(path.join(backupsDir(), item.id), { recursive: true, force: true });
       total -= item.bytes;
       removed.push(item.id);
     } catch {
       /* не смогли удалить — попробуем в следующий раз */
     }
+    await breathe();
   }
   return removed;
 }
 
 /** Все файлы папки рекурсивно, свежие сверху: при жёстком бюджете успевает главное. */
-function listAllFiles(dir, rel = '', depth = 0) {
+async function listAllFiles(dir, rel = '', depth = 0) {
   const out = [];
   if (depth > 12) return out;
   let entries = [];
   try {
-    entries = fs.readdirSync(dir, { withFileTypes: true });
+    entries = await fsp.readdir(dir, { withFileTypes: true });
   } catch {
     return out;
   }
+  let sinceYield = 0;
   for (const entry of entries) {
     const name = rel ? `${rel}/${entry.name}` : entry.name;
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) {
-      out.push(...listAllFiles(full, name, depth + 1));
+      out.push(...(await listAllFiles(full, name, depth + 1)));
       continue;
     }
     try {
-      const stat = fs.statSync(full);
+      const stat = await fsp.stat(full);
       if (stat.isFile()) out.push({ rel: name, full, size: stat.size, mtime: stat.mtimeMs });
     } catch {
       /* файл исчез между листингом и копированием */
+    }
+    /* Обход дерева тоже отдаёт очередь: в проектах бывают тысячи файлов. */
+    sinceYield += 1;
+    if (sinceYield >= 100) {
+      sinceYield = 0;
+      await breathe();
     }
   }
   return out;
 }
 
 /** Копирует файлы проектов в копию, пока влезают в бюджет. Возвращает счётчики. */
-function copyWorkspaces(staging, budget) {
+async function copyWorkspaces(staging, budget, yieldEvery = 20) {
   const from = workspacesDir();
-  const files = listAllFiles(from).sort((a, b) => b.mtime - a.mtime);
+  const files = (await listAllFiles(from)).sort((a, b) => b.mtime - a.mtime);
   let copied = 0;
   let skipped = 0;
   let bytes = 0;
   let workspaces = 0;
+  let sinceYield = 0;
   const seen = new Set();
   for (const file of files) {
     const project = file.rel.split('/')[0];
@@ -169,8 +194,8 @@ function copyWorkspaces(staging, budget) {
     }
     const target = path.join(staging, 'workspaces', file.rel);
     try {
-      fs.mkdirSync(path.dirname(target), { recursive: true });
-      fs.copyFileSync(file.full, target);
+      await fsp.mkdir(path.dirname(target), { recursive: true });
+      await fsp.copyFile(file.full, target);
     } catch {
       skipped += 1;
       continue;
@@ -181,6 +206,13 @@ function copyWorkspaces(staging, budget) {
       seen.add(project);
       workspaces += 1;
     }
+    /* Копия делается на живом сервисе: раз в двадцать файлов отдаём очередь
+       событий, иначе люди ждут ответа, пока копируются сотни мегабайт. */
+    sinceYield += 1;
+    if (sinceYield >= yieldEvery) {
+      sinceYield = 0;
+      await breathe();
+    }
   }
   return { workspaces, files: copied, bytes, skipped };
 }
@@ -189,42 +221,49 @@ function copyWorkspaces(staging, budget) {
  * Снимает копию состояния. Возвращает { id, dir, chats, workspaces, bytes }.
  * Повторный вызов в тот же день перезаписывает копию этого дня.
  */
-export function snapshotState({
+export async function snapshotState({
   now = new Date(),
   keep = BACKUP_DEFAULTS.keep,
   maxSnapshotBytes = BACKUP_DEFAULTS.maxSnapshotBytes,
 } = {}) {
   const id = dayStamp(now);
   const base = backupsDir();
-  fs.mkdirSync(base, { recursive: true });
+  await fsp.mkdir(base, { recursive: true });
   const target = path.join(base, id);
   const staging = path.join(base, `.tmp-${id}-${process.pid}`);
-  fs.rmSync(staging, { recursive: true, force: true });
-  fs.mkdirSync(path.join(staging, 'chats'), { recursive: true });
+  await fsp.rm(staging, { recursive: true, force: true });
+  await fsp.mkdir(path.join(staging, 'chats'), { recursive: true });
 
   let chats = 0;
   let bytes = 0;
   const indexFile = path.join(DATA_DIR, 'index.json');
   if (fs.existsSync(indexFile)) {
     const size = fs.statSync(indexFile).size;
-    fs.copyFileSync(indexFile, path.join(staging, 'index.json'));
+    await fsp.copyFile(indexFile, path.join(staging, 'index.json'));
     bytes += size;
   }
   let names = [];
   try {
-    names = fs.readdirSync(CHATS_DIR).filter((name) => name.endsWith('.json'));
+    names = await fsp.readdir(CHATS_DIR);
+    names = names.filter((name) => name.endsWith('.json'));
   } catch {
     names = [];
   }
+  let sinceYield = 0;
   for (const name of names) {
     const from = path.join(CHATS_DIR, name);
     try {
       const size = fs.statSync(from).size;
-      fs.copyFileSync(from, path.join(staging, 'chats', name));
+      await fsp.copyFile(from, path.join(staging, 'chats', name));
       bytes += size;
       chats += 1;
     } catch {
       /* файл диалога исчез между листингом и копированием */
+    }
+    sinceYield += 1;
+    if (sinceYield >= 20) {
+      sinceYield = 0;
+      await breathe();
     }
   }
   /* Файлы проектов идемпотентно: если бюджета не хватило, копия всё равно целая
@@ -234,8 +273,8 @@ export function snapshotState({
     maxSnapshotBytes === null || maxSnapshotBytes === undefined
       ? Number.POSITIVE_INFINITY
       : Math.max(0, maxSnapshotBytes - bytes);
-  const docs = copyWorkspaces(staging, limit);
-  fs.writeFileSync(
+  const docs = await copyWorkspaces(staging, limit);
+  await fsp.writeFile(
     path.join(staging, 'manifest.json'),
     JSON.stringify(
       {
@@ -252,9 +291,9 @@ export function snapshotState({
     ),
     'utf8',
   );
-  fs.rmSync(target, { recursive: true, force: true });
-  fs.renameSync(staging, target);
-  const removed = rotateBackups({ keep });
+  await fsp.rm(target, { recursive: true, force: true });
+  await fsp.rename(staging, target);
+  const removed = await rotateBackups({ keep });
   return {
     id,
     dir: path.relative(DATA_DIR, target),
@@ -278,9 +317,9 @@ export function startAutoBackup({
   keep = BACKUP_DEFAULTS.keep,
   maxSnapshotBytes = BACKUP_DEFAULTS.maxSnapshotBytes,
 } = {}) {
-  const run = (reason) => {
+  const run = async (reason) => {
     try {
-      const result = snapshotState({ keep, maxSnapshotBytes });
+      const result = await snapshotState({ keep, maxSnapshotBytes });
       console.log(
         `[backup] ${reason}: ${result.id}, диалогов ${result.chats}, проектов ${result.workspaces}, ` +
           `файлов ${result.files}, ${Math.round(result.bytes / 1024)} КБ` +
@@ -291,9 +330,9 @@ export function startAutoBackup({
       console.error('[backup]', error?.message || error);
     }
   };
-  const first = setTimeout(() => run('старт'), initialDelayMs);
+  const first = setTimeout(() => void run('старт'), initialDelayMs);
   first.unref?.();
-  const timer = setInterval(() => run('сутки'), intervalMs);
+  const timer = setInterval(() => void run('сутки'), intervalMs);
   timer.unref?.();
   return () => {
     clearTimeout(first);

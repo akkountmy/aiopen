@@ -97,15 +97,68 @@ export function getSkill(id) {
   return all.find((skill) => skill.id.toLowerCase() === wanted) || null;
 }
 
+/**
+ * Описание навыка одной строкой для каталога.
+ *
+ * Простое отрезание по 240 знаков срезало ровно то, по чему навык вызывается:
+ * слова-триггеры стоят в конце описания («Use when «дизайн интерьера», …»).
+ * Было: 34 триггера в 9 навыках не попадали в системное сообщение, и модель
+ * просто не знала, что навык просят такими словами. Поэтому хвост не
+ * выбрасываем, а сжимаем: основная фраза плюс триггеры в кавычках, пока
+ * влезают в предел.
+ */
+export function compactDescription(description, limit = 240) {
+  const text = String(description || '').replace(/\s+/g, ' ').trim();
+  if (!text) return '';
+  if (text.length <= limit) return text;
+  const triggers = [];
+  for (const match of text.matchAll(/«([^»]{2,60})»/g)) {
+    const trigger = match[1].trim();
+    if (trigger && !triggers.includes(trigger)) triggers.push(trigger);
+  }
+  /* Тема — до первого тире: «Проектирование интерьера квартиры или комнаты —
+     зонирование, …» даёт тему в 46 знаков, остальное место уходит триггерам.
+     Нет тире — берём первое предложение. */
+  const dash = text.indexOf(' — ');
+  let head = dash >= 25 ? text.slice(0, dash) : text.split(/(?<=[.!?])\s/)[0];
+  head = head.replace(/[\s;:,—–-]+$/, '').trim();
+  const headMax = Math.floor(limit * 0.55);
+  if (head.length > headMax) {
+    const cut = head.slice(0, headMax).lastIndexOf(' ');
+    head = (cut > 60 ? head.slice(0, cut) : head.slice(0, headMax)).trim();
+  }
+  /* Обрезка по границе слова оставляла хвост из служебного слова: «…, как».
+     Такую строку модель читает как незаконченную мысль — убираем. */
+  for (let step = 0; step < 4; step++) {
+    head = head.replace(/[\s,;:—–-]+$/, '');
+    const dangling = head.match(/(?:^|\s)(?:и|или|как|что|для|при|под|над|без|через|про|из|от|до|по|на|в|во|с|со|к|ко|о|об|а|но|это)$/i);
+    if (!dangling) break;
+    head = head.slice(0, head.length - dangling[0].length);
+  }
+  head = head.replace(/[\s,;:—–-]+$/, '').trim();
+  const extra = [];
+  let used = head.length + 3;
+  for (const trigger of triggers) {
+    if (head.includes(trigger)) continue;
+    const piece = `«${trigger}»`;
+    if (used + piece.length + 2 > limit) break;
+    extra.push(piece);
+    used += piece.length + 2;
+  }
+  if (!extra.length) return head;
+  return `${head} — ${extra.join(', ')}`;
+}
+
+/** Строки каталога: одна на навык. Отдельно от текста — для тестов и аудита. */
+export function catalogLines() {
+  return skills().map((skill) => `— ${skill.id}: ${compactDescription(skill.description)}`);
+}
+
 /** Каталог навыков для системного сообщения: одна строка на навык. */
 export function skillsPromptText() {
   const all = skills();
   if (!all.length) return '';
-  const lines = ['Доступные навыки (полную инструкцию открывает инструмент use_skill):'];
-  for (const skill of all) {
-    const description = String(skill.description || '').replace(/\s+/g, ' ').slice(0, 240);
-    lines.push(`— ${skill.id}: ${description}`);
-  }
+  const lines = ['Доступные навыки (полную инструкцию открывает инструмент use_skill):', ...catalogLines()];
   lines.push(
     'Перед ответственной работой по теме навыка (документ, таблица, презентация, PDF, сайт, анализ большого файла, аудит финансов, бизнес-план, ресёрч интернета) сначала вызови use_skill с его id и следуй инструкции.',
     'Структуру ответа в диалоге (разбор, сравнение, план, инструкция, риски) открывай по answer-structure, наглядность (таблица, матрица, таймлайн, воронка, чек-лист) — по answer-visuals.',

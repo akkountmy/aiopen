@@ -190,10 +190,18 @@ async function main() {
     'просьба из очереди видна в ленте',
     (await page.locator('.msg-queued').count()) + ' шт.',
   );
+  /* Просьбу не цитируем в шапке ответа: она стоит своим пузырём прямо над
+     ответом, а вторая копия текста только заставляла читать его дважды. Видно
+     должно быть именно то, что ответ идёт: индикатор и подпись шага. */
   check(
-    (await page.locator('.msg.streaming .msg-ask').first().textContent())?.includes('Первая задача'),
-    'в шапке ответа видно, на какой запрос он отвечает',
-    await page.locator('.msg-ask').first().textContent(),
+    (await page.locator('.msg-ask').count()) === 0,
+    'запрос не повторяется цитатой в шапке ответа',
+    (await page.locator('.msg.streaming').count()) + ' ответ в работе',
+  );
+  check(
+    (await page.locator('.msg.streaming .msg-head .work-label').first().textContent())?.trim().length > 0,
+    'в шапке идущего ответа видно, что ассистент работает',
+    await page.locator('.msg.streaming .msg-head .work-label').first().textContent(),
   );
 
   await page.click('.queue-edit');

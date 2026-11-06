@@ -40,9 +40,9 @@ function seed() {
   fs.writeFileSync(path.join(project, '.history', 'history-1.txt'), 'старый разговор', 'utf8');
 }
 
-test('копия включает индекс и все диалоги', () => {
+test('копия включает индекс и все диалоги', async () => {
   reset();
-  const result = snapshotState({ now: new Date('2026-10-20T03:00:00.000Z') });
+  const result = await snapshotState({ now: new Date('2026-10-20T03:00:00.000Z') });
   assert.equal(result.id, '2026-10-20');
   assert.equal(result.chats, 2);
   const dir = path.join(backupsDir(), result.id);
@@ -54,9 +54,9 @@ test('копия включает индекс и все диалоги', () => 
   assert.equal(manifest.index, true);
 });
 
-test('копия включает файлы проектов и срезы истории', () => {
+test('копия включает файлы проектов и срезы истории', async () => {
   reset();
-  const result = snapshotState({ now: new Date('2026-10-22T03:00:00.000Z') });
+  const result = await snapshotState({ now: new Date('2026-10-22T03:00:00.000Z') });
   const dir = path.join(backupsDir(), result.id);
   assert.equal(result.workspaces, 1, 'проект с файлами попал в копию');
   assert.ok(fs.existsSync(path.join(dir, 'workspaces', 'p1', 'Готовые документы', 'Отчёт.docx')));
@@ -66,28 +66,28 @@ test('копия включает файлы проектов и срезы ис
   assert.equal(manifest.skippedFiles, 0);
 });
 
-test('при тесном бюджете переписки копируются целиком, файлы — что влезло', () => {
+test('при тесном бюджете переписки копируются целиком, файлы — что влезло', async () => {
   reset();
-  const result = snapshotState({ now: new Date('2026-10-23T03:00:00.000Z'), maxSnapshotBytes: 0 });
+  const result = await snapshotState({ now: new Date('2026-10-23T03:00:00.000Z'), maxSnapshotBytes: 0 });
   assert.equal(result.chats, 2, 'переписки не зависят от бюджета файлов');
   assert.equal(result.workspaces, 0);
   assert.equal(result.files, 0);
   assert.ok(result.skippedFiles >= 2, `файлы помечены пропущенными: ${result.skippedFiles}`);
 });
 
-test('повтор в тот же день перезаписывает копию, а не плодит новую', () => {
+test('повтор в тот же день перезаписывает копию, а не плодит новую', async () => {
   reset();
-  snapshotState({ now: new Date('2026-10-21T03:00:00.000Z') });
+  await snapshotState({ now: new Date('2026-10-21T03:00:00.000Z') });
   fs.writeFileSync(path.join(CHATS_DIR, 'c3.json'), JSON.stringify({ messages: [] }), 'utf8');
-  const again = snapshotState({ now: new Date('2026-10-21T09:00:00.000Z') });
+  const again = await snapshotState({ now: new Date('2026-10-21T09:00:00.000Z') });
   assert.equal(again.chats, 3);
   assert.equal(listBackups().filter((item) => item.id === '2026-10-21').length, 1);
 });
 
-test('старые копии удаляются, свежие остаются', () => {
+test('старые копии удаляются, свежие остаются', async () => {
   reset();
   for (const day of ['2026-10-01', '2026-10-02', '2026-10-03', '2026-10-04', '2026-10-05']) {
-    snapshotState({ now: new Date(`${day}T03:00:00.000Z`), keep: 3 });
+    await snapshotState({ now: new Date(`${day}T03:00:00.000Z`), keep: 3 });
   }
   const ids = listBackups().map((item) => item.id);
   assert.equal(ids.length, 3, `осталось ${ids.length} копий: ${ids.join(', ')}`);
@@ -95,30 +95,57 @@ test('старые копии удаляются, свежие остаются'
   assert.ok(!ids.includes('2026-10-01'), 'самая старая копия не удалена');
 });
 
-test('ротация по объёму не оставляет меньше двух копий', () => {
+test('ротация по объёму не оставляет меньше двух копий', async () => {
   reset();
-  snapshotState({ now: new Date('2026-10-10T03:00:00.000Z') });
-  snapshotState({ now: new Date('2026-10-11T03:00:00.000Z') });
-  const removed = rotateBackups({ keep: 30, maxBytes: 1, minKeep: 2 });
+  await snapshotState({ now: new Date('2026-10-10T03:00:00.000Z') });
+  await snapshotState({ now: new Date('2026-10-11T03:00:00.000Z') });
+  const removed = await rotateBackups({ keep: 30, maxBytes: 1, minKeep: 2 });
   assert.equal(removed.length, 0, 'удалять нечего: копий всего две');
   assert.equal(listBackups().length, 2);
 });
 
-test('копия создаётся, даже если индекс не записан', () => {
+test('копия создаётся, даже если индекс не записан', async () => {
   reset();
   fs.rmSync(path.join(DATA_DIR, 'index.json'), { force: true });
-  const result = snapshotState({ now: new Date('2026-12-01T03:00:00.000Z') });
+  const result = await snapshotState({ now: new Date('2026-12-01T03:00:00.000Z') });
   assert.ok(result.id);
   assert.equal(result.chats, 2, 'диалоги копируются и без индекса');
 });
 
-test('список копий показывает проекты и размер', () => {
+test('список копий показывает проекты и размер', async () => {
   reset();
-  snapshotState({ now: new Date('2026-12-02T03:00:00.000Z') });
+  await snapshotState({ now: new Date('2026-12-02T03:00:00.000Z') });
   const [item] = listBackups();
   assert.equal(item.id, '2026-12-02');
   assert.equal(item.workspaces, 1);
   assert.ok(item.bytes > 0);
+});
+
+test('копия не замораживает сервис на время копирования', async () => {
+  /* На живом сервисе копия делается на глазах у людей: раньше копирование
+     75 МБ держало очередь событий 8–9 секунд, и все ответы ждали. Теперь
+     копия отдаёт очередь; проверяем это задержкой таймера. */
+  reset();
+  const project = path.join(workspacesDir(), 'p1');
+  fs.mkdirSync(path.join(project, 'Материалы'), { recursive: true });
+  const chunk = Buffer.alloc(256 * 1024, 7);
+  for (let index = 0; index < 80; index += 1) {
+    fs.writeFileSync(path.join(project, 'Материалы', `файл-${index}.bin`), chunk);
+  }
+  let worst = 0;
+  let last = Date.now();
+  const timer = setInterval(() => {
+    const now = Date.now();
+    worst = Math.max(worst, now - last - 10);
+    last = now;
+  }, 10);
+  try {
+    const result = await snapshotState({ now: new Date('2026-12-03T03:00:00.000Z') });
+    assert.ok(result.files >= 80, `файлов в копии ${result.files}`);
+  } finally {
+    clearInterval(timer);
+  }
+  assert.ok(worst < 400, `очередь событий стояла ${worst} мс — копия всё ещё блокирует сервис`);
 });
 
 let failed = 0;

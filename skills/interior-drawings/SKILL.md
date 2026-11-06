@@ -35,6 +35,12 @@ node scripts/shot.mjs out/3d.html out/3d.png --width 1600 --height 1000
 Каждый CLI печатает JSON с результатом (`out`, `scale`, `bytes`, `totalArea`) — это
 признак «сделано», не «запущено».
 
+> **В веб-приложении DSH Open оболочки нет.** Скрипты вручную не запускаются: составь
+> спек `design` и вызови инструмент `build_design` — сервис сам прогонит `plan.mjs`
+> (plan/floor/ceiling), `axo.mjs` и `scene.mjs` и положит в проект `design/plan.svg`,
+> `design/floor.svg`, `design/ceiling.svg`, `design/axo.svg`, `design/3d.html`.
+> Повторный вызов с `only: ["axo"]` пересобирает один лист. «Готово.» без файлов — брак.
+
 ## Схема спека
 
 Координаты в **миллиметрах**, ось Y вниз (как на плане), начало — в левом верхнем углу
@@ -45,7 +51,8 @@ node scripts/shot.mjs out/3d.html out/3d.png --width 1600 --height 1000
   "project": "Квартира 44,1 м² — интерьер с нуля",
   "object": "Минск, ул. Примерная, 12, кв. 45",
   "scale": 50,
-  "sheet": "A3",
+  "paper": "A3",
+  "orientation": "landscape",
   "heights": { "wall": 2700, "ceiling": 2650 },
   "cut": 1150,
   "rooms": [
@@ -62,7 +69,7 @@ node scripts/shot.mjs out/3d.html out/3d.png --width 1600 --height 1000
   "furniture": [
     { "kind": "sofa", "x": 400, "y": 4300, "w": 2200, "d": 950, "rot": 0, "name": "Диван" }
   ],
-  "fixtures": [
+  "lighting": [
     { "kind": "spot", "x": 1200, "y": 900 },
     { "kind": "chandelier", "x": 2400, "y": 3000 },
     { "kind": "led", "x": 400, "y": 200, "w": 2000 }
@@ -78,7 +85,7 @@ node scripts/shot.mjs out/3d.html out/3d.png --width 1600 --height 1000
   bed_single, wardrobe, wardrobe_slide, shelving, tv_stand, kitchen_counter, fridge, hob, sink,
   bath, shower, wc, bath_sink, dining_table, coffee_table, desk, chair, rug). Если габарит не
   задан (`w`,`d`,`h`), берётся каталожный; `rot` — поворот в градусах вокруг центра.
-- `fixtures.kind` = `spot|chandelier|led` — для `--mode=ceiling` (точечный, люстра, лента).
+- `lighting.kind` = `spot|chandelier|led` — для листа потолка (точечный, люстра, лента).
 
 ## Режимы плана
 
@@ -90,7 +97,8 @@ node scripts/shot.mjs out/3d.html out/3d.png --width 1600 --height 1000
 
 ## Листы, масштабы, линии
 
-- Форматы `A4|A3|A2|A1` (книжная/альбомная — по `sheet`), рамка по ГОСТ 2.301:
+- Форматы `A4|A3|A2|A1|A0` (`paper`), альбомная или книжная — `orientation`
+  (`landscape`/`portrait`, по умолчанию альбомная), рамка по ГОСТ 2.301:
   слева 20 мм, справа/сверху/снизу 5 мм; штамп 150×45 в правом нижнем углу.
 - Масштаб подбирается автоматически из `1:20/25/50/75/100` так, чтобы чертёж занял поле
   листа; в штампе и в выводе CLI печатается фактический (`scaleText`).

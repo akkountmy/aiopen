@@ -47,5 +47,17 @@ const data = JSON.parse(text);
 if (!data.access_token) throw new Error('в ответе нет access_token');
 
 const file = path.join(os.tmpdir(), 'amvera-token.json');
-fs.writeFileSync(file, JSON.stringify({ access_token: data.access_token, expires_in: data.expires_in }, null, 2));
+/* expiresAt нужен rest-клиенту: без него он не знает, протух ли токен */
+fs.writeFileSync(
+  file,
+  JSON.stringify(
+    {
+      access_token: data.access_token,
+      expires_in: data.expires_in,
+      expiresAt: Date.now() + (data.expires_in || 1800) * 1000,
+    },
+    null,
+    2,
+  ),
+);
 console.log(`токен получен (${Math.round((data.expires_in || 0) / 60)} мин), файл: ${file}`);

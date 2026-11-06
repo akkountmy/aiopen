@@ -1857,19 +1857,6 @@ html.kb-open .scroll-jump {
   margin: 4px 0 1px;
 }
 
-/* «Отвечаю на …»: короткая цитата запроса в шапке идущего ответа. Нужна,
-   когда задача считается долго: по ней видно, что работа идёт по последнему
-   сообщению, а не по прошлому. */
-.msg-ask {
-  margin: 2px 0 4px;
-  padding-left: 9px;
-  border-left: 2px solid rgba(86, 134, 254, 0.35);
-  color: var(--text-4);
-  font-size: var(--fs-12);
-  line-height: var(--lh-16);
-  overflow-wrap: anywhere;
-}
-
 /* Просьба в очереди — призрачный пузырь в ленте: то же место, что у обычного
    сообщения человека, но пунктирная рамка и подпись, что она ещё ждёт. */
 .msg-queued .bubble {
@@ -2996,6 +2983,227 @@ html.kb-open .scroll-jump {
 
 .files-panel.dragover .files-drop-hint {
   display: flex;
+}
+
+/* ------------------------- дизайн-проект и 3D-сцена -------------------------
+   Панель листов над списком файлов. Пять листов — это то, ради чего человек
+   просил дизайн, поэтому они видны сразу миниатюрами, а не спрятаны в папке
+   design/. Правка и пересборка живут рядом: спек не обязан проходить через
+   модель, чтобы изменение попало в чертёж. */
+.design-panel {
+  flex: none;
+  padding: 8px 10px 10px;
+  border-bottom: 1px solid var(--line);
+  background: var(--layer-1);
+}
+
+.design-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.design-head-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.design-head-text b {
+  font-size: var(--fs-13);
+  font-weight: 600;
+  line-height: var(--lh-20);
+}
+
+.design-lead {
+  color: var(--text-2);
+  font-size: var(--fs-11);
+  line-height: var(--lh-16);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.design-actions {
+  display: flex;
+  gap: 6px;
+  flex: none;
+}
+
+.design-btn {
+  height: 28px;
+  padding: 0 9px;
+  font-size: var(--fs-12);
+  line-height: 1;
+}
+
+/* Сетка миниатюр: два листа в ряд — на телефоне панель узкая, а план в
+   миниатюре всё равно читается как «страница», не как текст. */
+.design-gallery {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.design-card {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 5px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--layer-2);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s ease;
+}
+
+.design-card:hover,
+.design-card:focus-visible {
+  border-color: var(--accent);
+}
+
+.design-card.is-missing {
+  opacity: 0.55;
+}
+
+.design-shot {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 74px;
+  border-radius: 6px;
+  background: var(--bg);
+  overflow: hidden;
+}
+
+/* План — светлый лист на любом фоне: SVG уменьшаем целиком, без обрезки. */
+.design-thumb {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #fff;
+}
+
+.design-3d {
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+
+.design-none {
+  color: var(--text-3);
+  font-size: 18px;
+}
+
+.design-name {
+  color: var(--text);
+  font-size: var(--fs-12);
+  line-height: var(--lh-16);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.design-meta {
+  color: var(--text-2);
+  font-size: var(--fs-11);
+  line-height: var(--lh-16);
+}
+
+.design-note {
+  margin-top: 7px;
+  padding: 6px 9px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--layer-2);
+  color: var(--text-2);
+  font-size: var(--fs-12);
+  line-height: var(--lh-18);
+  overflow-wrap: anywhere;
+}
+
+/* Окно правки спека: сверху частые поля, ниже весь JSON. Поле растянуто по
+   высоте — спек студии это сотни строк, и читать их в три строки нельзя. */
+.design-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+}
+
+.design-quick {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 8px;
+}
+
+.design-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.design-label {
+  color: var(--text-2);
+  font-size: var(--fs-11);
+  line-height: var(--lh-16);
+}
+
+.design-input {
+  height: 32px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--layer-2);
+  color: var(--text);
+  font-size: var(--fs-13);
+}
+
+.design-hint {
+  margin: 0;
+  color: var(--text-2);
+  font-size: var(--fs-12);
+  line-height: var(--lh-18);
+}
+
+.design-spec {
+  min-height: 320px;
+  max-height: 52vh;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--layer-2);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 18px;
+  resize: vertical;
+  tab-size: 2;
+}
+
+.design-status {
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--layer-2);
+  color: var(--text-2);
+  font-size: var(--fs-12);
+  line-height: var(--lh-18);
+}
+
+.design-status.is-bad {
+  border-color: color-mix(in srgb, #d9534f 45%, var(--line));
+  color: #d9534f;
+}
+
+.design-modal-lead {
+  display: none;
 }
 
 /* Файл из панели можно утащить мышью на рабочий стол. */
@@ -4826,14 +5034,14 @@ html.kb-open .scroll-jump {
 
 /* Windows умеет выключать эффекты анимации целиком — тогда общее правило выше
    гасит и индикатор «работаю…»: на экране неподвижная точка, хотя задача идёт.
-   Для индикаторов оставляем самое мягкое движение — только прозрачность: оно
-   не крутится и не меняет размер, поэтому не мешает и тем, кому движение
-   неприятно, но по нему видно, что ассистент ещё работает. */
+   Мигание вместо вращения человек читает как «сломалось», а не как «идёт работа»,
+   поэтому кольцо вращается и здесь — только медленнее (1,6 с вместо 0,85 с):
+   движение ровное, без рывков и без изменения размера. */
 @media (prefers-reduced-motion: reduce) {
   .msg.streaming .msg-head .dot,
   .spinner,
   .spin-lg {
-    animation: live-fade 1.4s ease-in-out infinite !important;
+    animation: spin 1.6s linear infinite !important;
   }
 }
 
@@ -5285,6 +5493,535 @@ html.kb-open .scroll-jump {
 /* PDF и картинки живут по высоте страницы: лишняя ширина им ничего не даёт. */
 .modal.file-preview-modal.pv-kind-pdf {
   width: min(820px, 86vw);
+}
+
+/* ------------------------------- правка кода -------------------------------
+   Окно редактора: сверху вкладки файлов, слева (на широком экране) код, справа
+   предпросмотр листа. Высота почти во весь экран — правят здесь длинные JSON
+   и SVG на сотни строк, и от окна в пол-экрана толку нет.
+
+   Подсветка сделана без библиотек: под textarea лежит <pre> с тем же текстом,
+   разбитым на цветные куски, с ТЕМ ЖЕ шрифтом, кеглем, межстрочным интервалом и
+   отступами. Совпадать они должны до пикселя: чуть разойдётся — и курсор в
+   пустой строке окажется не там, где стоит буква. Поэтому размеры заданы
+   числами, а не через переменные интерфейса, которые на телефоне меняются. */
+.code-modal {
+  /* Цвета разметки: в тёмной теме светлые на тёмном, в светлой — наоборот.
+     Отдельные от акцента интерфейса, чтобы код читался, а не сливался с ним. */
+  --syn-key: #8ec5ff;
+  --syn-str: #a7dd9b;
+  --syn-num: #efb37c;
+  --syn-lit: #d7a4ff;
+  --syn-com: #727a83;
+  --syn-tag: #83b6ff;
+  --syn-attr: #e6c07b;
+  --syn-kw: #dc90ea;
+}
+
+[data-theme='light'] .code-modal {
+  --syn-key: #1d4ed8;
+  --syn-str: #166534;
+  --syn-num: #9a3412;
+  --syn-lit: #7c3aed;
+  --syn-com: #6b7280;
+  --syn-tag: #1e40af;
+  --syn-attr: #854d0e;
+  --syn-kw: #a21caf;
+}
+
+.modal.file-preview-modal.code-modal {
+  width: min(1180px, 94vw);
+  height: min(92dvh, 940px);
+}
+
+.code-shell {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* Вкладки файлов: их всего ничего (спек и пять листов), поэтому список — одна
+   строка с прокруткой вбок, а не дерево папок. Точка у имени значит «есть
+   несохранённые правки»: закрыть их молча нельзя, и это видно до нажатия. */
+.code-tabs {
+  display: flex;
+  flex: none;
+  gap: 2px;
+  padding: 0 8px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  border-bottom: 1px solid var(--line);
+  scrollbar-width: none;
+}
+
+.code-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.code-tab {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  max-width: 240px;
+  height: 36px;
+  padding: 0 10px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--text-3);
+  font-family: var(--font);
+  font-size: var(--fs-12);
+  cursor: pointer;
+}
+
+.code-tab:hover {
+  color: var(--text);
+  background: var(--layer-hover);
+}
+
+.code-tab.is-active {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+
+.code-tab-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.code-tab-dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--amber);
+}
+
+.code-panes {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.code-edit {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.code-bar {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.code-path {
+  overflow: hidden;
+  color: var(--text-2);
+  font-family: var(--mono);
+  font-size: var(--fs-11);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.code-meta {
+  color: var(--text-3);
+  font-size: var(--fs-11);
+  white-space: nowrap;
+}
+
+.code-tools {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.code-tool {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--layer-1);
+  color: var(--text-2);
+  font-family: var(--font);
+  font-size: var(--fs-11);
+  cursor: pointer;
+}
+
+.code-tool:hover {
+  background: var(--layer-hover);
+  color: var(--text);
+}
+
+.code-tool.is-on {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
+.code-tool[disabled] {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* Быстрые поля для спека: формат листа, ориентация и высоты. Человеку, который
+   не пишет JSON, проще выбрать A3 из списка, чем искать "paper" глазами. */
+.code-quick {
+  display: grid;
+  flex: none;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  padding: 10px;
+  border-bottom: 1px solid var(--line);
+  background: var(--layer-1);
+}
+
+/* Само полотно: нумерация строк слева, подсветка под прозрачным полем ввода. */
+.code-editor {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+.code-gutter {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 52px;
+  overflow: hidden;
+  border-right: 1px solid var(--line);
+  background: var(--layer-1);
+  user-select: none;
+}
+
+/* Номера строк едут вместе с текстом: обёртку двигаем трансформацией, потому
+   что у самой колонки прокрутки нет — она не должна ловить колесо мыши. */
+.code-gutter-in {
+  padding: 10px 8px 40px 0;
+  color: var(--text-3);
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 19px;
+  text-align: right;
+  will-change: transform;
+}
+
+.code-gutter-in .code-line {
+  display: block;
+}
+
+/* Отступ справа — место под вертикальную прокрутку поля: если текст упирается
+   в полосу прокрутки, последние буквы строки прячутся под ней. */
+.code-stage {
+  position: absolute;
+  top: 0;
+  right: 14px;
+  bottom: 0;
+  left: 52px;
+}
+
+.code-hl {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  overflow: hidden;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 19px;
+  tab-size: 2;
+  white-space: pre;
+}
+
+.code-hl code {
+  display: block;
+  padding: 10px 14px 40px;
+  color: var(--text);
+  font: inherit;
+  will-change: transform;
+}
+
+/* Поле ввода прозрачное: видны буквы из подсветки, а мигает и выделяет текст
+   настоящий textarea — от него же приходят события ввода, отмена и вставка. */
+.code-input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 10px 14px 40px;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: transparent;
+  caret-color: var(--text);
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 19px;
+  tab-size: 2;
+  white-space: pre;
+  overflow: auto;
+  overflow-wrap: normal;
+  resize: none;
+  -webkit-text-fill-color: transparent;
+}
+
+.code-input::selection {
+  background: rgba(86, 134, 254, 0.32);
+  -webkit-text-fill-color: transparent;
+}
+
+.code-ln-key {
+  color: var(--syn-key);
+}
+.code-ln-str {
+  color: var(--syn-str);
+}
+.code-ln-num {
+  color: var(--syn-num);
+}
+.code-ln-lit {
+  color: var(--syn-lit);
+}
+.code-ln-com {
+  color: var(--syn-com);
+  font-style: italic;
+}
+.code-ln-tag {
+  color: var(--syn-tag);
+}
+.code-ln-attr {
+  color: var(--syn-attr);
+}
+.code-ln-kw {
+  color: var(--syn-kw);
+}
+.code-ln-punct {
+  color: var(--text-3);
+}
+
+/* Строка состояния: чем закончилось сохранение, сколько весит файл и какая
+   комбинация клавиш его сохраняет. Ошибка и успех — разными цветами. */
+.code-status {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  padding: 6px 12px;
+  border-top: 1px solid var(--line);
+  background: var(--layer-1);
+  color: var(--text-3);
+  font-size: var(--fs-11);
+  line-height: 15px;
+}
+
+.code-status.is-ok {
+  color: var(--success);
+}
+
+.code-status.is-bad {
+  color: var(--danger);
+}
+
+/* Несохранённые правки — жёлтым: это не ошибка и не успех, а напоминание. */
+.code-status.is-dirty {
+  color: var(--amber);
+}
+
+.code-status-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.code-keys {
+  flex: none;
+  margin-left: auto;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+
+/* Вопрос про несохранённые правки. Он стоит внутри окна, а не отдельным окном:
+   второе окно закрыло бы редактор, и человек потерял бы правки, нажав «Отмена»
+   в подтверждении. */
+.code-ask {
+  display: none;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--accent);
+  background: var(--accent-soft);
+  color: var(--text);
+  font-size: var(--fs-12);
+}
+
+.code-ask.is-open {
+  display: flex;
+}
+
+.code-ask-text {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.code-ask .btn {
+  height: 28px;
+  padding: 0 10px;
+  font-size: var(--fs-11);
+}
+
+/* Предпросмотр: лист SVG и страница 3D. Ширины ему треть окна — этого хватает,
+   чтобы увидеть, что план собрался и ничего не уехало за рамку. */
+.code-preview {
+  display: none;
+  flex: 0 0 36%;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  border-left: 1px solid var(--line);
+  background: var(--layer-1);
+}
+
+.code-modal.preview-on .code-preview {
+  display: flex;
+}
+
+.code-preview-head {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--line);
+  color: var(--text-3);
+  font-size: var(--fs-11);
+}
+
+.code-preview-title {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.code-preview-body {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: flex-start;
+  justify-content: center;
+  min-height: 0;
+  padding: 10px;
+  overflow: auto;
+}
+
+.code-preview-img {
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: var(--radius-sm);
+  background: #ffffff;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.28);
+}
+
+.code-preview-frame {
+  width: 100%;
+  height: 100%;
+  min-height: 260px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: #ffffff;
+}
+
+.code-preview-note {
+  margin: auto;
+  padding: 0 6px;
+  color: var(--text-3);
+  font-size: var(--fs-12);
+  line-height: var(--lh-18);
+  text-align: center;
+}
+
+/* Разбор JSON: вместо предпросмотра — что внутри. Для спека дизайна это
+   комнаты, мебель, высоты: цифры, которые человек и пришёл поправить. */
+.code-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  width: 100%;
+  font-size: var(--fs-12);
+  line-height: var(--lh-18);
+}
+
+.code-summary-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--line);
+}
+
+.code-summary-row:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.code-summary-label {
+  color: var(--text-3);
+  font-size: var(--fs-11);
+}
+
+.code-summary-value {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.code-summary-list {
+  margin: 0;
+  padding: 0 0 0 2px;
+  list-style: none;
+  color: var(--text-2);
+}
+
+.code-summary-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 2px 0;
+}
+
+/* Заголовок окна правки: имя файла и значок его типа — как в просмотре. */
+.code-lead {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--radius-sm);
+  background: var(--layer-2);
+  color: var(--text-2);
+  font-family: var(--mono);
+  font-size: 9.5px;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
 }
 
 .modal.file-preview-modal.pv-kind-image {
@@ -8870,5 +9607,139 @@ html.compact-input .empty-title {
     max-height: 88dvh;
     margin-top: auto;
     border-radius: var(--radius) var(--radius) 0 0;
+  }
+}
+
+/* --------------------------- правка кода на телефоне ---------------------------
+   На телефоне редактор занимает весь экран, как просмотр файла: строк кода
+   много, и делить экран между кодом и предпросмотром не на что. Предпросмотр
+   тут — отдельный режим: нажал «Просмотр» — видишь лист, нажал ещё раз — снова
+   код. Кегль 16 px у поля ввода не про красоту: при меньшем Safari сам
+   увеличивает страницу, стоит поставить курсор, и окно выглядит сломанным,
+   пока масштаб не отожмёшь обратно. По той же причине кегль подсветки под
+   полем и высота строки в нумерации — те же цифры: подсветка и поле обязаны
+   совпадать до пикселя. */
+@media (max-width: 860px) {
+  .modal-root.preview-open .modal.file-preview-modal.code-modal {
+    width: 100%;
+    height: 100%;
+    max-height: 100%;
+    border: none;
+    border-radius: 0;
+    box-shadow: none;
+  }
+
+  .code-modal .modal-head {
+    padding: calc(8px + env(safe-area-inset-top, 0px)) 8px 8px 12px;
+  }
+
+  .code-tabs {
+    padding: 0 6px;
+  }
+
+  .code-tab {
+    max-width: 190px;
+    height: 42px;
+    font-size: var(--fs-13);
+  }
+
+  /* Путь и кнопки — в две строки: на узком экране длинный путь выдавливал
+     кнопки за край, и «Просмотр» становился недоступен. */
+  .code-bar {
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 6px 8px;
+  }
+
+  .code-path {
+    flex: 1 1 100%;
+  }
+
+  /* Кнопки правки на узком экране занимают свою строку целиком: иначе
+     «Просмотр» и «Скачать» уезжали за правый край и оставались недоступны. */
+  .code-tools {
+    flex: 1 1 100%;
+    margin-left: 0;
+    flex-wrap: wrap;
+  }
+
+  .code-tool {
+    height: 32px;
+    padding: 0 10px;
+    font-size: var(--fs-12);
+  }
+
+  .code-quick {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    padding: 8px;
+  }
+
+  .code-gutter {
+    width: 44px;
+  }
+
+  .code-stage {
+    right: 10px;
+    left: 44px;
+  }
+
+  .code-input {
+    padding: 8px 10px 40px;
+    font-size: 16px;
+    line-height: 22px;
+  }
+
+  .code-hl {
+    font-size: 16px;
+    line-height: 22px;
+  }
+
+  .code-hl code {
+    padding: 8px 10px 40px;
+  }
+
+  .code-gutter-in {
+    padding: 8px 6px 40px 0;
+    font-size: 11.5px;
+    line-height: 22px;
+  }
+
+  /* Предпросмотр — вместо кода, а не рядом с ним. */
+  .code-modal.preview-on .code-edit {
+    display: none;
+  }
+
+  .code-preview {
+    flex: 1 1 auto;
+    border-left: none;
+  }
+
+  .code-preview-frame {
+    min-height: 200px;
+  }
+
+  .code-status {
+    padding: 6px 10px;
+    font-size: var(--fs-12);
+  }
+
+  /* Подсказка «Ctrl+S» на телефоне бесполезна: клавиатуры нет. */
+  .code-keys {
+    display: none;
+  }
+
+  .code-ask {
+    flex-wrap: wrap;
+    padding: 8px 10px calc(8px + env(safe-area-inset-bottom, 0px));
+  }
+
+  .code-ask-text {
+    flex: 1 1 100%;
+  }
+
+  .code-ask .btn {
+    flex: 1 1 auto;
+    height: 38px;
+    font-size: var(--fs-12);
   }
 }

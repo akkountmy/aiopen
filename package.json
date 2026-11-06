@@ -28,6 +28,7 @@
     "test:ui-swipe": "node test/ui-swipe.mjs",
     "test:ui-support": "node test/ui-support.mjs",
     "test:ui-version": "node test/ui-version.mjs",
+    "test:ui-code": "node test/ui-code-editor.mjs",
     "test:tts": "node test/tts.mjs",
     "test:ui-tts": "node test/tts-ui.mjs",
     "test:attach-shrink": "node test/attach-shrink.mjs",

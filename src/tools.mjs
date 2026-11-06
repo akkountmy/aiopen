@@ -26,6 +26,7 @@ import { writeZip } from './zip.mjs';
 import { ARCHIVE_LIMITS, archiveKind, extractArchiveTo, formatExtraction, gunzipTo } from './archive.mjs';
 import { checkLinks, formatLinks, linksFromText } from './linkcheck.mjs';
 import { compareDocuments, formatCompare } from './comparedocs.mjs';
+import { buildArtifacts, describeDesign, designView, readSpec, writeSpec } from './design.mjs';
 import {
   LAB_DIR,
   resolveTaskId,
@@ -1525,7 +1526,7 @@ export const TOOL_DEFS = [
     function: {
       name: 'create_drawing',
       description:
-        'Создать чертёж, план или схему файлом: принимает готовый SVG (или HTML-страницу) и печатает его в PDF по формату листа A4–A0 и/или PNG. Используй для «нарисуй план», «чертёж», «схема», «план квартиры», «развёртка», «аксонометрия», «план потолка», «план электрики», когда нужен файл-лист с рамкой и штампом. Сначала соберите SVG (координаты в мм, рамка и штамп внутри SVG), затем отдайте его здесь.',
+        'Напечатать в PDF/PNG уже готовый SVG или HTML, который написан вручную: схема процесса, простая диаграмма, плакат. Для планов квартиры, расстановки мебели, плана потолка, развёртки и аксонометрии этот инструмент НЕ используется — там нужен build_design: он сам считает геометрию, масштаб, размеры, рамку и штамп, а нарисованный вручную план выходит неточным. Берите create_drawing только когда SVG уже есть целиком.',
       parameters: {
         type: 'object',
         properties: {
@@ -1539,6 +1540,30 @@ export const TOOL_DEFS = [
           title: { type: 'string', description: 'Заголовок вкладки/документа.' },
         },
         required: ['path'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'build_design',
+      description:
+        'Собрать дизайн-проект помещения из одного спека: план мебели, план полов, план потолка со светильниками, аксонометрию и интерактивную 3D-сцену. Это главный инструмент на «сделай дизайн интерьера», «спланируй студию/квартиру», «расставь мебель», «покажи 3D», «план потолка»: он сам запускает генераторы навыка interior-drawings, поэтому листы получаются точными и не обрезаются. Сначала передай спек (design) — комнаты полигонами в миллиметрах, стены, проёмы, мебель, светильники; без аргументов пересобирает листы из уже сохранённого design.json (так правка человека в окне проекта применяется к чертежам).',
+      parameters: {
+        type: 'object',
+        properties: {
+          design: {
+            type: 'object',
+            description:
+              'Спек дизайна. Поля: project, object, paper (A4–A0), orientation (landscape|portrait), scale (20/25/50/75/100), heights {wall, ceiling} в мм, rooms [{name, poly [[x,y],…] в мм, floor, tile, ceiling}], walls [{x1,y1,x2,y2,t}], openings [{kind: window|door, x, y, w, dir: h|v, sill, h, hinge, swing}], furniture [{kind, x, y, w, d, rot, name}], lighting [{kind: spot|chandelier|led, x, y, w}]. Координаты в миллиметрах, ось Y вниз, полигон комнаты — по внутренним граням стен.',
+          },
+          only: {
+            type: 'array',
+            items: { type: 'string', enum: ['plan', 'floor', 'ceiling', 'axo', 'scene'] },
+            description: 'Собрать только эти листы (по умолчанию все пять).',
+          },
+        },
+        required: [],
       },
     },
   },
@@ -1703,6 +1728,7 @@ export const TOOL_LABELS = {
   create_pptx: 'Создание презентации',
   create_pdf: 'Создание PDF',
   create_drawing: 'Чертёж',
+  build_design: 'Дизайн-проект',
   remember: 'Память',
   use_skill: 'Навык',
   check_document: 'Проверка файла',
@@ -1742,6 +1768,15 @@ export function toolSummary(name, args) {
       return args.path || '';
     case 'move_path':
       return `${args.from || ''} → ${args.to || ''}`;
+    case 'build_design': {
+      const design = args.design && typeof args.design === 'object' ? args.design : null;
+      if (design) {
+        const rooms = Array.isArray(design.rooms) ? design.rooms.length : 0;
+        return `спек: ${rooms} ${plural(rooms, 'комната', 'комнаты', 'комнат')}`;
+      }
+      const only = Array.isArray(args.only) ? args.only.length : 0;
+      return only ? `пересборка: ${args.only.join(', ')}` : 'пересборка листов';
+    }
     case 'web_search':
       return String(args.query || (Array.isArray(args.queries) ? args.queries.join(' | ') : '')).slice(0, 120);
     case 'fetch_url':
@@ -2543,6 +2578,48 @@ async function executeToolInner(name, args, ctx) {
       return {
         text: `Чертёж создан — ${parts.join(', ')}\nЛист ${out.sheet}${out.landscape ? ' (альбомный)' : ''}, движок: ${out.engine || 'без рендера'}${check ? `\n${formatCheckReport(check)}` : ''}`,
         meta: { path: rel, created: true, files: writtenRel, sheet: out.sheet, landscape: out.landscape, engine: out.engine, check: check ? { ok: check.ok, errors: check.errors, warnings: check.warnings } : null },
+      };
+    }
+    case 'build_design': {
+      /* Листы собирает сервер, а не модель: у агента нет оболочки, чтобы
+         запустить генераторы навыка, — раньше из-за этого на просьбу «сделай
+         дизайн» приходил ответ «Готово.» без единого файла. */
+      ensureFreeSpace(LIMITS.minFreeBytes);
+      /* Модель иногда шлёт спек не в design, а в spec или прямо в аргументах —
+         принимаем все три формы, чтобы задача не падала на форме вызова. */
+      const rawSpec = args.design && typeof args.design === 'object'
+        ? args.design
+        : args.spec && typeof args.spec === 'object'
+          ? args.spec
+          : Array.isArray(args.rooms) ? args : null;
+      const designArg = rawSpec
+        ? (rawSpec.spec && typeof rawSpec.spec === 'object' ? rawSpec.spec : rawSpec)
+        : null;
+      const fixes = [];
+      if (designArg) {
+        const written = writeSpec(root, designArg);
+        fixes.push(...written.fixes);
+      } else if (!readSpec(root)) {
+        throw new Error('Дизайн-спека в проекте нет: передайте design (комнаты, стены, проёмы, мебель, светильники) первым вызовом.');
+      }
+      const only = Array.isArray(args.only) ? args.only.map((key) => String(key)) : null;
+      const results = await buildArtifacts(root, { only });
+      const view = designView(root);
+      const text = describeDesign(view, results);
+      const bad = results.filter((item) => !item.ok);
+      if (bad.length && bad.length === results.length) {
+        throw new Error(`Ни один лист не собрался. ${bad.map((item) => `${item.title}: ${item.error}`).join('; ')}`);
+      }
+      return {
+        text: `${text}${fixes.length ? `\nЗамечания к спеку: ${fixes.join('; ')}.` : ''}\nЭти файлы уже в проекте: их видно в «Файлах проекта» и в окне «Дизайн-проект», где спек можно править и пересобирать без потери работы.`,
+        meta: {
+          created: results.filter((item) => item.ok).length,
+          failed: bad.map((item) => item.key),
+          files: results.filter((item) => item.ok).map((item) => item.file),
+          area: view.area,
+          rooms: view.spec?.rooms.length || 0,
+          furniture: view.spec?.furniture.length || 0,
+        },
       };
     }
     case 'remember': {

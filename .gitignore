@@ -36,3 +36,6 @@ demo/check-out.txt
 demo/screenshots/
 screens/
 
+
+# состояние внешнего сторожа (перезапуски, время последнего)
+.health-guard-state.json

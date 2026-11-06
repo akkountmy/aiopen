@@ -1,0 +1,38 @@
+{
+  "checkedAt": "2026-11-04T19:26:23.410Z",
+  "base": "https://dshopen-vladimir00177.msk1.amvera.tech",
+  "total": 1,
+  "fired": 1,
+  "right": 1,
+  "withTools": 1,
+  "verified": 1,
+  "failed": [],
+  "results": [
+    {
+      "key": "data",
+      "expected": "data-analysis",
+      "fired": "data-analysis",
+      "anySkill": true,
+      "rightSkill": true,
+      "toolsHit": true,
+      "verified": true,
+      "seconds": 222,
+      "tokensIn": 804247,
+      "tokensOut": 25268,
+      "tools": [
+        "use_skill",
+        "calculate",
+        "create_excel",
+        "check_document",
+        "read_document",
+        "extract_archive",
+        "move_path",
+        "read_file",
+        "run_js",
+        "delete_path"
+      ],
+      "chars": 2619,
+      "error": ""
+    }
+  ]
+}

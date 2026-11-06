@@ -11,13 +11,20 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { CATALOG, area, num } from './lib.mjs';
 import { htmlToPng } from './render.mjs';
+
+/* Сборка three.js, которая лежит в самом сервисе: на сервере (~/.dsh нет) сцена
+   иначе не собиралась бы вовсе, хотя файл рядом — в public/vendor сайта. */
+const HERE = path.dirname(fileURLToPath(import.meta.url));
 
 const THREE_VENDOR = [
   'C:\\Users\\33620\\.dsh\\vendor\\three\\dist\\three.global.js',
   process.env.DSH_HOME ? path.join(process.env.DSH_HOME, 'vendor/three/dist/three.global.js') : null,
   path.join(os.homedir(), '.dsh', 'vendor', 'three', 'dist', 'three.global.js'),
+  path.resolve(HERE, '../../../public/vendor/three.global.js'),
+  path.resolve(HERE, '../../three-js/vendor/three.global.js'),
 ];
 
 function threePath() {

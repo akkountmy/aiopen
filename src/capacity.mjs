@@ -129,22 +129,37 @@ export function createGate({ limit = 0, waitMs = 0, maxWaiting = 0 } = {}) {
 }
 
 /** Наблюдение за очередью событий: если она стоит, сервис не отвечает быстро,
- *  даже когда память ещё есть. Значение читает /api/health. */
-export function createLoopMonitor({ intervalMs = 1000 } = {}) {
+ *  даже когда память ещё есть. Значение читает /api/health.
+ *
+ *  stallMs — порог, после которого остановка очереди попадает в журнал: без
+ *  такой строки в логе нечем связать «страница подвисала» с конкретным часом,
+ *  а по одному числу в health виновника не найти. */
+export function createLoopMonitor({ intervalMs = 1000, stallMs = 700, onStall = null } = {}) {
   let last = Date.now();
   let worstMs = 0;
+  let lastMs = 0;
   const timer = setInterval(() => {
     const now = Date.now();
     const drift = now - last - intervalMs;
     last = now;
     if (drift < 0) return;
-    /* Сглаживаем: одиночный сборщик мусора не должен выглядеть как отказ. */
+    if (drift >= stallMs && typeof onStall === 'function') {
+      try {
+        onStall({ lagMs: Math.round(drift), at: new Date(now).toISOString() });
+      } catch {
+        /* журнал не должен ломать наблюдение */
+      }
+    }
+    /* `lastMs` — как сейчас, `worstMs` — сглаженный пик: одиночная сборка
+       мусора не должна выглядеть как отказ, но и держать в health пик
+       многосекундной давности нельзя: по нему видно состояние, а не историю. */
+    lastMs = Math.round(drift);
     worstMs = Math.max(worstMs * 0.92, drift);
   }, intervalMs);
   timer.unref?.();
   return {
     stats() {
-      return { loopLagMs: Math.round(worstMs) };
+      return { loopLagMs: lastMs, loopLagPeakMs: Math.round(worstMs) };
     },
     stop() {
       clearInterval(timer);
@@ -157,6 +172,20 @@ export function memoryStats() {
   const usage = process.memoryUsage();
   const mb = (bytes) => Math.round((bytes / (1024 * 1024)) * 10) / 10;
   return { rssMb: mb(usage.rss), heapUsedMb: mb(usage.heapUsed), externalMb: mb(usage.external) };
+}
+
+/**
+ * Есть ли запас памяти для новой задачи.
+ *
+ * Жёсткое убийство по OOM забирает весь контейнер: вместе с чужими диалогами и
+ * уже идущими ответами. Поэтому место под задачу выдаём только пока память ниже
+ * потолка, а остальным честно говорим «занято, попробуйте через минуту».
+ * Потолок задаётся DSHOW_MAX_RSS_MB; 0 — не ограничивать.
+ */
+export function memoryPressure({ limitMb = CAPACITY.maxRssMb } = {}) {
+  const { rssMb } = memoryStats();
+  const limit = Number(limitMb) || 0;
+  return { rssMb, limitMb: limit, over: limit > 0 && rssMb >= limit };
 }
 
 /* Тяжёлые инструменты: Chromium, движок анти-бота, Python, распаковка архивов.
@@ -175,6 +204,15 @@ export const heavyGate = createGate({
 
 /** Выполняет тяжёлую работу под общим счётчиком; при переполнении — понятная ошибка. */
 export async function withHeavySlot(fn, { waitMs = null, signal } = {}) {
+  /* Тяжёлый инструмент на пределе памяти — это и есть смерть контейнера:
+     Chromium добавляет сотни мегабайт. Лучше понятный отказ, чем OOM. */
+  const pressure = memoryPressure();
+  if (pressure.over) {
+    throw new Error(
+      `Сейчас занято: память сервиса на пределе (${pressure.rssMb} из ${pressure.limitMb} MB). ` +
+        'Тяжёлый инструмент (браузер, Python, распаковка) запустить нельзя — повтори через минуту.',
+    );
+  }
   let release;
   try {
     release = await heavyGate.acquire({ signal, waitMs });

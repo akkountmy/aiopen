@@ -1,4 +1,5 @@
 import { CAPACITY, CONTEXT, ESCALATION, MODEL, REVIEW, SPLIT, costUsd } from './config.mjs';
+import { buildArtifacts, describeDesign, designView, specFromText, writeSpec } from './design.mjs';
 import { documentExcerpt, documentKind } from './doccheck.mjs';
 import { getDeepSeekKey } from './keys.mjs';
 import { chooseProfile, chooseStepRoute, describeStepRoute, isMechanicalTool } from './model.mjs';
@@ -8,7 +9,7 @@ import { summaryPrompt, systemPrompt, titlePrompt } from './prompt.mjs';
 import { describeReview, reviewAnswer } from './review.mjs';
 import { skillsPromptText } from './skills.mjs';
 import { continuePrompt, taskSummaryLine, updateTaskState } from './taskstate.mjs';
-import { availableToolDefs, TOOL_LABELS, executeTool, toolSummary } from './tools.mjs';
+import { availableToolDefs, TOOL_LABELS, executeTool, listTree, toolSummary } from './tools.mjs';
 import {
   compressHistory,
   createTrimStats,
@@ -33,6 +34,88 @@ const CONTINUE_PROMPT =
 const WRAP_UP_PROMPT =
   'Инструменты больше недоступны. Коротко подведи итог: что уже сделано, какие файлы готовы ' +
   'и что в них. Не задавай вопросов и не предлагай продолжить.';
+
+/* Задача про интерьер/планировку и про чертёж одновременно: «нарисуй план
+   квартиры», «сделай дизайн студии», «3D интерьера». Оба признака обязательны —
+   иначе под правило попадал бы «дизайн сайта» или «3D-принтер». */
+const INTERIOR_ASK =
+  /(квартир|студи|интерьер|комнат[аыуе]|спальн|гостин|кухн|санузел|прихож|дом[аеу]?\b|планировк|расстановк[\p{L}]*\s*мебел|мебел[\p{L}]*\s*(план|расстанов|схем|раскладк))/iu;
+const DRAWING_ASK =
+  /(дизайн|чертёж|чертеж|план|схем|аксонометр|развёртк|развертк|визуализац|3d|3-д|трёхмерн|объёмн)/iu;
+/* Внешний вид сайта, приложения или логотипа — это не проект помещения: там
+   работают другие инструменты, и досборка чертежей была бы ошибкой. */
+const NOT_INTERIOR =
+  /(лендинг|сайт|интерфейс|логотип|айдентик|брендинг|баннер|презентац|приложени|верстк|страниц|промпт|раскладк[\p{L}]*\s*клави)/iu;
+/* Ответ, который объявляет работу законченной, но ничего не называет. */
+const EMPTY_DONE = /^(всё\s+)?(готово|сделано|выполнено|задача\s+выполнена)[.!\s]*$/iu;
+const CLAIMS_DONE = /(готов|сделал|собрал|выполнил|подготовил|закончил)/iu;
+
+const DRAWING_REPAIR_PROMPT =
+  'Результата нет: в проекте ни одного листа, а ответ это не назвал. «Готово.» без файлов — брак.\n' +
+  'Сделай чертёж инструментом, а не текстом:\n' +
+  '1) use_skill {id:"interior-drawings"} — прочитай формат спека;\n' +
+  '2) build_design с аргументом design: комнаты полигонами в мм, стены, проёмы, мебель, светильники, высоты.\n' +
+  'Сервис сам соберёт design/plan.svg, design/floor.svg, design/ceiling.svg, design/axo.svg и design/3d.html — ' +
+  'они появятся в панели «Дизайн-проект» проекта.\n' +
+  'Если для спека не хватает размеров — возьми разумные, назови принятые допущения в ответе и всё равно собери листы.';
+
+/* Досборку уже просили, а листов так и нет. Второе «Готово.» человек читать не
+   должен: вместо него — честная причина и что делать дальше. */
+const MISSING_FILES_ANSWER =
+  'Не смог собрать чертежи: модель дважды ответила текстом и ни разу не вызвала сборку проекта, ' +
+  'поэтому папка «Дизайн-проект» пустая. Повторите задачу — при повторе сборка запускается заново. ' +
+  'Если файлы снова не появятся, это сбой модели, а не вашей задачи: напишите в «Поддержку».';
+
+/**
+ * Собрать дизайн-проект без модели, когда она дважды ответила текстом.
+ * Спек строится из самой просьбы, листы — тем же генератором, что и у
+ * инструмента сборки. Возвращает текст ответа или null, если не вышло:
+ * тогда человек увидит честную причину, а не пустую папку.
+ */
+export async function rescueDesign({ workspace, userText } = {}) {
+  if (!workspace) return null;
+  const text = String(userText || '');
+  if (!text || NOT_INTERIOR.test(text)) return null;
+  if (!INTERIOR_ASK.test(text) || !DRAWING_ASK.test(text)) return null;
+  try {
+    const { raw, assumptions } = specFromText(text);
+    writeSpec(workspace, raw);
+    const results = await buildArtifacts(workspace);
+    const ok = (key) => results.some((item) => item.key === key && item.ok && item.bytes > 0);
+    /* Удачей считаем только план и 3D-сцену: без них это не дизайн-проект. */
+    if (!ok('plan') || !ok('scene')) return null;
+    const view = designView(workspace);
+    return [
+      describeDesign(view, results),
+      `Допущения, принятые за вас: ${assumptions.join('; ')}.`,
+      'Скажите, что поменять — размеры, состав мебели, гамму — и проект пересоберётся.',
+    ].join('\n\n');
+  } catch {
+    return null;
+  }
+}
+
+/** Нужен ли один корректирующий шаг: просили чертёж, а результата нет. */
+export function needsDrawingRepair({ userText = '', workspace = '', toolsUsed = [], answer = '', tried = false } = {}) {
+  if (tried) return false;
+  const text = String(userText || '');
+  if (!text || NOT_INTERIOR.test(text)) return false;
+  if (!INTERIOR_ASK.test(text) || !DRAWING_ASK.test(text)) return false;
+  /* Любой созданный файл — уже результат: домысливать за агентом не нужно. */
+  if (toolsUsed.some((tool) => tool.name === 'build_design' || tool.path)) return false;
+  /* Пустой ответ, короткая отписка и прямое «я всё сделал» — те три вида
+     ответа, за которыми пустая папка. Содержательный ответ, где человеку
+     объясняют, чего не хватает, досборкой не считается. */
+  const said = String(answer || '').trim();
+  if (said.length > 120 && !EMPTY_DONE.test(said) && !CLAIMS_DONE.test(said)) return false;
+  try {
+    const view = designView(workspace);
+    if (view.hasSpec || view.artifacts.some((item) => item.exists)) return false;
+  } catch {
+    return false;
+  }
+  return true;
+}
 
 function friendlyError(error) {
   const status = error?.status;
@@ -564,6 +647,9 @@ export async function runTurn({
   let reasoningText = '';
   let steps = 0;
   let finished = false;
+  /* Досборка чертежей даётся один раз за ход: повторные шаги не должны
+     превращаться в цикл «сделай ещё раз». */
+  let repairTried = false;
   /* Что вернул предыдущий шаг: по этому решается, кто ведёт следующий. Профиль
      хода — только база; внутри хода шаги неравноценны (см. chooseStepRoute). */
   let previousStep = null;
@@ -752,6 +838,57 @@ export async function runTurn({
     }
 
     if (!result.toolCalls.length) {
+      /* «Готово.» при пустой папке — тот самый брак, из-за которого задача
+         уходила в работу и возвращалась без файлов. Один адресный шаг досборки
+         дешевле пустого проекта: модель получает прямое указание, каким
+         инструментом делается чертёж, и не может ответить «сделано» снова. */
+      const repairNeeded = needsDrawingRepair({
+        userText,
+        workspace,
+        toolsUsed,
+        answer: result.text || '',
+        tried: repairTried,
+      });
+      if (repairNeeded) {
+        repairTried = true;
+        /* Сказанное «Готово.» не оставляем ни в ответе, ни в истории: модель
+           не должна опираться на собственную пустую заявку. */
+        finalText = finalText.slice(0, Math.max(0, finalText.length - stepAnswer.length));
+        emit({ type: 'progress', step: steps, limit: stepLimit, note: 'файлов нет — досборка чертежей' });
+        chat.history.push({ role: 'user', content: DRAWING_REPAIR_PROMPT });
+        continue;
+      }
+      /* Досборка не помогла: модель снова ответила текстом. Пустую заявку
+         заменяем честным «почему файлов нет» — иначе человек опять получит
+         «Готово.» и пустую панель, то есть ровно тот дефект, что был в отчёте. */
+      const emptyAfterRepair =
+        repairTried &&
+        needsDrawingRepair({
+          userText,
+          workspace,
+          toolsUsed,
+          answer: result.text || '',
+          tried: false,
+        });
+      if (emptyAfterRepair) {
+        finalText = finalText.slice(0, Math.max(0, finalText.length - stepAnswer.length));
+        /* Последний рубеж: модель так и не вызвала сборку. Собираем проект
+           детерминированно из самой просьбы — человек получает листы и список
+           принятых допущений, а не извинение при пустой панели. */
+        const rescued = await rescueDesign({ workspace, userText });
+        if (rescued) {
+          finalText = `${finalText}${finalText ? '\n\n' : ''}${rescued}`;
+          emit({ type: 'progress', step: steps, limit: stepLimit, note: 'листы собраны запасным путём' });
+          chat.history.push({ role: 'assistant', content: rescued });
+          finished = true;
+          break;
+        }
+        finalText = `${finalText}${finalText ? '\n\n' : ''}${MISSING_FILES_ANSWER}`;
+        emit({ type: 'progress', step: steps, limit: stepLimit, note: 'листы не собрались — сказал прямо' });
+        chat.history.push({ role: 'assistant', content: MISSING_FILES_ANSWER });
+        finished = true;
+        break;
+      }
       chat.history.push({ role: 'assistant', content: result.text || '' });
       finished = true;
       break;
@@ -986,12 +1123,22 @@ export async function runTurn({
   if (finalText && REVIEW.enabled) {
     try {
       const createdFiles = toolsUsed.map((tool) => tool.path).filter(Boolean);
+      /* Файлы проекта — чтобы ответ, ссылающийся на документ из прошлого хода,
+         не считался обещанием несуществующего файла. Список короткий: только
+         имена, без содержимого и без чтения файлов. */
+      let projectFiles = [];
+      try {
+        projectFiles = listTree(workspace, '.', { depth: 3, maxEntries: 300 }).filter((item) => !item.dir).map((item) => item.path);
+      } catch {
+        projectFiles = [];
+      }
       const excerpts = await buildReviewExcerpts(createdFiles, workspace);
       const result = await reviewAnswer({
         userQuestion: userText,
         answer: finalText,
         history: chat.history,
         createdFiles,
+        projectFiles,
         excerpts,
         routeModel: route.model,
         tools: toolsUsed,

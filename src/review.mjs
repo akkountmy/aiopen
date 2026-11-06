@@ -106,6 +106,75 @@ function figureSeen(value, haystack) {
 }
 
 /**
+ * Числа, которые были в наличии: результаты инструментов плюс всё, что
+ * пользователь назвал сам в этом диалоге. Второе раньше не учитывалось, и
+ * ответ, повторяющий условие задачи («участок 8 соток, бюджет 5 млн»),
+ * помечался как «числа без опоры» — 86 серьёзных находок на 87 ответов за
+ * неделю и правки поверх верных ответов. Пользовательское число — такая же
+ * опора, как результат инструмента.
+ */
+export function buildSupport({ userQuestion = '', history = [], limit = 24000 } = {}) {
+  const parts = [];
+  const push = (text) => {
+    const value = String(text || '').trim();
+    if (value) parts.push(value);
+  };
+  push(userQuestion);
+  for (const message of Array.isArray(history) ? history : []) {
+    /* Только реплики пользователя: числа из прошлых ответов агента опорой не
+       считаются — иначе собственная выдумка подтверждает себя же. */
+    if (message?.role !== 'user') continue;
+    push(message.content);
+  }
+  const text = parts.join('\n');
+  return text.length > limit ? text.slice(-limit) : text;
+}
+
+/** Числа из текста в виде значений — для проверки расчётов. */
+export function numericPool(text, { limit = 160 } = {}) {
+  const out = [];
+  const seen = new Set();
+  /* «1 200 000» — одно число, а не три: иначе разрядные пробелы ломают счёт и
+     расчёт из имеющихся чисел выглядел выдумкой. */
+  const normalized = String(text || '').replace(/(\d)[ \u00a0\u202f](?=\d{3}(?!\d))/g, '$1');
+  for (const match of normalized.matchAll(/\d+(?:[.,]\d+)?/g)) {
+    const value = Number(match[0].replace(',', '.'));
+    if (!Number.isFinite(value) || value === 0) continue;
+    const key = String(value);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(value);
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
+/**
+ * Число — результат счёта по имеющимся значениям: сумма, разница,
+ * произведение, частное или процент. Модель складывает и делит по ходу
+ * ответа, и такого числа в результатах инструментов нет по определению.
+ * Совпадение с арифметикой двух опор — достаточное доказательство, что оно
+ * не выдумано: попасть в него случайным числом практически невозможно.
+ */
+export function derivedSeen(value, pool) {
+  const near = (a, b) => Math.abs(a - b) <= Math.max(0.51, Math.abs(b) * 0.005);
+  const values = Array.isArray(pool) ? pool : [];
+  for (let i = 0; i < values.length; i++) {
+    const a = values[i];
+    if (near(value, a)) return true;
+    for (let j = i + 1; j < values.length; j++) {
+      const b = values[j];
+      if (near(value, a + b) || near(value, Math.abs(a - b)) || near(value, a * b)) return true;
+      if (b !== 0 && near(value, a / b)) return true;
+      if (a !== 0 && near(value, b / a)) return true;
+      /* Процент от величины: 12% от 250 000 = 30 000. */
+      if (near(value, (a / 100) * b) || near(value, (b / 100) * a)) return true;
+    }
+  }
+  return false;
+}
+
+/**
  * Источники, которые принесли инструменты: адрес, год публикации и хост.
  * Нужны, чтобы проверяющий видел опору фактического утверждения, а не только
  * цифру без места. Раньше ресёрч с источниками проверялся вслепую: модель
@@ -157,10 +226,16 @@ export function formatSources(sources) {
  * появились в проекте. `task` — карточка задачи: по ней видно, закрыты ли
  * пункты, о которых ответ говорит «готово».
  */
-export function checkAnswer({ answer = '', toolDigest = '', createdFiles = [], task = null, maxIssues = 12 } = {}) {
+export function checkAnswer({ answer = '', toolDigest = '', createdFiles = [], projectFiles = [], supportedText = '', task = null, stats = null, maxIssues = 12 } = {}) {
   const issues = [];
   const digest = String(toolDigest || '');
   const files = (Array.isArray(createdFiles) ? createdFiles : []).map((item) =>
+    typeof item === 'string' ? item : String(item?.path || item || ''),
+  );
+  /* Файлы проекта нужны потому, что `createdFiles` — только этот ход. Ответ,
+     который ссылается на документ, сделанный два хода назад, ловился как
+     «файла нет» (12 находок за неделю). */
+  const project = (Array.isArray(projectFiles) ? projectFiles : []).map((item) =>
     typeof item === 'string' ? item : String(item?.path || item || ''),
   );
   const answerText = String(answer || '');
@@ -169,7 +244,8 @@ export function checkAnswer({ answer = '', toolDigest = '', createdFiles = [], t
   for (const name of extractFileMentions(answerText)) {
     const base = name.split(/[\\/]/).pop();
     const known = files.some((file) => file === name || file.endsWith(`/${base}`) || file.endsWith(`\\${base}`) || base === file);
-    if (!known) {
+    const inProject = project.some((file) => file === name || file.endsWith(`/${base}`) || file.endsWith(`\\${base}`) || base === file);
+    if (!known && !inProject) {
       issues.push({
         kind: 'file',
         severity: 'high',
@@ -180,11 +256,19 @@ export function checkAnswer({ answer = '', toolDigest = '', createdFiles = [], t
     if (issues.length >= maxIssues) break;
   }
 
-  /* Число в ответе не встречается ни в одном результате инструментов. */
+  /* Число в ответе не встречается ни в одном результате инструментов и не
+     названо пользователем. Расчёт из имеющихся чисел — не выдумка. */
+  const support = `${digest}\n${String(supportedText || '')}`;
+  const pool = numericPool(support);
   const figures = extractFigures(answerText);
   let unsupported = 0;
+  let derived = 0;
   for (const value of figures) {
-    if (figureSeen(value, digest)) continue;
+    if (figureSeen(value, support)) continue;
+    if (derivedSeen(value, pool)) {
+      derived += 1;
+      continue;
+    }
     unsupported += 1;
     if (unsupported <= 4) {
       issues.push({
@@ -203,6 +287,12 @@ export function checkAnswer({ answer = '', toolDigest = '', createdFiles = [], t
       quote: '',
       hint: `ещё ${unsupported - 4} чисел без опоры на результаты инструментов`,
     });
+  }
+  /* Цифры для журнала: сколько чисел было, сколько приняли как расчёт и
+     сколько осталось без опоры. Без этого нельзя понять, работает ли
+     послабление для расчётов, или проверка просто перестала замечать. */
+  if (stats && typeof stats === 'object') {
+    Object.assign(stats, { figures: figures.length, derived, unsupported });
   }
 
   /* «Готово», а в карточке задачи ещё висят пункты. Регулярка ловит только
@@ -244,7 +334,7 @@ export function buildDigest(history, { budget = REVIEW.digestChars } = {}) {
 const CHECKLIST = `Ты — придирчивый проверяющий готового ответа. Твоя работа: не переписать ответ, а найти в нём то, что подведёт пользователя.
 
 Проверь по чек-листу:
-1. Цифры. Каждое число в ответе должно опираться на результаты инструментов ниже. Если числа нет в источниках — это выдумка.
+1. Цифры. Каждое число в ответе должно иметь происхождение: результаты инструментов, слова самого пользователя (блок «Что назвал пользователь») или счёт по этим числам. Число без происхождения — выдумка. Число, которое пользователь назвал сам или которое получается арифметикой из имеющихся, выдумкой не считай.
 2. Сходимость. Итог, сумма частей, проценты и доли должны сходиться между собой.
 3. Файлы. Обещанные файлы должны быть созданы; путь в ответе — существующий.
 4. Полнота. На каждый пункт запроса есть ответ; нет «красивого, но пустого» текста.
@@ -264,7 +354,7 @@ const CHECKLIST = `Ты — придирчивый проверяющий гот
  * `excerpts` — короткие выдержки из созданных файлов: проверяющий видит тему
  * и содержимое, а не только имена.
  */
-export async function reviewWithModel({ userQuestion = '', answer = '', digest = '', createdFiles = [], excerpts = [], sources = [], task = null, modelName = '', complete } = {}) {
+export async function reviewWithModel({ userQuestion = '', answer = '', digest = '', createdFiles = [], projectFiles = [], supportedText = '', excerpts = [], sources = [], task = null, modelName = '', complete } = {}) {
   if (typeof complete !== 'function') return { checked: false, verdict: 'ok', issues: [] };
   const files = Array.isArray(excerpts) ? excerpts.filter((item) => item && item.text) : [];
   const filesBlock = files.length
@@ -275,12 +365,22 @@ export async function reviewWithModel({ userQuestion = '', answer = '', digest =
   const taskBlock = pending.length
     ? `По карточке задачи ещё не закрыто:\n${pending.slice(0, 6).map((item) => `— ${item}`).join('\n')}`
     : '';
+  /* Пользовательское число — опора: без этого блока проверяющий считал
+     выдумкой всё, что агент повторил из условия задачи. */
+  const supportBlock = String(supportedText || '').trim()
+    ? `Что назвал пользователь (это опора, а не выдумка):\n${String(supportedText).slice(0, 2500)}`
+    : '';
+  const projectBlock = (Array.isArray(projectFiles) ? projectFiles : []).length
+    ? `Файлы, которые уже есть в проекте: ${projectFiles.slice(0, 60).join(', ')}`
+    : '';
   const prompt = [
     `Запрос пользователя:\n${String(userQuestion || '').slice(0, 2000)}`,
+    supportBlock,
     `Ответ, который будет выдан:\n${String(answer || '').slice(0, 12000)}`,
     `Результаты инструментов (источник фактов):\n${String(digest || 'инструменты не вызывались').slice(0, REVIEW.digestChars)}`,
     sourcesBlock,
     createdFiles.length ? `Созданные файлы: ${createdFiles.join(', ')}` : 'Файлы не создавались.',
+    projectBlock,
     filesBlock,
     taskBlock,
   ]
@@ -413,11 +513,13 @@ export function hasCheckableFacts({ answer = '', sources = [], createdFiles = []
  * правка при серьёзных находках (до REVIEW.fixRounds кругов). Возвращает
  * итоговый текст и отчёт.
  */
-export async function reviewAnswer({ userQuestion = '', answer = '', history = [], createdFiles = [], excerpts = [], routeModel = '', complete, depth = 0, tools = [], task = null } = {}) {
+export async function reviewAnswer({ userQuestion = '', answer = '', history = [], createdFiles = [], projectFiles = [], excerpts = [], routeModel = '', complete, depth = 0, tools = [], task = null } = {}) {
   const report = { checked: false, verdict: 'ok', issues: [], fixed: false, modelChecked: false, model: '', attempts: 0 };
   if (!needsReview({ answer, tools, depth })) return { text: String(answer || ''), report };
 
   const digest = buildDigest(history);
+  /* Опорные числа: что принесли инструменты и что сказал пользователь. */
+  const supportedText = buildSupport({ userQuestion, history });
   /* Источники — отдельным блоком: без них проверяющий не отличает цифру из
      статьи от цифры, придуманной вместе со ссылкой на статью. */
   const sources = extractSources(history);
@@ -431,12 +533,16 @@ export async function reviewAnswer({ userQuestion = '', answer = '', history = [
   const modelName = explicitModel || (checkable ? reviewModelName({ routeModel }) : '');
   report.model = modelName;
   report.proChecked = Boolean(modelName) && modelName === ESCALATION.proModel;
-  const deterministic = checkAnswer({ answer, toolDigest: digest, createdFiles, task });
+  /* Счётчики цифр кладём в отчёт: по ним видно, послабление для расчётов
+     работает или проверка просто перестала замечать выдумку. */
+  const figures = {};
+  const deterministic = checkAnswer({ answer, toolDigest: digest, createdFiles, projectFiles, supportedText, task, stats: figures });
+  report.figures = figures;
   let issues = deterministic;
   report.issues = issues.slice();
 
   if (complete) {
-    const model = await reviewWithModel({ userQuestion, answer, digest, createdFiles, excerpts, sources, task, modelName, complete });
+    const model = await reviewWithModel({ userQuestion, answer, digest, createdFiles, projectFiles, supportedText, excerpts, sources, task, modelName, complete });
     report.modelChecked = model.checked;
     if (model.checked) {
       /* Модель может найти другое, чем регулярка: объединяем без повторов. */
@@ -448,7 +554,7 @@ export async function reviewAnswer({ userQuestion = '', answer = '', history = [
   report.issues = issues.slice(0, REVIEW.maxIssues);
 
   const high = issues.filter((issue) => issue.severity === 'high');
-  const evaluate = (text) => checkAnswer({ answer: text, toolDigest: digest, createdFiles, task });
+  const evaluate = (text) => checkAnswer({ answer: text, toolDigest: digest, createdFiles, projectFiles, supportedText, task });
   if (!high.length || !REVIEW.fix || !complete) {
     report.verdict = issues.length ? 'issues' : 'ok';
     report.checked = true;

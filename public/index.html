@@ -345,6 +345,24 @@
           </div>
         </div>
         <div id="filesNote" class="files-note hidden" aria-live="polite"></div>
+        <!-- Дизайн-проект: листы из спека design.json. Панель стоит над файлами и
+             показывается только когда в проекте есть дизайн — тогда план мебели,
+             полы, потолок, аксонометрия и 3D открываются одним касанием, а спек
+             правится здесь же и пересобирается за секунду, без модели. -->
+        <div id="designPanel" class="design-panel hidden" aria-label="Дизайн-проект">
+          <div class="design-head">
+            <span class="design-head-text">
+              <b>Дизайн-проект</b>
+              <span id="designLead" class="design-lead"></span>
+            </span>
+            <span class="design-actions">
+              <button id="designEditBtn" class="btn design-btn" type="button" title="Править код: спек дизайна и листы">Правка</button>
+              <button id="designBuildBtn" class="btn design-btn design-btn-main" type="button" title="Пересобрать листы из спека">Пересобрать</button>
+            </span>
+          </div>
+          <div id="designGallery" class="design-gallery"></div>
+          <div id="designNote" class="design-note hidden" aria-live="polite"></div>
+        </div>
         <div class="files-actions">
           <button id="filesUploadBtn" class="btn files-upload" type="button" title="Загрузить файлы в папку проекта">
             <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 15V4M5.5 8.5L10 4l4.5 4.5" /></svg>

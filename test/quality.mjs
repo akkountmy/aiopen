@@ -89,6 +89,23 @@ test('свод по дням: итоги, находки по видам, дол
   assert.match(text, /«готово» при открытых пунктах: 1/);
 });
 
+test('числа: сводка отмечает, сколько принято как расчёт, а сколько без опоры', () => {
+  const records = [
+    { ts: '2026-10-26T09:00:00Z', route: 'flash', checked: true, issues: [], figures: 6, derived: 4, unsupported: 2 },
+    { ts: '2026-10-26T10:00:00Z', route: 'flash', checked: true, issues: [], figures: 4, derived: 4, unsupported: 0 },
+  ];
+  const summary = summarizeQuality(records);
+  assert.equal(summary.totals.figures, 10);
+  assert.equal(summary.totals.derived, 8);
+  assert.equal(summary.totals.unsupported, 2);
+  const text = formatQuality(summary);
+  assert.match(text, /Числа в ответах: разобрано 10, принято как расчёт 8 \(80%\), без опоры 2/);
+  /* Записи без счётчиков (старый формат) не должны портить долю. */
+  const old = summarizeQuality([{ ts: '2026-10-26T11:00:00Z', route: 'flash', checked: true, issues: [] }]);
+  assert.equal(old.totals.figures, 0);
+  assert.doesNotMatch(formatQuality(old), /Числа в ответах/);
+});
+
 test('пустая сводка объясняет себя, а не печатает пустую таблицу', () => {
   const text = formatQuality(summarizeQuality([]));
   assert.match(text, /Статистики пока нет/);

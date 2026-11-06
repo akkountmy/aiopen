@@ -53,6 +53,11 @@ export function qualityRecord({ chatId, projectId, route, model, answerChars, to
     fixed: Boolean(review?.fixed),
     attempts: Number(review?.attempts) || 0,
     reviewModel: String(review?.model || ''),
+    /* Сколько чисел проверка разобрала и сколько приняла как расчёт: по этой
+       паре видно, послабление работает или проверка ослепла. */
+    figures: Number(review?.figures?.figures) || 0,
+    derived: Number(review?.figures?.derived) || 0,
+    unsupported: Number(review?.figures?.unsupported) || 0,
     tokensIn: Number(usage?.tokensIn) || 0,
     tokensOut: Number(usage?.tokensOut) || 0,
   };
@@ -149,6 +154,9 @@ export function summarizeQuality(records = []) {
         high: 0,
         issues: {},
         tools: {},
+        figures: 0,
+        derived: 0,
+        unsupported: 0,
         tokensIn: 0,
         tokensOut: 0,
       });
@@ -159,6 +167,9 @@ export function summarizeQuality(records = []) {
     if (record.checked) row.reviewed += 1;
     if (record.fixed) row.fixed += 1;
     if (Number(record.attempts) > 1) row.secondRounds += 1;
+    row.figures += Number(record.figures) || 0;
+    row.derived += Number(record.derived) || 0;
+    row.unsupported += Number(record.unsupported) || 0;
     for (const issue of Array.isArray(record.issues) ? record.issues : []) {
       row.issues[issue.kind] = (row.issues[issue.kind] || 0) + 1;
       if (issue.severity === 'high') row.high += 1;
@@ -178,12 +189,15 @@ export function summarizeQuality(records = []) {
       acc.fixed += row.fixed;
       acc.secondRounds += row.secondRounds;
       acc.high += row.high;
+      acc.figures += row.figures || 0;
+      acc.derived += row.derived || 0;
+      acc.unsupported += row.unsupported || 0;
       acc.tokensIn += row.tokensIn;
       acc.tokensOut += row.tokensOut;
       for (const [kind, count] of Object.entries(row.issues)) acc.issues[kind] = (acc.issues[kind] || 0) + count;
       return acc;
     },
-    { answers: 0, pro: 0, reviewed: 0, fixed: 0, secondRounds: 0, high: 0, issues: {}, tokensIn: 0, tokensOut: 0 },
+    { answers: 0, pro: 0, reviewed: 0, fixed: 0, secondRounds: 0, high: 0, issues: {}, figures: 0, derived: 0, unsupported: 0, tokensIn: 0, tokensOut: 0 },
   );
   return { days: rows, totals, checkedAt: new Date().toISOString() };
 }
@@ -219,5 +233,16 @@ export function formatQuality(summary = { days: [], totals: {} }, { emptyText = 
     )}), сильная модель ${totals.pro || 0} (${percent(totals.pro || 0, totals.answers || 0)}), находок ${totals.high || 0} серьёзных`,
   );
   if (kinds) lines.push(`Находки по видам: ${kinds}`);
+  /* Цифры: сколько чисел проверка разобрала, сколько приняла как расчёт из
+     имеющихся, сколько признала без опоры. Если «без опоры» близко к нулю при
+     живом потоке — проверка не слепая, а расчёт больше не считается выдумкой. */
+  if (totals.figures) {
+    lines.push(
+      `Числа в ответах: разобрано ${totals.figures}, принято как расчёт ${totals.derived} (${percent(
+        totals.derived || 0,
+        totals.figures || 0,
+      )}), без опоры ${totals.unsupported || 0}`,
+    );
+  }
   return lines.join('\n');
 }

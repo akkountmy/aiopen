@@ -351,6 +351,24 @@ test('у каждого инструмента есть русская метк�
   assert.equal(TOOL_LABELS.page_template, 'Каркас страницы');
 });
 
+/* ---------- чтение документа ---------- */
+
+test('read_document возвращает текст файла из папки проекта', async () => {
+  /* Регрессия: в этой ветке читалась переменная full, которой там нет, и любой
+     разбор документа падал с «full is not defined». Проверяем живой вызов. */
+  fs.writeFileSync(path.join(project, 'справка.txt'), 'Справка: сумма 12 000 руб.', 'utf8');
+  const result = await executeTool('read_document', { path: 'справка.txt' }, { workspace: project });
+  assert.match(result.text, /Справка: сумма 12 000 руб\./);
+  assert.equal(result.meta.path, 'справка.txt');
+});
+
+test('read_document не пускает за пределы папки проекта', async () => {
+  await assert.rejects(
+    () => executeTool('read_document', { path: '../../секрет.txt' }, { workspace: project }),
+    /за пределы|не найден|ENOENT/i,
+  );
+});
+
 /* ---------- итог ---------- */
 
 let failed = 0;
