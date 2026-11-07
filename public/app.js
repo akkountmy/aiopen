@@ -5305,8 +5305,6 @@ async function codeEditorOpen({ paths = [], active = null, title = 'Правка
   return modal;
 }
 
-/* «Правка» в блоке дизайна. Открывает тот же редактор, но со списком файлов
-   проекта дизайна: спек и листы, которые из него собираются. */
 /* Дизайн-проект в панели файлов только смотрят: спек и листы собирает
    ассистент, а «Пересобрать» обновляет листы из сохранённого спека. Поэтому
    кнопки «Править» у design.json и собранных листов нет — иначе человек
@@ -11377,7 +11375,7 @@ $('#filesPanelInput').addEventListener('change', (event) => {
   uploadToProject(event.target.files);
   event.target.value = '';
 });
-/* Панель дизайна: пересборка листов и правка спека — прямо в окне проекта. */
+/* Панель дизайна: листы собираются из сохранённого спека по кнопке. */
 $('#designBuildBtn').addEventListener('click', () => designRebuild());
 $('#sidebarToggle').addEventListener('click', () => {
   toggleSidebarDrawer();
