@@ -1,16 +1,14 @@
-// Проверка редактора кода в блоке «Дизайн-проект» через DevTools-протокол
+// Проверка окна правки в панели «Файлы проекта» через DevTools-протокол
 // (без зависимостей, как остальные ui-*.mjs):
-//   - «Правка» открывает окно с вкладками: спек и каждый собранный лист;
+//   - дизайн-проект только смотрится: у панели нет «Править», у design.json и
+//     листов нет кнопки правки, сервер отвечает 403 на запись;
+//   - обычный текстовый файл открывается из просмотра кнопкой «Править»;
 //   - текст в поле ввода совпадает с подсвеченным слоем символ в символ, кегль,
 //     высота строки и отступы у них одинаковые (иначе каретка уезжает от букв);
 //   - нумерация строк совпадает с числом строк файла;
-//   - быстрые параметры (формат листа) подставляются в текст спека, Ctrl+S
-//     сохраняет файл, сервер пересобирает листы, панель дизайна это говорит;
-//   - кривой JSON не сохраняется: показывается строка и символ ошибки;
-//   - «Версии» возвращают прошлое содержимое файла;
+//   - Ctrl+S сохраняет файл, «Версии» возвращают прошлое содержимое;
 //   - закрытие с несохранёнными правками спрашивает прямо в окне и не теряет
 //     текст, если человек передумал;
-//   - из просмотра файла есть «Править»;
 //   - на телефоне окно занимает весь экран, поле не мельче 16 px (иначе iOS
 //     увеличивает страницу), горизонтальной прокрутки страницы нет;
 //   - на странице нет ошибок в консоли.
@@ -237,6 +235,23 @@ try {
     return evaluate(`fetch('/api/projects/${projectId}/file-text?path=' + encodeURIComponent(${JSON.stringify(relPath)}))
       .then((r) => r.json()).then((d) => ({ editable: d.editable, text: d.text, hash: d.hash, bytes: d.bytes }))`);
   }
+  /* Открываем файл из панели так же, как человек: на компьютере двойным
+     щелчком, в мобильной эмуляции — одним касанием. */
+  async function openPreviewOf(name, touch = false) {
+    const clicked = await evaluate(`(() => {
+      const row = [...document.querySelectorAll('#filesList .file-row')]
+        .find((item) => item.textContent.includes(${JSON.stringify(name)}));
+      if (!row) return false;
+      const main = row.querySelector('.row-main');
+      if (${touch ? 'true' : 'false'}) main.click();
+      else main.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true }));
+      return true;
+    })()`);
+    return Boolean(clicked) && (await waitFor(`!!document.querySelector('#modalRoot .modal.file-preview-modal')`, 8000));
+  }
+  async function deleteFile(projectId, relPath) {
+    return evaluate(`fetch('/api/projects/${projectId}/file?path=' + encodeURIComponent(${JSON.stringify(relPath)}), { method: 'DELETE' }).then((r) => r.status)`);
+  }
 
   await goto(BASE + '/');
   await evaluate(
@@ -244,23 +259,94 @@ try {
   );
   await goto(BASE + '/');
 
-  const projectId = await evaluate(`fetch('/api/bootstrap').then((r) => r.json()).then((d) => (Array.isArray(d.projects) && d.projects[0] ? d.projects[0].id : ''))`);
-  if (!projectId) throw new Error('в сервисе нет проекта — проверять нечего');
-  const before = await fileText(projectId, 'design.json');
-  if (!before.editable) throw new Error('design.json не открывается как текст — редактор не проверить');
-  const specBefore = JSON.parse(before.text);
-  console.log(`  --  проект ${projectId}, спек ${before.bytes} Б, формат ${specBefore.paper}\n`);
+  /* Берём проект с дизайном, если он есть: на нём проверяется запрет правки.
+     Если дизайна нет ни в одном проекте, остаётся обычный проект и проверка
+     самого окна правки. */
+  const picked = await evaluate(`(async () => {
+    const projects = (await fetch('/api/bootstrap').then((r) => r.json())).projects || [];
+    for (const project of projects) {
+      const data = await fetch('/api/projects/' + encodeURIComponent(project.id) + '/design')
+        .then((r) => r.json()).catch(() => ({}));
+      if (data && data.design && data.design.hasSpec) return { id: project.id, name: project.name };
+    }
+    return projects[0] ? { id: projects[0].id, name: projects[0].name } : null;
+  })()`);
+  if (!picked) throw new Error('в сервисе нет проекта — проверять нечего');
+  const projectId = picked.id;
+
+  /* Дизайн-проект — только для просмотра: сервер не отдаёт его в редактор и не
+     принимает запись. Если спека в проекте нет, эту часть пропускаем: редактор
+     обычных файлов от дизайна не зависит. */
+  const designText = await fileText(projectId, 'design.json');
+  const design = await evaluate(`fetch('/api/projects/${projectId}/design').then((r) => r.json()).then((d) => Boolean(d.design && d.design.hasSpec))`);
+  const designWrite = await evaluate(`fetch('/api/projects/${projectId}/file-text', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path: 'design/editor-check.svg', text: '<svg/>', force: true }),
+  }).then((r) => r.json().then((d) => ({ status: r.status, error: d.error })))`);
+  if (design) {
+    designText.editable === false && designWrite.status === 403
+      ? ok('дизайн-проект закрыт от ручной правки', `чтение editable=${designText.editable}, запись ${designWrite.status}`)
+      : fail('запрет правки дизайна', JSON.stringify({ editable: designText.editable, write: designWrite }));
+  } else {
+    console.log('  --  в проекте нет design.json — проверка запрета правки дизайна пропущена');
+  }
+
+  /* Файл для проверки самого окна правки: обычный текст, не дизайн. */
+  const scratch = await evaluate(`fetch('/api/projects/${projectId}/upload', {
+    method: 'POST', headers: { 'x-filename': 'editor-check.md', 'Content-Type': 'text/markdown' },
+    body: '# Проверка редактора\\n\\nПервая строка.\\n',
+  }).then((r) => r.json())`);
+  if (!scratch || !scratch.path) throw new Error('проверочный файл не загрузился');
+  const scratchText = await fileText(projectId, scratch.path);
+  console.log(`  --  проект ${projectId}, проверочный файл ${scratch.path} (${scratchText.bytes} Б)\n`);
+  await goto(BASE + '/');
 
   /* ---------------------------- компьютер ---------------------------- */
   await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false });
 
-  const panelReady = await waitFor(`(() => {
-    const panel = document.getElementById('designPanel');
-    return panel && !panel.classList.contains('hidden') && document.querySelectorAll('.design-card').length > 0;
+  const activated = await evaluate(`(() => {
+    const row = [...document.querySelectorAll('#projectList .project .row-main')]
+      .find((item) => item.querySelector('.p-name') && item.querySelector('.p-name').textContent === ${JSON.stringify(picked.name)});
+    if (!row) return false;
+    row.click();
+    return true;
   })()`);
-  if (!panelReady) throw new Error('панель дизайна не появилась: нет спека или проекта');
+  if (!activated) throw new Error('проект с дизайном не нашёлся в списке проектов');
+  await waitFor(`(() => {
+    const row = document.querySelector('#filesList .file-row');
+    return Boolean(row) && row.textContent.includes(${JSON.stringify(scratch.path.split('/').pop())});
+  })()`, 12000);
+  if (design) await waitFor(`document.querySelectorAll('.design-card').length > 0`, 9000);
 
-  await evaluate(`document.getElementById('designEditBtn').click()`);
+  const designPanelState = await evaluate(`(() => {
+    const panel = document.getElementById('designPanel');
+    return {
+      shown: Boolean(panel) && !panel.classList.contains('hidden'),
+      cards: document.querySelectorAll('.design-card').length,
+      edit: Boolean(document.getElementById('designEditBtn')),
+      build: Boolean(document.getElementById('designBuildBtn')),
+    };
+  })()`);
+  if (design) {
+    designPanelState.shown && designPanelState.cards > 0 && designPanelState.build && !designPanelState.edit
+      ? ok('в панели дизайна осталась сборка, а правки нет', `${designPanelState.cards} листов`)
+      : fail('панель дизайна без кнопки правки', JSON.stringify(designPanelState));
+
+    /* «Пересобрать» остаётся рабочим: листы обновляются из сохранённого спека. */
+    await evaluate(`document.getElementById('designBuildBtn').click()`);
+    const rebuilt = await waitFor(`/Листы обновлены/.test((document.getElementById('designNote') || {}).textContent || '')`, 30000);
+    rebuilt
+      ? ok('«Пересобрать» обновляет листы без редактора')
+      : fail('пересборка листов', (await evaluate(`(document.getElementById('designNote') || {}).textContent || ''`)).slice(0, 160));
+  }
+
+  /* Обычный текстовый файл открывается из панели и правится из просмотра. */
+  const previewOk = await openPreviewOf(scratch.path, false);
+  const previewEdit = await evaluate(`[...document.querySelectorAll('#modalRoot .modal-foot .btn')].some((b) => b.textContent.trim() === 'Править')`);
+  previewOk && previewEdit
+    ? ok('у обычного текстового файла в просмотре есть «Править»')
+    : fail('кнопка «Править» у обычного файла', JSON.stringify({ previewOk, previewEdit }));
+  await clickByText('#modalRoot .modal-foot .btn', 'Править');
   const opened = await waitFor(`(() => {
     const area = document.querySelector('#modalRoot .modal.code-modal .code-input');
     return Boolean(area) && !area.readOnly && area.value.length > 0;
@@ -270,12 +356,13 @@ try {
   const m = await evaluate(MEASURE);
   await shot('code-desktop.png');
 
-  /* 1. Вкладки: спек первым, листы следом. */
-  const designTab = m.tabs.find((tab) => tab.name === 'design.json');
-  designTab && designTab.active && m.tabs.length >= 6
-    ? ok('в окне вкладки спека и листов', `${m.tabs.length} шт.: ${m.tabs.map((t) => t.name).join(', ')}`)
+  /* 1. Одна вкладка — открытый файл. */
+  const tabName = scratch.path.split('/').pop();
+  const scratchTab = m.tabs.find((tab) => tab.name === tabName);
+  scratchTab && scratchTab.active && m.tabs.length === 1
+    ? ok('в окне вкладка открытого файла', m.tabs.map((t) => t.name).join(', '))
     : fail('вкладки окна правки', JSON.stringify(m.tabs));
-  m.path === 'design.json' && /JSON/.test(m.meta)
+  m.path === scratch.path && /Markdown/.test(m.meta)
     ? ok('подпись и язык файла на месте', m.meta)
     : fail('подпись файла', JSON.stringify({ path: m.path, meta: m.meta }));
 
@@ -291,46 +378,13 @@ try {
     ? ok('нумерация строк совпадает с файлом', `${m.lines} строк`)
     : fail('нумерация строк', JSON.stringify({ gutter: m.gutter, lines: m.lines }));
 
-  /* 3. Сводка по спеку в предпросмотре — человек видит, что он правит. */
-  const previewBtn = await clickByText('.code-modal .code-tool', 'Просмотр');
-  await sleep(260);
-  const mPreview = await evaluate(MEASURE);
-  previewBtn && mPreview.previewOn && mPreview.summary.length >= 5 && mPreview.summaryRooms >= 1
-    ? ok('предпросмотр показывает сводку спека', `${mPreview.summary.length} строк, ${mPreview.summaryRooms} комнат`)
-    : fail('сводка спека', JSON.stringify({ clicked: previewBtn, on: mPreview.previewOn, summary: mPreview.summary, rooms: mPreview.summaryRooms }));
-  await shot('code-desktop-preview.png');
-  await clickByText('.code-modal .code-tool', 'Просмотр');
-  await sleep(160);
-
-  /* 4. Быстрые параметры подставляются в текст, Ctrl+S сохраняет и пересобирает.
-        В спеке дизайна панель параметров открыта сразу (её и меняют чаще всего),
-        поэтому проверяем и сворачивание. */
-  m.quickHidden === false
-    ? ok('параметры спека показаны сразу при открытии')
-    : fail('параметры спека', 'панель спрятана при открытии');
-  const quickHidden = `document.querySelector('#modalRoot .modal.code-modal .code-quick').classList.contains('hidden')`;
-  await clickByText('.code-modal .code-tool', 'Параметры');
-  await sleep(200);
-  const quickOff = await evaluate(quickHidden);
-  const quickToggleOn = await evaluate(`[...document.querySelectorAll('#modalRoot .modal.code-modal .code-tool')].some((b) => b.textContent.trim() === 'Параметры' && b.classList.contains('is-on'))`);
-  await clickByText('.code-modal .code-tool', 'Параметры');
-  await sleep(200);
-  const quickOn = await evaluate(`!(${quickHidden})`);
-  quickOff && quickOn && !quickToggleOn
-    ? ok('параметры сворачиваются и разворачиваются')
-    : fail('сворачивание параметров', JSON.stringify({ quickOff, quickOn, quickToggleOn }));
-  const changed = await evaluate(`(() => {
-    const select = document.getElementById('code-quick-paper');
-    if (!select) return false;
-    select.value = 'A1';
-    select.dispatchEvent(new Event('change', { bubbles: true }));
-    return true;
-  })()`);
+  /* 3. Правка текста и Ctrl+S: файл на диске меняется, пометка снимается. */
+  await typeAtEnd('\n\nДобавлено проверкой.');
   await sleep(220);
-  const mQuick = await evaluate(MEASURE);
-  changed && /"paper": "A1"/.test(mQuick.value) && mQuick.status.dirty && mQuick.tabs.some((t) => t.active && t.dot)
-    ? ok('параметры подставлены в спек, вкладка помечена как изменённая')
-    : fail('подстановка параметров', JSON.stringify({ changed, paper: /"paper": "(\w+)"/.exec(mQuick.value)?.[1], status: mQuick.status, tabs: mQuick.tabs }));
+  const mDirty = await evaluate(MEASURE);
+  mDirty.status.dirty && mDirty.tabs.some((t) => t.active && t.dot)
+    ? ok('правка в поле помечает вкладку как изменённую')
+    : fail('пометка изменений', JSON.stringify({ status: mDirty.status, tabs: mDirty.tabs }));
 
   await ctrlS();
   const savedOk = await waitFor(`(() => {
@@ -339,20 +393,16 @@ try {
   })()`, 20000);
   await sleep(400);
   const mSaved = await evaluate(MEASURE);
-  const afterSave = await fileText(projectId, 'design.json');
-  savedOk && /пересобраны: \d+ из \d+/.test(mSaved.status.text)
-    ? ok('Ctrl+S сохранил и пересобрал листы', mSaved.status.text.trim())
+  const afterSave = await fileText(projectId, scratch.path);
+  savedOk && /Файл сохранён/.test(mSaved.status.text)
+    ? ok('Ctrl+S сохранил файл', mSaved.status.text.trim())
     : fail('сохранение через Ctrl+S', JSON.stringify({ savedOk, status: mSaved.status }));
-  JSON.parse(afterSave.text).paper === 'A1'
-    ? ok('на диск записан отредактированный спек', `paper=${JSON.parse(afterSave.text).paper}, ${afterSave.bytes} Б`)
-    : fail('файл на диске', String(JSON.parse(afterSave.text).paper));
-  const note = await evaluate(`(document.getElementById('designNote') || {}).textContent || ''`);
-  /пересобраны: \d+ из \d+/.test(note)
-    ? ok('панель дизайна сообщила о пересборке', note.trim())
-    : fail('сообщение панели дизайна', JSON.stringify(note));
+  afterSave.text.includes('Добавлено проверкой.')
+    ? ok('на диск записан отредактированный текст', `${afterSave.bytes} Б`)
+    : fail('файл на диске', afterSave.text);
   mSaved.tabs.every((t) => !t.dot) ? ok('пометка «изменено» снята после сохранения') : fail('пометка изменений', JSON.stringify(mSaved.tabs));
 
-  /* 5. «Версии» возвращают то, что было до правки. */
+  /* 4. «Версии» возвращают то, что было до правки. */
   await clickByText('.code-modal .code-tool', 'Версии');
   await sleep(200);
   const askedVersion = await evaluate(`Boolean(document.querySelector('#modalRoot .modal.code-modal .code-ask.is-open'))`);
@@ -363,31 +413,22 @@ try {
   })()`, 20000);
   await sleep(300);
   const mRestored = await evaluate(MEASURE);
-  const afterRestore = await fileText(projectId, 'design.json');
-  askedVersion && restoredOk && JSON.parse(mRestored.value).paper === specBefore.paper && JSON.parse(afterRestore.text).paper === specBefore.paper
-    ? ok('«Версии» вернули прошлый спек', `paper=${JSON.parse(afterRestore.text).paper}`)
-    : fail('возврат версии', JSON.stringify({ askedVersion, restoredOk, inWindow: /"paper": "(\w+)"/.exec(mRestored.value)?.[1], onDisk: JSON.parse(afterRestore.text).paper }));
+  const afterRestore = await fileText(projectId, scratch.path);
+  askedVersion && restoredOk && mRestored.value === scratchText.text && afterRestore.text === scratchText.text
+    ? ok('«Версии» вернули прошлый текст', `${afterRestore.bytes} Б`)
+    : fail('возврат версии', JSON.stringify({ askedVersion, restoredOk, inWindow: mRestored.value === scratchText.text, onDisk: afterRestore.text === scratchText.text }));
 
-  /* 6. Кривой JSON не сохраняется: человек видит строку и символ ошибки. */
-  await typeAtEnd(',');
-  await ctrlS();
-  const badOk = await waitFor(`(() => {
-    const status = document.querySelector('#modalRoot .modal.code-modal .code-status');
-    return Boolean(status) && status.classList.contains('is-bad');
-  })()`, 8000);
-  const mBad = await evaluate(MEASURE);
-  const afterBad = await fileText(projectId, 'design.json');
-  badOk && /строка \d+/.test(mBad.status.text) && afterBad.text === afterRestore.text
-    ? ok('ошибка JSON показана со строкой, файл не тронут', mBad.status.text.trim())
-    : fail('проверка JSON перед записью', JSON.stringify({ badOk, status: mBad.status, same: afterBad.text === afterRestore.text }));
+  /* 5. Своя отмена снимает пометку и возвращает текст файла. */
+  await typeAtEnd(' ');
+  await sleep(160);
   await ctrlKey('z', 'KeyZ', 90);
-  await sleep(250);
+  await sleep(300);
   const mUndo = await evaluate(MEASURE);
-  !mUndo.status.dirty && /отменена/.test(mUndo.status.text) && mUndo.value === afterRestore.text && mUndo.tabs.every((t) => !t.dot)
+  !mUndo.status.dirty && mUndo.value === scratchText.text && mUndo.tabs.every((t) => !t.dot)
     ? ok('своя отмена вернула текст файла и сняла пометку изменений')
-    : fail('отмена правки', JSON.stringify({ status: mUndo.status, same: mUndo.value === afterRestore.text, tabs: mUndo.tabs }));
+    : fail('отмена правки', JSON.stringify({ status: mUndo.status, same: mUndo.value === scratchText.text, tabs: mUndo.tabs }));
 
-  /* 7. Закрытие с несохранёнными правками спрашивает и не теряет текст. */
+  /* 6. Закрытие с несохранёнными правками спрашивает и не теряет текст. */
   await typeAtEnd(' ');
   await sleep(200);
   const dirtyState = await evaluate(MEASURE);
@@ -408,109 +449,103 @@ try {
   const closed = await waitFor(`!document.querySelector('#modalRoot .modal.code-modal')`, 6000);
   closed ? ok('чистое окно закрывается сразу') : fail('закрытие чистого окна', 'окно осталось');
 
-  /* 8. Из просмотра листа есть «Править» — тот же редактор на один файл. */
-  await evaluate(`document.querySelector('.design-card').click()`);
-  const previewOpen = await waitFor(`!!document.querySelector('#modalRoot .modal.file-preview-modal')`, 8000);
-  const hasEdit = await evaluate(`[...document.querySelectorAll('#modalRoot .modal-foot .btn')].some((b) => b.textContent.trim() === 'Править')`);
-  if (!previewOpen) {
-    fail('просмотр листа из панели дизайна', 'окно не открылось');
-  } else {
-    hasEdit ? ok('в просмотре листа есть кнопка «Править»') : fail('кнопка «Править» в просмотре', 'её нет в нижней полосе');
-    await clickByText('#modalRoot .modal-foot .btn', 'Править');
-    const svgOpened = await waitFor(`(() => {
-      const area = document.querySelector('#modalRoot .modal.code-modal .code-input');
-      return Boolean(area) && area.value.startsWith('<') && /SVG/.test(document.querySelector('#modalRoot .modal.code-modal .code-meta').textContent);
-    })()`, 12000);
-    await sleep(420);
-    const mSvg = await evaluate(MEASURE);
-    await shot('code-desktop-svg.png');
-    svgOpened && mSvg.tabs.length === 1 && mSvg.tabs[0].name === 'plan.svg'
-      ? ok('лист открылся в редакторе отдельной вкладкой', mSvg.tabs[0].name)
-      : fail('правка листа', JSON.stringify({ svgOpened, tabs: mSvg.tabs }));
-    mSvg.hlText === mSvg.value && mSvg.gutter.count === mSvg.lines
-      ? ok('SVG подсвечен без расхождения с текстом', `${mSvg.lines} строк`)
-      : fail('подсветка SVG', JSON.stringify({ equal: mSvg.hlText === mSvg.value, gutter: mSvg.gutter, lines: mSvg.lines }));
-    mSvg.previewOn && mSvg.img && mSvg.img.w > 0
-      ? ok('предпросмотр листа показывает сам чертёж', `${mSvg.img.w}×${mSvg.img.h}`)
-      : fail('предпросмотр SVG', JSON.stringify({ on: mSvg.previewOn, img: mSvg.img }));
-    await clickByText('#modalRoot .modal.code-modal .modal-foot .btn', 'Закрыть');
-    await waitFor(`!document.querySelector('#modalRoot .modal.code-modal')`, 6000);
+  /* 7. Панель дизайна: лист открывается, но «Править» в просмотре нет.
+        Сам design.json из списка файлов — тоже только для просмотра. */
+  if (design) {
+    await evaluate(`document.querySelector('.design-card').click()`);
+    const previewOpen = await waitFor(`!!document.querySelector('#modalRoot .modal.file-preview-modal')`, 8000);
+    const hasEdit = await evaluate(`[...document.querySelectorAll('#modalRoot .modal-foot .btn')].some((b) => b.textContent.trim() === 'Править')`);
+    previewOpen && !hasEdit
+      ? ok('лист из панели дизайна открывается без кнопки «Править»')
+      : fail('просмотр листа', JSON.stringify({ previewOpen, hasEdit }));
+    await clickByText('#modalRoot .modal-foot .btn', 'Закрыть');
+    await waitFor(`!document.querySelector('#modalRoot .modal.file-preview-modal')`, 6000);
+
+    const specPreview = await openPreviewOf('design.json', false);
+    const specEdit = await evaluate(`[...document.querySelectorAll('#modalRoot .modal-foot .btn')].some((b) => b.textContent.trim() === 'Править')`);
+    specPreview && !specEdit
+      ? ok('design.json из списка файлов открывается только для просмотра')
+      : fail('просмотр design.json', JSON.stringify({ specPreview, specEdit }));
+    await clickByText('#modalRoot .modal-foot .btn', 'Закрыть');
+    await waitFor(`!document.querySelector('#modalRoot .modal.file-preview-modal')`, 6000);
   }
 
   /* ---------------------------- телефон ---------------------------- */
   await cdp.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
   await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 });
   await goto(BASE + '/');
-  const panelShown = `(() => {
-    const panel = document.getElementById('designPanel');
-    return panel && !panel.classList.contains('hidden') && document.querySelectorAll('.design-card').length > 0;
-  })()`;
-  /* На телефоне панель файлов живёт в выдвижном ящике: пока он закрыт, блока
-     «Дизайн-проект» на экране нет. Открываем ящик кнопкой — так же, как человек. */
-  let mobilePanel = await waitFor(panelShown, 9000);
-  if (!mobilePanel) {
-    await evaluate(`document.getElementById('filesBtn').click()`);
-    mobilePanel = await waitFor(panelShown, 9000);
-  }
-  if (!mobilePanel) {
-    fail('панель дизайна на телефоне', 'не появилась даже после открытия панели файлов');
+  /* На телефоне панель файлов живёт в выдвижном ящике: пока он закрыт, списка
+     файлов на экране нет. Открываем ящик кнопкой — так же, как человек. */
+  const drawerOpen = await evaluate(`document.getElementById('app').classList.contains('files-open')`);
+  if (!drawerOpen) await evaluate(`document.getElementById('filesBtn').click()`);
+  await waitFor(`document.querySelectorAll('#filesList .file-row').length > 0`, 9000);
+  const mobilePreview = await openPreviewOf(scratch.path, true);
+  const mobileEdit = await evaluate(`[...document.querySelectorAll('#modalRoot .modal-foot .btn')].some((b) => b.textContent.trim() === 'Править')`);
+  const mobileOpen = mobilePreview && mobileEdit
+    ? await (async () => {
+        await clickByText('#modalRoot .modal-foot .btn', 'Править');
+        return waitFor(`(() => {
+          const area = document.querySelector('#modalRoot .modal.code-modal .code-input');
+          return Boolean(area) && area.value.length > 0;
+        })()`);
+      })()
+    : false;
+  if (!mobilePreview || !mobileEdit || !mobileOpen) {
+    fail('редактор на телефоне', JSON.stringify({ mobilePreview, mobileEdit, mobileOpen }));
   } else {
-    await evaluate(`document.getElementById('designEditBtn').click()`);
-    const mobileOpen = await waitFor(`(() => {
-      const area = document.querySelector('#modalRoot .modal.code-modal .code-input');
-      return Boolean(area) && area.value.length > 0;
-    })()`);
     await sleep(360);
     const mm = await evaluate(MEASURE);
     await shot('code-mobile.png');
-    if (!mobileOpen || !mm) {
-      fail('редактор на телефоне', 'окно не открылось');
-    } else {
-      /* Окно правки на телефоне — весь экран, как остальные полноэкранные окна:
-         на узком экране половина строки кода хуже, чем ничего. */
-      mm.rect.x === 0 && mm.rect.y === 0 && mm.rect.w === 390 && mm.rect.h === 844
-        ? ok('на телефоне окно правки во весь экран', `${mm.rect.w}×${mm.rect.h}`)
-        : fail('размер окна на телефоне', JSON.stringify({ rect: mm.rect, inner: mm.inner }));
-      const areaFont = parseFloat((mm.font.area.split(' / ')[1] || '0'));
-      areaFont >= 16
-        ? ok('поле ввода не мельче 16 px', `${areaFont} px`)
-        : fail('кегль поля на телефоне', `${areaFont} px — iOS увеличит страницу`);
-      mm.font.area === mm.font.hl
-        ? ok('на телефоне слои по-прежнему совпадают', mm.font.hl)
-        : fail('метрики на телефоне', JSON.stringify(mm.font));
-      mm.hlText === mm.value ? ok('текст и подсветка совпадают на телефоне') : fail('подсветка на телефоне', 'слои разъехались');
-      mm.overflowX <= 0 ? ok('страница не прокручивается вбок', `${mm.tabs.length} вкладок`) : fail('горизонтальная прокрутка', `${mm.overflowX} px`);
-      /* Кнопки правки на телефоне должны переноситься, а не уезжать за край:
-         иначе «Просмотр» и «Скачать» просто не нажать. */
-      const toolsRects = await evaluate(`[...document.querySelectorAll('#modalRoot .modal.code-modal .code-bar .code-tool')]
-        .filter((b) => !b.classList.contains('hidden'))
-        .map((b) => { const r = b.getBoundingClientRect(); return { label: b.textContent.trim(), left: Math.round(r.left), right: Math.round(r.right), w: Math.round(r.width) }; })`);
-      const toolsFit = toolsRects.every((r) => r.w > 0 && r.right <= 391);
-      toolsFit
-        ? ok('все кнопки правки видны на телефоне', `${toolsRects.length} шт.`)
-        : fail('кнопки за краем экрана', JSON.stringify({ rects: toolsRects, bar: mm.rect.w }));
-      const keys = await evaluate(`(() => {
-        const node = document.querySelector('#modalRoot .modal.code-modal .code-keys');
-        return node ? getComputedStyle(node).display : 'нет';
-      })()`);
-      keys === 'none' ? ok('подсказка про Ctrl+S спрятана на телефоне') : fail('подсказка клавиш на телефоне', String(keys));
-      await clickByText('#modalRoot .modal.code-modal .modal-foot .btn', 'Закрыть');
-      await waitFor(`!document.querySelector('#modalRoot .modal.code-modal')`, 6000);
-    }
+    /* Окно правки на телефоне — весь экран, как остальные полноэкранные окна:
+       на узком экране половина строки кода хуже, чем ничего. */
+    mm.rect.x === 0 && mm.rect.y === 0 && mm.rect.w === 390 && mm.rect.h === 844
+      ? ok('на телефоне окно правки во весь экран', `${mm.rect.w}×${mm.rect.h}`)
+      : fail('размер окна на телефоне', JSON.stringify({ rect: mm.rect, inner: mm.inner }));
+    const areaFont = parseFloat((mm.font.area.split(' / ')[1] || '0'));
+    areaFont >= 16
+      ? ok('поле ввода не мельче 16 px', `${areaFont} px`)
+      : fail('кегль поля на телефоне', `${areaFont} px — iOS увеличит страницу`);
+    mm.font.area === mm.font.hl
+      ? ok('на телефоне слои по-прежнему совпадают', mm.font.hl)
+      : fail('метрики на телефоне', JSON.stringify(mm.font));
+    mm.hlText === mm.value ? ok('текст и подсветка совпадают на телефоне') : fail('подсветка на телефоне', 'слои разъехались');
+    mm.overflowX <= 0 ? ok('страница не прокручивается вбок', `${mm.tabs.length} вкладок`) : fail('горизонтальная прокрутка', `${mm.overflowX} px`);
+    /* Кнопки правки на телефоне должны переноситься, а не уезжать за край:
+       иначе «Просмотр» и «Скачать» просто не нажать. */
+    const toolsRects = await evaluate(`[...document.querySelectorAll('#modalRoot .modal.code-modal .code-bar .code-tool')]
+      .filter((b) => !b.classList.contains('hidden'))
+      .map((b) => { const r = b.getBoundingClientRect(); return { label: b.textContent.trim(), left: Math.round(r.left), right: Math.round(r.right), w: Math.round(r.width) }; })`);
+    const toolsFit = toolsRects.every((r) => r.w > 0 && r.right <= 391);
+    toolsFit
+      ? ok('все кнопки правки видны на телефоне', `${toolsRects.length} шт.`)
+      : fail('кнопки за краем экрана', JSON.stringify({ rects: toolsRects, bar: mm.rect.w }));
+    const keys = await evaluate(`(() => {
+      const node = document.querySelector('#modalRoot .modal.code-modal .code-keys');
+      return node ? getComputedStyle(node).display : 'нет';
+    })()`);
+    keys === 'none' ? ok('подсказка про Ctrl+S спрятана на телефоне') : fail('подсказка клавиш на телефоне', String(keys));
+    await clickByText('#modalRoot .modal.code-modal .modal-foot .btn', 'Закрыть');
+    await waitFor(`!document.querySelector('#modalRoot .modal.code-modal')`, 6000);
   }
 
-  /* 9. Консоль страницы должна быть чистой: молчаливые ошибки в редакторе
+  /* 8. Консоль страницы должна быть чистой: молчаливые ошибки в редакторе
         означают, что подсветка или сохранение где-то падают. */
   const failures = consoleErrors.filter((line) => !/favicon|ResizeObserver loop/i.test(line));
   failures.length === 0
     ? ok('в консоли страницы нет ошибок')
     : fail('ошибки в консоли', failures.slice(0, 4).join(' | '));
 
-  /* 10. Файл вернулся к исходному спеку: проверка не оставляет мусора. */
-  const finalState = await fileText(projectId, 'design.json');
-  JSON.parse(finalState.text).paper === specBefore.paper
-    ? ok('спек остался исходным после проверки', `paper=${JSON.parse(finalState.text).paper}`)
-    : fail('спек изменился от проверки', String(JSON.parse(finalState.text).paper));
+  /* 9. Убираем проверочный файл и убеждаемся, что дизайн не тронут. */
+  await deleteFile(projectId, scratch.path);
+  if (designWrite.status !== 403) await deleteFile(projectId, 'design/editor-check.svg');
+  if (design) {
+    const finalDesign = await evaluate(`fetch('/api/projects/${projectId}/design').then((r) => r.json()).then((d) => Boolean(d.design && d.design.hasSpec))`);
+    finalDesign ? ok('дизайн-проект остался на месте после проверки') : fail('дизайн после проверки', 'спека больше нет');
+  }
+  const leftover = await fileText(projectId, scratch.path);
+  leftover.editable === false || leftover.bytes === undefined
+    ? ok('проверочный файл удалён')
+    : fail('проверочный файл остался', scratch.path);
 } finally {
   chrome.kill();
   await sleep(400);

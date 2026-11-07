@@ -3943,13 +3943,11 @@ function designCard(artifact) {
 let designBuilding = false;
 
 function setDesignBusy(busy) {
-  for (const id of ['#designBuildBtn', '#designEditBtn']) {
-    const node = $(id);
-    if (!node) continue;
-    node.disabled = busy;
-  }
   const build = $('#designBuildBtn');
-  if (build) build.textContent = busy ? 'Собираю…' : 'Пересобрать';
+  if (build) {
+    build.disabled = busy;
+    build.textContent = busy ? 'Собираю…' : 'Пересобрать';
+  }
 }
 
 async function designRebuild({ only = null, silent = false } = {}) {
@@ -4962,26 +4960,10 @@ async function codeEditorOpen({ paths = [], active = null, title = 'Правка
       tab.bytes = data.bytes || tab.bytes;
       tab.at = data.at || tab.at;
       if (data.history && typeof data.history.count === 'number') tab.versions = data.history.count;
-      if (data.design && state.design) {
-        state.design = data.design;
-        renderDesign();
-      }
-      const failed = (data.results || []).filter((item) => !item.ok);
-      /* Если правили спек, панель дизайна должна сказать, что листы
-         пересобрались: строка «сохранено» в редакторе этого не видит. */
-      if (Array.isArray(data.results) && data.results.length) {
-        if (failed.length) {
-          designNote(`Спек сохранён, но не всё собралось: ${failed.map((item) => `${item.title} — ${item.error}`).join('; ')}`, 0);
-        } else {
-          designNote(`Спек сохранён, листы пересобраны: ${data.results.length} из ${data.results.length}.`, 6000);
-        }
-      } else if (data.rebuildError) {
-        designNote(`Спек сохранён, но листы не собрались: ${data.rebuildError}`, 0);
-      }
       updateDirtyUi(tab);
       updateTools(tab);
       renderPreview();
-      setStatus(data.text || 'Файл сохранён.', failed.length ? 'bad' : 'ok');
+      setStatus(data.text || 'Файл сохранён.', 'ok');
       /* Список файлов показывает размеры и время правки — после записи его
          надо обновить, иначе человек видит старое «изменён вчера». */
       loadFiles();
@@ -5325,35 +5307,19 @@ async function codeEditorOpen({ paths = [], active = null, title = 'Правка
 
 /* «Правка» в блоке дизайна. Открывает тот же редактор, но со списком файлов
    проекта дизайна: спек и листы, которые из него собираются. */
-async function openDesignEditor() {
-  const projectId = filesProjectId();
-  const design = state.design;
-  if (!projectId || !design) return;
-  if (!design.hasSpec) {
-    designNote('Спека ещё нет — попросите агента собрать дизайн-проект, и он появится здесь для правки.', 0);
-    return;
-  }
-  const paths = ['design.json'];
-  for (const artifact of design.artifacts || []) {
-    if (!artifact || !artifact.file || artifact.file === 'design.json') continue;
-    if (artifact.exists === false) continue;
-    if (!paths.includes(artifact.file)) paths.push(artifact.file);
-  }
-  const rooms = (design.spec && Array.isArray(design.spec.rooms) && design.spec.rooms.length) || 0;
-  const sheets = Math.max(0, paths.length - 1);
-  await codeEditorOpen({
-    paths,
-    active: 'design.json',
-    quick: true,
-    projectId,
-    title: 'Правка дизайн-проекта',
-    subtitle: `${rooms ? `${rooms} комн. · ` : ''}спек${sheets ? ` и ${sheets} ${codePlural(sheets, 'лист', 'листа', 'листов')}` : ''} · сохранение пересоберёт листы`,
-  });
+/* Дизайн-проект в панели файлов только смотрят: спек и листы собирает
+   ассистент, а «Пересобрать» обновляет листы из сохранённого спека. Поэтому
+   кнопки «Править» у design.json и собранных листов нет — иначе человек
+   менял бы то, что генератор всё равно перезапишет при следующей сборке. */
+function isDesignFilePath(path) {
+  const clean = String(path || '').replace(/\\/g, '/').replace(/^\.?\//, '');
+  return clean === 'design.json' || clean.startsWith('design/');
 }
 
 /* Правка файла из панели файлов и из просмотра: один файл, без быстрых полей. */
 async function openFileEditor(item) {
   if (!item || !item.path) return;
+  if (isDesignFilePath(item.path)) return;
   await codeEditorOpen({ paths: [item.path], active: item.path, projectId: filesProjectId() });
 }
 
@@ -6604,12 +6570,11 @@ function openFilePreview(item) {
   /* Окно открывается поверх панели файлов, а не вместо неё: после «Закрыть»
      человек остаётся там же, где выбирал файл. */
   const reopenDrawer = Boolean(state.filesDrawerOpen) && filesNarrow();
-  /* У текстовых файлов (спек дизайна, листы SVG, страница 3D, любой .json/.md)
-     первой кнопкой стоит «Править»: до сих пор такой файл можно было
-     только скачать и править в блокноте, а потом загрузить назад. Страница
-     HTML раньше открывалась вовсе без кнопок — теперь у неё есть хотя бы эта. */
+  /* У текстовых файлов (страница проекта, README, конфиг) первой кнопкой стоит
+     «Править». У дизайн-проекта её нет: спек и листы собирает ассистент, ручная
+     правка разошлась бы с генератором и потерялась бы при следующей сборке. */
   const actions = [];
-  if (codeEditableName(item.name)) {
+  if (codeEditableName(item.name) && !isDesignFilePath(item.path)) {
     actions.push({
       label: 'Править',
       onClick: () => {
@@ -11406,7 +11371,6 @@ $('#filesPanelInput').addEventListener('change', (event) => {
 });
 /* Панель дизайна: пересборка листов и правка спека — прямо в окне проекта. */
 $('#designBuildBtn').addEventListener('click', () => designRebuild());
-$('#designEditBtn').addEventListener('click', () => openDesignEditor());
 $('#sidebarToggle').addEventListener('click', () => {
   toggleSidebarDrawer();
 });

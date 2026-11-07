@@ -1030,6 +1030,14 @@ const EDIT_MAX_BYTES = 2 * 1024 * 1024;
    правку недельной давности, а место в /data не растёт бесконечно. */
 const EDIT_HISTORY_KEEP = 10;
 
+/* Дизайн-проект в окне файлов не правится. Спек и листы собирает build_design;
+   ручная правка в редакторе разошлась бы с генератором и потерялась бы при
+   следующей сборке, поэтому в панели они только смотрятся и скачиваются. */
+function isDesignFilePath(relPath) {
+  const clean = String(relPath || '').replace(/\\/g, '/').replace(/^\.\//, '');
+  return clean === 'design.json' || clean.startsWith('design/');
+}
+
 function editTextKind(relPath) {
   const ext = path.extname(String(relPath || '')).toLowerCase();
   if (ext === '.json' || ext === '.jsonl' || ext === '.map' || ext === '.webmanifest') return 'json';
@@ -3835,6 +3843,14 @@ async function route(req, res) {
           kind: editTextKind(full),
         };
         const ext = path.extname(full).toLowerCase();
+        if (isDesignFilePath(relPath)) {
+          return sendJson(res, 200, {
+            ...base,
+            editable: false,
+            reason:
+              'Дизайн-проект открыт только для просмотра: спек и листы собирает ассистент. Попросите его изменить дизайн — «Пересобрать» обновит листы из сохранённого спека.',
+          });
+        }
         if (!EDIT_TEXT_EXT.has(ext)) {
           return sendJson(res, 200, {
             ...base,
@@ -3880,6 +3896,13 @@ async function route(req, res) {
           return sendError(res, 400, error.message);
         }
         const relPath = rel.replace(/\\/g, '/');
+        if (isDesignFilePath(relPath)) {
+          return sendError(
+            res,
+            403,
+            'Дизайн-проект нельзя править вручную: спек и листы собирает ассистент. Попросите его изменить дизайн — «Пересобрать» обновит листы из сохранённого спека.',
+          );
+        }
         const ext = path.extname(full).toLowerCase();
         if (!EDIT_TEXT_EXT.has(ext)) {
           return sendError(res, 415, `Файлы ${ext || 'без расширения'} редактор не сохраняет — это не текст.`);
@@ -3932,25 +3955,6 @@ async function route(req, res) {
         try {
           const versions = editHistoryPush(project.id, relPath, previous);
           atomicWrite(full, text);
-          /* design.json — единственный файл, после которого нужно что-то ещё:
-             листы собраны из него, и человек правил его как раз ради листов. */
-          const designed = relPath === 'design.json';
-          let design = null;
-          let results = null;
-          let rebuildError = null;
-          if (designed) {
-            try {
-              results = await buildDesignArtifacts(workspace);
-              design = designView(workspace);
-            } catch (error) {
-              rebuildError = error.message;
-            }
-          }
-          const failed = (results || []).filter((item) => !item.ok);
-          let note = 'Файл сохранён.';
-          if (failed.length) note = `Файл сохранён, но не всё собралось: ${failed.map((item) => `${item.title} — ${item.error}`).join('; ')}`;
-          else if (designed && results) note = `Спек сохранён, листы пересобраны: ${results.length} из ${results.length}.`;
-          else if (designed && rebuildError) note = `Спек сохранён, но листы не пересобрались: ${rebuildError}`;
           return sendJson(res, 200, {
             ok: true,
             path: relPath,
@@ -3958,10 +3962,7 @@ async function route(req, res) {
             hash: editTextHash(text),
             at: new Date().toISOString(),
             history: { count: versions, restoredFrom },
-            design,
-            results,
-            rebuildError,
-            text: note,
+            text: 'Файл сохранён.',
           });
         } catch (error) {
           return sendError(res, 500, `Файл не сохранился: ${error.message}`);
@@ -4230,6 +4231,11 @@ async function route(req, res) {
         const rawName = tryDecode(String(req.headers['x-filename'] || 'file'));
         /* Без явного пути файл ложится в общую папку проекта. */
         const target = url.searchParams.get('path') || uniqueFileName(workspace, rawName);
+        /* design.json и design/* собирает только build_design: загрузка поверх
+           обошла бы запрет правки и разошлась бы со следующей сборкой. */
+        if (isDesignFilePath(target)) {
+          return sendError(res, 403, 'Дизайн-проект нельзя заменить загрузкой: спек и листы собирает ассистент. Попросите его изменить дизайн — «Пересобрать» обновит листы.');
+        }
         const full = resolveSafe(workspace, target);
         if (!(await ensureDiskRoom(res, Number(req.headers['content-length'] || 0)))) return;
         const size = await receiveToFile(req, LIMITS.maxAttachmentBytes, full);
