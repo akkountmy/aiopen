@@ -1034,7 +1034,12 @@ const EDIT_HISTORY_KEEP = 10;
    ручная правка в редакторе разошлась бы с генератором и потерялась бы при
    следующей сборке, поэтому в панели они только смотрятся и скачиваются. */
 function isDesignFilePath(relPath) {
-  const clean = String(relPath || '').replace(/\\/g, '/').replace(/^\.\//, '');
+  /* Приводим путь к виду, в котором его увидит resolveSafe: иначе
+     «sub/../design.json» прошёл бы мимо запрета и записался в design.json. */
+  const clean = path.posix
+    .normalize(String(relPath || '').replace(/\\/g, '/'))
+    .replace(/^\.\//, '')
+    .replace(/\/+$/, '');
   return clean === 'design.json' || clean.startsWith('design/');
 }
 

@@ -5312,7 +5312,15 @@ async function codeEditorOpen({ paths = [], active = null, title = 'Правка
    кнопки «Править» у design.json и собранных листов нет — иначе человек
    менял бы то, что генератор всё равно перезапишет при следующей сборке. */
 function isDesignFilePath(path) {
-  const clean = String(path || '').replace(/\\/g, '/').replace(/^\.?\//, '');
+  /* Складываем путь без «.», «..» и пустых сегментов: сервер отдаёт уже
+     нормализованные пути, но проверка не должна зависеть от этого. */
+  const parts = [];
+  for (const part of String(path || '').replace(/\\/g, '/').split('/')) {
+    if (!part || part === '.') continue;
+    if (part === '..') parts.pop();
+    else parts.push(part);
+  }
+  const clean = parts.join('/');
   return clean === 'design.json' || clean.startsWith('design/');
 }
 
