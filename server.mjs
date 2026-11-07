@@ -2223,7 +2223,7 @@ function attachmentContext(attachments) {
        в индексе хранятся только первые 2 000 знаков. */
     const full = attachText(att, LIMITS.maxFileTextChars);
     if (att.kind === 'image') {
-      body = `[Изображение «${att.name}» — распознавание]\n${full || '(не удалось распознать)'}`;
+      body = `[Изображение «${att.name}», путь: ${att.relPath} — распознавание]\n${full || '(не удалось распознать)'}`;
       if (att.size <= 8 * 1024 * 1024 && images.length < 4) {
         const filePath = resolveSafe(store.workspaceDir(att.projectId), att.relPath);
         try {
@@ -2572,6 +2572,10 @@ async function executeRun(run, job) {
       ownerId: user.id,
       filesBrief,
       images: ctx.images,
+      /* Пути вложений нужны инструменту build_design: по ним он находит
+         референс и сам извлекает из него палитру, не полагаясь на то, что
+         модель аккуратно перепишет путь в аргументы. */
+      attachments: attachments.map((att) => ({ name: att.name, kind: att.kind, relPath: att.relPath, size: att.size })),
       emit: stream.emit,
       signal: controller.signal,
       budget: user.role === 'admin' ? null : { limitUsd: projectLimit(project) },

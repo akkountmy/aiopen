@@ -9,7 +9,7 @@ import { summaryPrompt, systemPrompt, titlePrompt } from './prompt.mjs';
 import { describeReview, reviewAnswer } from './review.mjs';
 import { skillsPromptText } from './skills.mjs';
 import { continuePrompt, taskSummaryLine, updateTaskState } from './taskstate.mjs';
-import { availableToolDefs, TOOL_LABELS, executeTool, listTree, toolSummary } from './tools.mjs';
+import { applyReference, availableToolDefs, TOOL_LABELS, executeTool, listTree, toolSummary } from './tools.mjs';
 import {
   compressHistory,
   createTrimStats,
@@ -72,13 +72,19 @@ const MISSING_FILES_ANSWER =
  * инструмента сборки. Возвращает текст ответа или null, если не вышло:
  * тогда человек увидит честную причину, а не пустую папку.
  */
-export async function rescueDesign({ workspace, userText } = {}) {
+export async function rescueDesign({ workspace, userText, attachments = [] } = {}) {
   if (!workspace) return null;
   const text = String(userText || '');
   if (!text || NOT_INTERIOR.test(text)) return null;
   if (!INTERIOR_ASK.test(text) || !DRAWING_ASK.test(text)) return null;
   try {
     const { raw, assumptions } = specFromText(text);
+    /* Запасной путь обязан учитывать приложенный референс: иначе он собирает
+       проект по тексту и человек видит «палитру из брифа» вместо своего фото.
+       applyReference — тот же разбор vision, что и в build_design. */
+    if (Array.isArray(attachments) && attachments.some((att) => att?.kind === 'image')) {
+      await applyReference(workspace, raw, {}, { workspace, attachments });
+    }
     writeSpec(workspace, raw);
     const results = await buildArtifacts(workspace);
     const ok = (key) => results.some((item) => item.key === key && item.ok && item.bytes > 0);
@@ -95,6 +101,15 @@ export async function rescueDesign({ workspace, userText } = {}) {
   }
 }
 
+/* Инструменты, которые действительно создают файл проекта. `path` в meta есть и
+   у чтения/распознавания (analyze_image возвращает путь к исходнику), поэтому
+   проверять только наличие path нельзя: после разбора фото задача считалась
+   «сделано» и оставалась с пустой папкой. */
+const FILE_WRITING_TOOLS = new Set([
+  'write_file', 'append_file', 'edit_file', 'create_excel', 'create_word',
+  'create_pptx', 'create_pdf', 'create_drawing', 'build_design', 'extract_archive',
+]);
+
 /** Нужен ли один корректирующий шаг: просили чертёж, а результата нет. */
 export function needsDrawingRepair({ userText = '', workspace = '', toolsUsed = [], answer = '', tried = false } = {}) {
   if (tried) return false;
@@ -102,7 +117,7 @@ export function needsDrawingRepair({ userText = '', workspace = '', toolsUsed = 
   if (!text || NOT_INTERIOR.test(text)) return false;
   if (!INTERIOR_ASK.test(text) || !DRAWING_ASK.test(text)) return false;
   /* Любой созданный файл — уже результат: домысливать за агентом не нужно. */
-  if (toolsUsed.some((tool) => tool.name === 'build_design' || tool.path)) return false;
+  if (toolsUsed.some((tool) => FILE_WRITING_TOOLS.has(tool.name) && tool.status !== 'error')) return false;
   /* Пустой ответ, короткая отписка и прямое «я всё сделал» — те три вида
      ответа, за которыми пустая папка. Содержательный ответ, где человеку
      объясняют, чего не хватает, досборкой не считается. */
@@ -554,6 +569,9 @@ export async function runTurn({
   projectContext = '',
   filesBrief = '',
   images = [],
+  /* Вложения текущего хода (имя, вид, путь): build_design ищет по ним
+     референс и применяет его стиль, даже если модель не передала путь. */
+  attachments = [],
   emit,
   signal,
   budget = null,
@@ -714,7 +732,7 @@ export async function runTurn({
     });
   }
 
-  const toolCtx = { workspace, signal, remember, projectName, userName, facts, depth, ownerId, spawnAgent: spawnSubagents };
+  const toolCtx = { workspace, signal, remember, projectName, userName, facts, depth, ownerId, attachments, spawnAgent: spawnSubagents };
 
   /* За пять шагов до предела модель получает предупреждение, а человек —
      строку в живом статусе. Раньше предел наступал внезапно: агент упирался в
@@ -875,7 +893,7 @@ export async function runTurn({
         /* Последний рубеж: модель так и не вызвала сборку. Собираем проект
            детерминированно из самой просьбы — человек получает листы и список
            принятых допущений, а не извинение при пустой панели. */
-        const rescued = await rescueDesign({ workspace, userText });
+        const rescued = await rescueDesign({ workspace, userText, attachments });
         if (rescued) {
           finalText = `${finalText}${finalText ? '\n\n' : ''}${rescued}`;
           emit({ type: 'progress', step: steps, limit: stepLimit, note: 'листы собраны запасным путём' });

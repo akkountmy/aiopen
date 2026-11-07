@@ -3831,10 +3831,11 @@ function renderFiles() {
    Человек просит «сделай дизайн студии на 40 квадратов» и ждёт листы, а не
    текст. Листы собирает сервер из спека `design.json` (инструмент build_design),
    но увидеть их и поправить нужно здесь, в проекте: галерея открывает каждый
-   лист в окне просмотра — план мебели, полы, потолок со светильниками,
-   аксонометрию и живую 3D-сцену, — «Правка» показывает спек, а «Пересобрать»
-   применяет правку за секунду. Модель для этого не нужна, поэтому «Готово.»
-   с пустой папкой больше не требует ждать и переспрашивать. */
+   лист в окне просмотра — визуализацию, палитру с референсом, план мебели,
+   полы, потолок со светильниками, аксонометрию и живую 3D-сцену, — «Правка»
+   показывает спек, а «Пересобрать» применяет правку за секунду. Модель для
+   этого не нужна, поэтому «Готово.» с пустой папкой больше не требует ждать
+   и переспрашивать. */
 
 /* Панель живёт над списком файлов: дизайн — главное в проекте, а не папка
    `design/`, которую ещё надо найти и раскрыть. */
@@ -3886,11 +3887,17 @@ function renderDesign() {
   if (lead) {
     const spec = design.spec;
     const bits = [];
-    if (spec) bits.push(`${spec.rooms.length} комн.`);
+    /* Комнаты — жилые; коридор и санузел в «7 комнат» не превращаем. */
+    const living = Number(design.livingRooms) || (spec ? spec.rooms.length : 0);
+    const spaces = Number(design.spaces) || (spec ? spec.rooms.length : 0);
+    if (spec) bits.push(`${living} комн.`);
     if (design.area) bits.push(`${String(design.area).replace('.', ',')} м²`);
     lead.textContent = bits.length ? bits.join(' · ') : 'спек не читается';
-    const more = spec && spec.furniture ? `· ${spec.furniture.length} предм. мебели` : '';
-    lead.title = [spec ? spec.project : '', bits.join(' · '), more].filter(Boolean).join(' ');
+    const more = [
+      spec && spec.furniture ? `${spec.furniture.length} предм. мебели` : '',
+      spaces > living ? `${spaces} помещений` : '',
+    ].filter(Boolean).join(' · ');
+    lead.title = [spec ? spec.project : '', bits.join(' · '), more].filter(Boolean).join(' · ');
   }
   const gallery = $('#designGallery');
   if (!gallery) return;
@@ -3912,22 +3919,25 @@ function designCard(artifact) {
     ? `${artifact.title} — открыть (${fmtSize(artifact.bytes)})`
     : `${artifact.title} — лист не собран. Нажмите, чтобы собрать`;
   const shot = el('span', 'design-shot');
-  if (ready && artifact.kind === 'svg') {
-    /* Миниатюра — сам SVG из проекта: лист видно сразу, без генерации картинок
-       на сервере и без лишних файлов в папке. */
-    const img = el('img', 'design-thumb');
+  if (ready && (artifact.kind === 'svg' || artifact.kind === 'png')) {
+    /* Миниатюра — сам файл из проекта: лист и главный кадр видно сразу, без
+       генерации превью на сервере и без лишних файлов в папке. */
+    const img = el('img', `design-thumb${artifact.kind === 'png' ? ' is-photo' : ''}`);
     img.src = fileUrl(artifact.file, false);
     img.alt = artifact.title;
     img.loading = 'lazy';
     shot.appendChild(img);
-  } else if (ready) {
+  } else if (ready && artifact.kind === 'html') {
     shot.appendChild(el('span', 'design-3d', '3D'));
+  } else if (ready) {
+    shot.appendChild(el('span', 'design-3d', artifact.kind.toUpperCase()));
   } else {
     shot.appendChild(el('span', 'design-none', '—'));
   }
   card.appendChild(shot);
   card.appendChild(el('span', 'design-name', artifact.title));
-  card.appendChild(el('span', 'design-meta', ready ? fmtSize(artifact.bytes) : 'не собран'));
+  const kindLabel = artifact.kind === 'png' ? 'фото' : artifact.kind === 'svg' ? 'лист' : artifact.kind === 'html' ? 'сцена' : artifact.kind;
+  card.appendChild(el('span', 'design-meta', ready ? `${fmtSize(artifact.bytes)} · ${kindLabel}` : 'не собран'));
   card.addEventListener('click', () => {
     if (!ready) {
       designRebuild({ only: [artifact.key] });

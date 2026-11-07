@@ -58,6 +58,7 @@ export async function htmlShot(htmlPath, pngPath, o = {}) {
     const exe = chromiumExe();
     const browser = await lib.chromium.launch({
       executablePath: exe || undefined,
+      timeout: 20000,
       args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--allow-file-access-from-files'],
     });
     try {

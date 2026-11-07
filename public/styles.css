@@ -3088,6 +3088,12 @@ html.kb-open .scroll-jump {
   background: #fff;
 }
 
+/* Главный кадр — горизонтальный: заполняем плитку, а не оставляем поля. */
+.design-thumb.is-photo {
+  object-fit: cover;
+  background: #1b1b1b;
+}
+
 .design-3d {
   color: var(--accent);
   font-family: var(--mono);

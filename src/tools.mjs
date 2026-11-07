@@ -26,7 +26,7 @@ import { writeZip } from './zip.mjs';
 import { ARCHIVE_LIMITS, archiveKind, extractArchiveTo, formatExtraction, gunzipTo } from './archive.mjs';
 import { checkLinks, formatLinks, linksFromText } from './linkcheck.mjs';
 import { compareDocuments, formatCompare } from './comparedocs.mjs';
-import { buildArtifacts, describeDesign, designView, readSpec, writeSpec } from './design.mjs';
+import { buildArtifacts, describeDesign, designView, mergeStyle, normalizeStyle, readSpec, styleFromVision, writeSpec } from './design.mjs';
 import {
   LAB_DIR,
   resolveTaskId,
@@ -1548,19 +1548,27 @@ export const TOOL_DEFS = [
     function: {
       name: 'build_design',
       description:
-        'Собрать дизайн-проект помещения из одного спека: план мебели, план полов, план потолка со светильниками, аксонометрию и интерактивную 3D-сцену. Это главный инструмент на «сделай дизайн интерьера», «спланируй студию/квартиру», «расставь мебель», «покажи 3D», «план потолка»: он сам запускает генераторы навыка interior-drawings, поэтому листы получаются точными и не обрезаются. Сначала передай спек (design) — комнаты полигонами в миллиметрах, стены, проёмы, мебель, светильники; без аргументов пересобирает листы из уже сохранённого design.json (так правка человека в окне проекта применяется к чертежам).',
+        'Собрать дизайн-проект помещения из одного спека: визуализацию, лист палитры и материалов, план мебели, план полов, план потолка со светильниками, аксонометрию и интерактивную 3D-сцену. Это главный инструмент на «сделай дизайн интерьера», «спланируй студию/квартиру», «расставь мебель», «покажи 3D», «план потолка»: он сам запускает генераторы навыка interior-drawings, поэтому листы получаются точными и не обрезаются. Сначала передай спек (design) — комнаты полигонами в миллиметрах, стены, проёмы, мебель, светильники, style. Если к задаче приложен референс, обязательно передай его путь в reference: сервер разберёт цвета и материалы и применит их к 3D и листу палитры. Без аргументов пересобирает листы из уже сохранённого design.json.',
       parameters: {
         type: 'object',
         properties: {
           design: {
             type: 'object',
             description:
-              'Спек дизайна. Поля: project, object, paper (A4–A0), orientation (landscape|portrait), scale (20/25/50/75/100), heights {wall, ceiling} в мм, rooms [{name, poly [[x,y],…] в мм, floor, tile, ceiling}], walls [{x1,y1,x2,y2,t}], openings [{kind: window|door, x, y, w, dir: h|v, sill, h, hinge, swing}], furniture [{kind, x, y, w, d, rot, name}], lighting [{kind: spot|chandelier|led, x, y, w}]. Координаты в миллиметрах, ось Y вниз, полигон комнаты — по внутренним граням стен.',
+              'Спек дизайна. Поля: project, object, paper (A4–A0), orientation (landscape|portrait), scale (20/25/50/75/100), heights {wall, ceiling} в мм, rooms [{name, poly [[x,y],…] в мм, floor, tile, ceiling}], walls [{x1,y1,x2,y2,t}], openings [{kind: window|door, x, y, w, dir: h|v, sill, h, hinge, swing}], furniture [{kind, x, y, w, d, rot, name}], lighting [{kind: spot|chandelier|led, x, y, w}], style {name, palette {wall, ceiling, floor, accent, textile, wood, metal, stone}, materials {floor, walls, ceiling, fronts, textile, metal}, lighting {mood, kelvin}, decisions, avoid}. Координаты в миллиметрах, ось Y вниз, полигон комнаты — по внутренним граням стен. Планировка должна следовать брифу, а не шаблону: состав комнат, их пропорции и расстановка меняются вместе с задачей.',
+          },
+          reference: {
+            type: 'string',
+            description: 'Путь к изображению-референсу внутри проекта (например «refs/hall.jpg» или имя вложения). Стиль и палитра будут извлечены из него и применены к 3D и листу палитры. Если не указан, берётся первое изображение, приложенное к задаче.',
+          },
+          style: {
+            type: 'object',
+            description: 'Стиль словами, если референса нет: name, palette, materials, lighting, decisions, avoid. Можно не передавать — сервер выведет палитру из брифа.',
           },
           only: {
             type: 'array',
-            items: { type: 'string', enum: ['plan', 'floor', 'ceiling', 'axo', 'scene'] },
-            description: 'Собрать только эти листы (по умолчанию все пять).',
+            items: { type: 'string', enum: ['render', 'style', 'plan', 'floor', 'ceiling', 'axo', 'scene'] },
+            description: 'Собрать только эти листы (по умолчанию все семь).',
           },
         },
         required: [],
@@ -1952,6 +1960,120 @@ export async function availableToolDefs() {
 
 /* Сам разбор инструментов. Обёртка с общим дедлайном — ниже, в executeTool:
    так у каждой ветки остаётся прямой код, а предел по времени один на всех. */
+/* --------------------------- референс интерьера ---------------------------
+   Пользователь прикладывает фото и ждёт, что проект будет «по нему», а не
+   просто получит картинку в папке. Поэтому build_design сам зовёт vision,
+   требует JSON с восемью HEX-цветами и материалами и кладёт результат в
+   style спека. Явный style в аргументах сильнее разбора: человек всегда может
+   поправить отдельные поля, не выбрасывая референс. */
+const STYLE_VISION_PROMPT = [
+  'Ты — арт-директор интерьера. Разбери изображение-референс и верни ТОЛЬКО JSON без markdown и пояснений.',
+  'Схема:',
+  '{"name":"короткое название стиля","summary":"1–2 предложения о настроении и материалах",',
+  '"palette":{"wall":"#RRGGBB","ceiling":"#RRGGBB","floor":"#RRGGBB","accent":"#RRGGBB","textile":"#RRGGBB","wood":"#RRGGBB","metal":"#RRGGBB","stone":"#RRGGBB"},',
+  '"materials":{"floor":"...","walls":"...","ceiling":"...","fronts":"...","textile":"...","metal":"..."},',
+  '"lighting":{"mood":"...","kelvin":2700},"decisions":["3–5 решений"],"avoid":["3–4 чего избегать"]}',
+  'Цвета бери с фотографии: стены — самый большой спокойный фон, дерево — тёплые коричневые поверхности, акцент — самый насыщенный цвет, текстиль — мягкие ткани, камень — плита/столешница/пол.',
+  'Если на фото несколько комнат, опиши доминирующую. Не выдумывай мебель, которой нет: решения должны следовать референсу.',
+].join('\n');
+
+const IMAGE_MIME = {
+  '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp',
+  '.gif': 'image/gif', '.bmp': 'image/bmp', '.avif': 'image/avif',
+};
+
+function findReferenceFile(root, raw, ctx) {
+  const attachments = Array.isArray(ctx.attachments) ? ctx.attachments : [];
+  const attached = raw
+    ? attachments.find((att) => att.kind === 'image' && (att.relPath === raw || att.name === raw))
+    : attachments.find((att) => att.kind === 'image');
+  /* Модель может назвать файл по имени, а лежит он во вложениях: берём
+     relPath совпавшего вложения, иначе искали бы «photo.jpg» в корне. */
+  const hint = attached?.relPath || raw || '';
+  if (!hint || /^https?:/i.test(hint) || hint.startsWith('data:')) return null;
+  const candidates = [];
+  if (path.isAbsolute(hint)) candidates.push(hint);
+  else {
+    candidates.push(path.resolve(root, hint));
+    candidates.push(path.resolve(root, 'refs', hint));
+  }
+  for (const candidate of candidates) {
+    try {
+      const full = assertInside(root, candidate);
+      if (fs.existsSync(full) && fs.statSync(full).isFile() && IMAGE_MIME[path.extname(full).toLowerCase()]) {
+        return { full, rel: path.relative(root, full).replace(/\\/g, '/'), name: attached?.name || path.basename(full) };
+      }
+    } catch {
+      /* путь вне проекта или файла нет — пробуем следующий */
+    }
+  }
+  return { missing: true, name: attached?.name || path.basename(hint) };
+}
+
+export async function applyReference(root, spec, args, ctx) {
+  const explicitFromDesign = spec.style && typeof spec.style === 'object' ? spec.style : null;
+  const explicitFromArgs = args.style && typeof args.style === 'object' ? args.style : null;
+  let style = spec.style ? normalizeStyle(spec.style) : null;
+  /* normalizeStyle пишет source «brief» ещё и в reference. Это не путь к
+     файлу: иначе приложенный референс никогда не находится. */
+  const styleRef = spec.style?.reference;
+  const refHint = args.reference || (styleRef && !/^(brief|manual|text)$/iu.test(styleRef) ? styleRef : '');
+  const ref = findReferenceFile(root, refHint, ctx);
+  if (!ref) {
+    if (explicitFromArgs) style = mergeStyle(style, explicitFromArgs);
+    if (style) spec.style = style;
+    return { used: false };
+  }
+  if (ref.missing) {
+    if (explicitFromArgs) style = mergeStyle(style, explicitFromArgs);
+    if (style) spec.style = { ...style, referenceName: ref.name };
+    return { used: false, warning: `референс «${ref.name}» не найден в проекте` };
+  }
+  let extracted = null;
+  let warning = '';
+  try {
+    const buffer = fs.readFileSync(ref.full);
+    const result = await describeImage({
+      buffer,
+      mime: IMAGE_MIME[path.extname(ref.full).toLowerCase()] || 'image/png',
+      name: ref.name,
+      instruction: STYLE_VISION_PROMPT,
+    });
+    extracted = styleFromVision(result.text);
+    if (!extracted) warning = 'vision не вернул палитру — взял стиль из брифа';
+  } catch (error) {
+    warning = `vision не разобрал референс: ${String(error.message || error).slice(0, 140)}`;
+  }
+  /* Референс важнее текстового стиля для палитры и материалов: именно его
+     человек показал как «вот так должно выглядеть». Явный стиль остаётся
+     источником названия, декора и решений, но не перекрывает цвета фото. */
+  let merged = mergeStyle(explicitFromDesign || { source: 'brief' }, extracted || {});
+  if (explicitFromArgs) {
+    const argPatch = extracted ? { ...explicitFromArgs } : explicitFromArgs;
+    if (extracted) {
+      delete argPatch.palette;
+      delete argPatch.materials;
+    }
+    merged = mergeStyle(merged, argPatch);
+  }
+  merged.reference = ref.rel;
+  merged.referenceName = ref.name;
+  /* Название стиля берём из брифа: vision часто называет не стиль, а
+     архитектурный элемент на фото («готическая ниша»). Палитра при этом
+     остаётся из референса. */
+  const briefName = explicitFromArgs?.name || explicitFromDesign?.name;
+  if (briefName) merged.name = briefName;
+  merged.source = extracted ? 'reference' : (merged.source || 'brief');
+  if (!extracted && warning) {
+    merged.decisions = [
+      `Референс «${ref.name}» приложен к проекту; палитра уточняется — ${warning}.`,
+      ...(merged.decisions || []),
+    ].slice(0, 6);
+  }
+  spec.style = merged;
+  return { used: true, extracted: Boolean(extracted), name: ref.name, warning };
+}
+
 async function executeToolInner(name, args, ctx) {
   const root = ctx.workspace;
   /* Субагент пишет только в свою папку: проверяем до записи, а не после. */
@@ -2596,12 +2718,17 @@ async function executeToolInner(name, args, ctx) {
         ? (rawSpec.spec && typeof rawSpec.spec === 'object' ? rawSpec.spec : rawSpec)
         : null;
       const fixes = [];
-      if (designArg) {
-        const written = writeSpec(root, designArg);
-        fixes.push(...written.fixes);
-      } else if (!readSpec(root)) {
+      const existing = designArg ? null : readSpec(root);
+      const spec = designArg || existing?.spec || null;
+      if (!spec) {
         throw new Error('Дизайн-спека в проекте нет: передайте design (комнаты, стены, проёмы, мебель, светильники) первым вызовом.');
       }
+      /* Референс разбираем до writeSpec: style должен попасть в design.json,
+         иначе его не увидят ни 3D-сцена, ни лист палитры. Сбой vision не
+         отменяет сборку — проект соберётся по брифу, а в ответе будет причина. */
+      const reference = await applyReference(root, spec, args, ctx);
+      const written = writeSpec(root, spec);
+      fixes.push(...written.fixes);
       const only = Array.isArray(args.only) ? args.only.map((key) => String(key)) : null;
       const results = await buildArtifacts(root, { only });
       const view = designView(root);
@@ -2610,8 +2737,11 @@ async function executeToolInner(name, args, ctx) {
       if (bad.length && bad.length === results.length) {
         throw new Error(`Ни один лист не собрался. ${bad.map((item) => `${item.title}: ${item.error}`).join('; ')}`);
       }
+      const refNote = reference.used
+        ? `\nРеференс «${reference.name}»: ${reference.extracted ? 'палитра и материалы извлечены и применены к 3D и листу палитры' : `файл приложен, но палитра не извлечена${reference.warning ? ` (${reference.warning})` : ''}`}.`
+        : '';
       return {
-        text: `${text}${fixes.length ? `\nЗамечания к спеку: ${fixes.join('; ')}.` : ''}\nЭти файлы уже в проекте: их видно в «Файлах проекта» и в окне «Дизайн-проект», где спек можно править и пересобирать без потери работы.`,
+        text: `${text}${refNote}${fixes.length ? `\nЗамечания к спеку: ${fixes.join('; ')}.` : ''}\nЭти файлы уже в проекте: их видно в «Файлах проекта» и в окне «Дизайн-проект», где спек можно править и пересобирать без потери работы.`,
         meta: {
           created: results.filter((item) => item.ok).length,
           failed: bad.map((item) => item.key),
@@ -2619,6 +2749,10 @@ async function executeToolInner(name, args, ctx) {
           area: view.area,
           rooms: view.spec?.rooms.length || 0,
           furniture: view.spec?.furniture.length || 0,
+          reference: view.spec?.style?.reference || '',
+          referenceName: view.spec?.style?.referenceName || '',
+          referenceSource: view.spec?.style?.source || '',
+          palette: view.spec?.style?.palette || null,
         },
       };
     }

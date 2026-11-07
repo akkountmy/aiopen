@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Дизайн-проект и 3D-сцена проекта — из одного правленого спека.
  *
  * Человек просит «сделай дизайн студии 40 квадратов» и ждёт не текст, а листы:
@@ -38,12 +38,189 @@ export const OUT_DIR = 'design';
  * проекта. Порядок — порядок вкладок: сверху то, что человек ждёт увидеть первым.
  */
 export const ARTIFACTS = [
+  { key: 'render', title: 'Визуализация', file: `${OUT_DIR}/render.png`, script: 'visual.mjs', args: [], kind: 'png' },
+  { key: 'style', title: 'Палитра и материалы', file: `${OUT_DIR}/style.svg`, script: 'style.mjs', args: [], kind: 'svg' },
+  { key: 'scene', title: '3D-сцена', file: `${OUT_DIR}/3d.html`, script: 'scene.mjs', args: [], kind: 'html' },
   { key: 'plan', title: 'План мебели', file: `${OUT_DIR}/plan.svg`, script: 'plan.mjs', args: ['--mode=plan'], kind: 'svg' },
   { key: 'floor', title: 'План полов', file: `${OUT_DIR}/floor.svg`, script: 'plan.mjs', args: ['--mode=floor'], kind: 'svg' },
   { key: 'ceiling', title: 'План потолка', file: `${OUT_DIR}/ceiling.svg`, script: 'plan.mjs', args: ['--mode=ceiling'], kind: 'svg' },
   { key: 'axo', title: 'Аксонометрия', file: `${OUT_DIR}/axo.svg`, script: 'axo.mjs', args: [], kind: 'svg' },
-  { key: 'scene', title: '3D-сцена', file: `${OUT_DIR}/3d.html`, script: 'scene.mjs', args: [], kind: 'html' },
 ];
+
+/**
+ * Палитра — не украшение, а контракт между референсом, листами и 3D. Ключи
+ * короткие: их видят и модель, и скрипты. Если референс не разобран, остаётся
+ * спокойная нейтральная база, а поле `source` честно говорит, откуда цвета.
+ */
+export const STYLE_DEFAULTS = {
+  name: 'Современный нейтральный',
+  palette: {
+    wall: '#E8E1D5',
+    ceiling: '#F7F4EE',
+    floor: '#C9A87C',
+    accent: '#B5654A',
+    textile: '#8C8577',
+    wood: '#B98A5A',
+    metal: '#9A9A96',
+    stone: '#D8D2C6',
+  },
+  materials: {
+    floor: 'инженерная доска, матовый лак',
+    walls: 'матовая краска, микроцемент',
+    ceiling: 'натяжной, сатин',
+    fronts: 'шпон дуба, брашированный',
+    textile: 'рогожка, лён',
+    metal: 'брашированная сталь, чёрный металл',
+  },
+  lighting: { mood: 'тёплый вечерний свет, 2700 K', kelvin: 2700 },
+  decor: [],
+};
+
+const PALETTE_KEYS = Object.keys(STYLE_DEFAULTS.palette);
+const MATERIAL_KEYS = Object.keys(STYLE_DEFAULTS.materials);
+
+function hexColor(value) {
+  const match = String(value ?? '').trim().match(/^#?([0-9a-f]{3}|[0-9a-f]{6})$/i);
+  if (!match) return '';
+  let hex = match[1];
+  if (hex.length === 3) hex = hex.split('').map((ch) => ch + ch).join('');
+  return `#${hex.toUpperCase()}`;
+}
+
+function colorList(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  const out = {};
+  for (const key of PALETTE_KEYS) {
+    const value = hexColor(raw[key] || raw[`${key}Color`] || raw[`${key}_color`]);
+    if (value) out[key] = value;
+  }
+  return out;
+}
+
+/**
+ * Приводит блок `style` к предсказуемому виду. Модель может прислать строку
+ * вместо имени, `colors` вместо `palette`, материалы списком — всё это
+ * принимаем, но наружу отдаём одну форму, на которую опираются генераторы.
+ */
+export function normalizeStyle(raw, fixes = []) {
+  if (!raw) return null;
+  if (typeof raw === 'string') return { ...STYLE_DEFAULTS, palette: { ...STYLE_DEFAULTS.palette }, materials: { ...STYLE_DEFAULTS.materials }, lighting: { ...STYLE_DEFAULTS.lighting }, decor: [], name: text(raw, 80) };
+  if (typeof raw !== 'object' || Array.isArray(raw)) return null;
+
+  const style = {
+    name: text(raw.name || raw.style || raw.title, 80) || STYLE_DEFAULTS.name,
+    palette: { ...STYLE_DEFAULTS.palette },
+    materials: { ...STYLE_DEFAULTS.materials },
+    lighting: { ...STYLE_DEFAULTS.lighting },
+    decor: [],
+  };
+
+  const palette = colorList(raw.palette || raw.colors || raw.palette_hex || raw);
+  for (const [key, value] of Object.entries(palette)) style.palette[key] = value;
+  if (raw.palette && typeof raw.palette === 'object') {
+    for (const key of PALETTE_KEYS) {
+      if (raw.palette[key] && !palette[key]) fixes.push(`цвет «${key}» не распознан: нужен HEX`);
+    }
+  }
+
+  const materials = raw.materials || raw.finishes || {};
+  if (typeof materials === 'string') {
+    style.materials.floor = text(materials, 120);
+  } else if (materials && typeof materials === 'object') {
+    for (const key of MATERIAL_KEYS) {
+      const value = text(materials[key], 120);
+      if (value) style.materials[key] = value;
+    }
+  }
+
+  const lighting = raw.lighting || raw.light || {};
+  if (typeof lighting === 'string') {
+    style.lighting.mood = text(lighting, 160);
+  } else if (lighting && typeof lighting === 'object') {
+    if (text(lighting.mood || lighting.summary, 160)) style.lighting.mood = text(lighting.mood || lighting.summary, 160);
+    const kelvin = optNumber(lighting.kelvin || lighting.temperature);
+    if (kelvin && kelvin >= 1800 && kelvin <= 6500) style.lighting.kelvin = Math.round(kelvin);
+    const layers = Array.isArray(lighting.layers) ? lighting.layers : [];
+    if (layers.length) style.lighting.layers = layers.map((item) => text(item, 100)).filter(Boolean).slice(0, 6);
+  }
+
+  const decor = Array.isArray(raw.decor) ? raw.decor : Array.isArray(raw.decoration) ? raw.decoration : [];
+  style.decor = decor.map((item) => text(item, 100)).filter(Boolean).slice(0, 12);
+  if (text(raw.summary || raw.concept, 300)) style.summary = text(raw.summary || raw.concept, 300);
+  if (text(raw.reference || raw.source, 300)) style.reference = text(raw.reference || raw.source, 300);
+  if (text(raw.referenceName || raw.sourceName, 120)) style.referenceName = text(raw.referenceName || raw.sourceName, 120);
+  const decisions = Array.isArray(raw.decisions) ? raw.decisions : [];
+  if (decisions.length) style.decisions = decisions.map((item) => text(item, 160)).filter(Boolean).slice(0, 8);
+  const avoid = Array.isArray(raw.avoid) ? raw.avoid : [];
+  if (avoid.length) style.avoid = avoid.map((item) => text(item, 100)).filter(Boolean).slice(0, 8);
+  if (text(raw.source, 40)) style.source = text(raw.source, 40);
+  return style;
+}
+
+/**
+ * Разбор ответа vision-модели. Основной путь — JSON, но модель иногда
+ * заворачивает его в пояснения или присылает список «стены — #hex». Тогда
+ * вытаскиваем цвета по ключевым словам, чтобы референс всё равно дошёл до
+ * листов, а не остался красивым описанием в чате.
+ */
+export function styleFromVision(text) {
+  const source = String(text || '');
+  const start = source.indexOf('{');
+  const end = source.lastIndexOf('}');
+  if (start >= 0 && end > start) {
+    try {
+      const parsed = JSON.parse(source.slice(start, end + 1));
+      const style = normalizeStyle({ ...parsed, source: 'reference' });
+      const colors = Object.values(style?.palette || {}).filter(Boolean).length;
+      if (style && colors >= 4) return style;
+    } catch {
+      /* ниже — разбор по строкам */
+    }
+  }
+  const aliases = {
+    wall: ['wall', 'стен', 'walls'],
+    ceiling: ['ceiling', 'потол'],
+    floor: ['floor', 'пол'],
+    accent: ['accent', 'акцент'],
+    textile: ['textile', 'текстил', 'ткан'],
+    wood: ['wood', 'дерев', 'дуб'],
+    metal: ['metal', 'металл'],
+    stone: ['stone', 'камен', 'мрамор'],
+  };
+  const palette = {};
+  for (const [key, words] of Object.entries(aliases)) {
+    for (const word of words) {
+      const regex = new RegExp(`${word}[^#\\n]{0,60}(#[0-9a-f]{3,6})`, 'iu');
+      const match = source.match(regex);
+      if (match) {
+        palette[key] = hexColor(match[1]);
+        break;
+      }
+    }
+  }
+  if (Object.keys(palette).length < 3) return null;
+  const line = source.split('\n').map((item) => item.replace(/^[\s#>*\-–—]+/, '').trim()).find((item) => item && !/#[0-9a-f]{3,6}/i.test(item));
+  return normalizeStyle({
+    name: line ? line.slice(0, 60) : 'Стиль по референсу',
+    palette,
+    source: 'reference',
+  });
+}
+
+/** Слияние: явные поля нового блока важнее, недостающее берём из старого. */
+export function mergeStyle(base, patch) {
+  if (!patch) return base || null;
+  if (!base) return normalizeStyle(patch);
+  const merged = normalizeStyle({
+    ...base,
+    ...patch,
+    palette: { ...(base.palette || {}), ...(patch.palette || {}) },
+    materials: { ...(base.materials || {}), ...(patch.materials || {}) },
+    lighting: { ...(base.lighting || {}), ...(patch.lighting || {}) },
+    decor: patch.decor && patch.decor.length ? patch.decor : base.decor,
+  });
+  return merged;
+}
 
 /* Потолки по количеству объектов: спек приходит от модели и от человека, а
    генератор рисует всё, что ему дали. Больше — не проект комнаты, а свалка,
@@ -234,6 +411,9 @@ export function normalizeSpec(raw) {
   spec.lighting = lighting;
   const notes = (Array.isArray(raw.notes) ? raw.notes : []).map((note) => text(note, 200)).filter(Boolean).slice(0, LIMITS.notes);
   if (notes.length) spec.notes = notes;
+  /* Стиль есть всегда: даже без референса лист «Палитра и материалы» и 3D
+     должны получить цельные цвета, а не случайные серые заглушки. */
+  spec.style = normalizeStyle(raw.style || raw.moodboard, fixes) || normalizeStyle({ source: 'brief' });
 
   if (!walls.length) {
     fixes.push('стен нет: нужны контуры помещения (x1,y1 → x2,y2 и толщина t)');
@@ -245,7 +425,7 @@ export function normalizeSpec(raw) {
 }
 
 export function specPath(workspace) {
-  return path.join(workspace, SPEC_FILE);
+  return path.join(path.resolve(workspace), SPEC_FILE);
 }
 
 /** Спек проекта или null, если дизайна в проекте ещё нет. */
@@ -380,6 +560,7 @@ function runScript(workspace, script, args, timeout) {
  * «файл создан» и «файл пустой» это разные вещи.
  */
 export async function buildArtifacts(workspace, { only = null, timeout = LIMITS.scriptMs } = {}) {
+  workspace = path.resolve(workspace);
   const specFile = specPath(workspace);
   if (!fs.existsSync(specFile)) {
     throw new Error(`Спека нет: ${SPEC_FILE} должен лежать в корне проекта. Сначала соберите спек (комнаты, стены, проёмы, мебель).`);
@@ -453,8 +634,27 @@ export function designView(workspace) {
     fixes,
     error,
     artifacts,
+    /* «Комнаты» в ответе — жилые, а не все помещения: иначе 4-комнатная
+       квартира с кухней-гостиной, коридором и санузлом называлась
+       «7 комнат». Отдельно отдаём число помещений для подписи в панели. */
+    livingRooms: spec ? livingRoomCount(spec.rooms) : 0,
+    spaces: spec ? spec.rooms.length : 0,
     area: spec ? Math.round(spec.rooms.reduce((sum, room) => sum + polyArea(room.poly), 0) * 100) / 100 : 0,
   };
+}
+
+/* Жилые комнаты: спальни, детские, кабинеты, гостиные, кухни-гостиные.
+   Коридор, прихожая, санузел, балкон и отдельная кухня — помещения, но не
+   комнаты в смысле «двухкомнатная квартира». */
+const SERVICE_ROOM =
+  /^(коридор|прихожая|санузел|ванная|туалет|балкон|лоджия|кладовая|кладовка|гардеробная|техпомещение|котельная|постирочная)/iu;
+const KITCHEN_ONLY = /^кухня(?:\s|$|,)/iu;
+
+export function livingRoomCount(rooms = []) {
+  return (Array.isArray(rooms) ? rooms : []).filter((room) => {
+    const name = String(room?.name || '').trim();
+    return name && !SERVICE_ROOM.test(name) && !KITCHEN_ONLY.test(name);
+  }).length;
 }
 
 /* --------------------- спек из текста задачи (запасной) ---------------------
@@ -497,6 +697,83 @@ function piece(kind, x0, y0, fw, fh, rot, name) {
 }
 
 /**
+ * Палитра для запасного спека. Это не «дизайн по шаблону»: если модель не
+ * ответила, лучше тёплая цельная база, чем серые заглушки. Выбор читается из
+ * брифа, поэтому два разных запроса не получают одинаковую картинку.
+ */
+function styleFromBrief(source) {
+  const s = String(source || '');
+  const presets = {
+    scandi: {
+      name: 'Скандинавский',
+      palette: { wall: '#F1EFE9', ceiling: '#FAF9F5', floor: '#D9C3A0', accent: '#7E8C7A', textile: '#C4BEB2', wood: '#C9A97C', metal: '#A8AAA8', stone: '#E1DDD4' },
+      materials: { floor: 'светлый дуб, матовое масло', walls: 'матовая краска, тёплый белый', ceiling: 'окрашенный гипсокартон', fronts: 'дуб, шпон', textile: 'лён, рогожка', metal: 'матовый чёрный металл' },
+      lighting: { mood: 'дневной рассеянный свет, 3000 K', kelvin: 3000 },
+    },
+    japandi: {
+      name: 'Джапанди',
+      palette: { wall: '#E5DFD2', ceiling: '#F4F0E7', floor: '#B98D62', accent: '#5F6657', textile: '#A9A08E', wood: '#A97B4F', metal: '#6E6C65', stone: '#CFC7B8' },
+      materials: { floor: 'дуб, брашированный', walls: 'известь, матовая', ceiling: 'штукатурка', fronts: 'дуб, рейка', textile: 'лён, хлопок', metal: 'чернёная сталь' },
+      lighting: { mood: 'мягкий тёплый свет, 2700 K', kelvin: 2700 },
+    },
+    loft: {
+      name: 'Современный лофт',
+      palette: { wall: '#D8D2C7', ceiling: '#E9E4DA', floor: '#A9825C', accent: '#3F4A45', textile: '#6E6A62', wood: '#8B5E3C', metal: '#4A4A48', stone: '#BEB7AA' },
+      materials: { floor: 'инженерная доска, тёмный дуб', walls: 'микроцемент, бетон', ceiling: 'бетон, открытые коммуникации', fronts: 'шпон ореха, металл', textile: 'плотный лён, кожа', metal: 'чернёная сталь' },
+      lighting: { mood: 'тёплый акцентный свет, 2700 K', kelvin: 2700 },
+    },
+    pastel: {
+      name: 'Тёплый пастельный',
+      palette: { wall: '#EFE1D8', ceiling: '#FBF5EF', floor: '#D6B894', accent: '#C98C7A', textile: '#B9A79C', wood: '#C7A47D', metal: '#AFA7A1', stone: '#E6D8CC' },
+      materials: { floor: 'дуб, натуральное масло', walls: 'матовая краска, пудровый', ceiling: 'натяжной, сатин', fronts: 'шпон дуба, лак', textile: 'рогожка, букле', metal: 'латунь, матовый' },
+      lighting: { mood: 'тёплый камерный свет, 2700 K', kelvin: 2700 },
+    },
+    graphite: {
+      name: 'Графитовый минимализм',
+      palette: { wall: '#D6D3CC', ceiling: '#F0EDE7', floor: '#B79A78', accent: '#3E4548', textile: '#7D7F7C', wood: '#9C7451', metal: '#55585A', stone: '#C9C4BA' },
+      materials: { floor: 'инженерная доска, дымчатый дуб', walls: 'микроцемент, графит', ceiling: 'натяжной, матовый', fronts: 'шпон, графит', textile: 'шерсть, лён', metal: 'брашированная сталь' },
+      lighting: { mood: 'сдержанный свет, 3000 K', kelvin: 3000 },
+    },
+    warm: {
+      name: 'Тёплый минимализм',
+      palette: { wall: '#EDE6DB', ceiling: '#F7F4EE', floor: '#C9A173', accent: '#B5654A', textile: '#8C8275', wood: '#B9895B', metal: '#9C9A94', stone: '#D9D2C6' },
+      materials: { floor: 'инженерная доска, дуб', walls: 'матовая краска, тёплый беж', ceiling: 'натяжной, сатин', fronts: 'шпон дуба, рейка', textile: 'рогожка, лён', metal: 'латунь, чёрный металл' },
+      lighting: { mood: 'тёплый вечерний свет, 2700 K', kelvin: 2700 },
+    },
+  };
+  const key = /скандинав|нордич|hygge/iu.test(s)
+    ? 'scandi'
+    : /япон|джапанди|japandi|ваби/iu.test(s)
+      ? 'japandi'
+      : /лофт|loft|бетон|кирпич/iu.test(s)
+        ? 'loft'
+        : /пастель|пудр|нежн|букле|терракот/iu.test(s)
+          ? 'pastel'
+          : /графит|тёмн|темн|монохром/iu.test(s)
+            ? 'graphite'
+            : 'warm';
+  const preset = presets[key];
+  return {
+    name: preset.name,
+    palette: { ...preset.palette },
+    materials: { ...preset.materials },
+    lighting: { ...preset.lighting },
+    decor: key === 'japandi'
+      ? ['ветка в керамической вазе', 'льняные шторы', 'бумажный абажур', 'циновка']
+      : key === 'loft'
+        ? ['кожаное кресло', 'постер в чёрной раме', 'металлические полки', 'ковёр с графикой']
+        : key === 'pastel'
+          ? ['букле-подушки', 'округлое зеркало', 'ваза с сухоцветами', 'мягкий плед']
+          : ['льняные шторы', 'постеры в тонких рамах', 'керамика', 'плед'],
+    source: 'brief',
+    decisions: [
+      'палитра и материалы выведены из брифа',
+      'свет трёхслойный: общий, рабочий, акцентный',
+    ],
+  };
+}
+
+/**
  * Собрать спек из просьбы человека. Возвращает `{ raw, assumptions }`:
  * `raw` — обычный спек для `writeSpec`, `assumptions` — что пришлось принять
  * за человека, чтобы ответ не выдавал догадки за исходные данные.
@@ -534,6 +811,26 @@ export function specFromText(prompt) {
   const roomName = isBedroom ? 'Спальня' : isLiving ? 'Гостиная' : isKitchen ? 'Кухня' : isKids ? 'Детская' : isOffice ? 'Кабинет' : 'Студия';
   const wood = /дерев|древес|дуб|ясен|шпон|рейк/iu.test(source);
   const pastel = /постельн|беж|нюд|пудр|пудров|терракот|пудрово|приглуш|тёпл\p{L}*\s+сер/iu.test(source);
+  const style = styleFromBrief(source);
+
+  /* Если просят квартиру с несколькими комнатами, одна прямоугольная комната
+     с кухней у стены — заведомо не тот проект. Собираем честный многочастный
+     план: коридор, мокрую зону, спальни и кухню-гостиную. */
+  const roomsWanted = roomsFromText(source, area);
+  if (roomsWanted >= 2) {
+    return apartmentFromText(source, area, style, {
+      assumptions,
+      wallHeight,
+      ceilingHeight,
+      fullHeightWindows,
+      wood,
+      pastel,
+      isKids,
+      isOffice,
+      combinedKitchen: /кухн\p{L}*[-\s]*гостин|гостин\p{L}*[-\s]*кухн/iu.test(source),
+      roomsWanted,
+    });
+  }
 
   const poly = [
     [0, 0],
@@ -747,14 +1044,14 @@ export function specFromText(prompt) {
   lighting.push({ kind: 'led', x: Math.round(width * 0.5), y: 300, w: Math.round(width * 0.6) });
   assumptions.push('свет: люстра по центру, 6 точечных светильников, светодиодная лента у окна');
 
-  const floor = wood ? 'инженерная доска, дуб натуральный' : 'ламинат 33 класс, светлый';
+  const floor = wood ? 'инженерная доска, дуб натуральный' : style.materials.floor;
   const notes = [
     pastel
       ? 'Палитра постельная: тёплый беж на стенах, пудрово-розовый акцент, тёплый серый в текстиле.'
-      : 'Палитра спокойная: светлые стены, тёплый текстиль, акцент на одной стене.',
+      : `Палитра «${style.name}»: стены ${style.palette.wall}, акцент ${style.palette.accent}, текстиль ${style.palette.textile}.`,
     wood
       ? 'Деревянные элементы: дубовые подоконники, рейка-панель за ТВ, деревянные ножки мебели.'
-      : 'Дерево в отделке не заявлено — можно добавить рейку-панель и дубовые подоконники.',
+      : `Дерево в отделке: ${style.materials.fronts}; подоконники и ножки — в тон.`,
     fullHeightWindows
       ? 'Окна в пол: алюминиевый профиль, плотные шторы в пол по всей высоте проёма.'
       : 'Окна обычные: подоконник 900 мм, шторы до пола.',
@@ -771,7 +1068,229 @@ export function specFromText(prompt) {
     openings,
     furniture,
     lighting,
+    style,
     notes,
+  };
+  return { raw, assumptions };
+}
+
+/**
+ * Сколько комнат просят. «Студия» — всегда одна: иначе слово «квартира»
+ * превращало бы её в двушку. Число берём из «4 комнаты», «двухкомнатной»,
+ * «2 спален»; если его нет — из перечисленных зон и площади.
+ */
+function roomsFromText(source, area) {
+  const s = String(source || '');
+  if (/студи/iu.test(s)) return 1;
+  const digit = s.match(/(\d+)\s*[-\s]?\s*комн/iu);
+  const word = s.match(/(одно|двух|трёх|трех|четырёх|четырех|пяти|шести)[-\s]*комн/iu);
+  const words = { одно: 1, двух: 2, трёх: 3, трех: 3, четырёх: 4, четырех: 4, пяти: 5, шести: 6 };
+  let rooms = digit ? Number(digit[1]) : word ? words[word[1].toLowerCase()] || 0 : 0;
+  if (!rooms) {
+    const bedrooms = (s.match(/спальн/giu) || []).length;
+    const kids = /детск/iu.test(s) ? 1 : 0;
+    const office = /кабинет/iu.test(s) ? 1 : 0;
+    const living = /гостин/iu.test(s) ? 1 : 0;
+    const kitchen = /кухн/iu.test(s) && !/кухн\p{L}*[-\s]*гостин/iu.test(s) ? 1 : 0;
+    rooms = bedrooms + kids + office + living + kitchen;
+    if (!rooms && /квартир/iu.test(s)) rooms = area >= 65 ? 3 : area >= 45 ? 2 : 1;
+  }
+  return Math.max(1, Math.min(5, Math.round(rooms) || 1));
+}
+
+/** Прямоугольник комнаты по внутренним границам, против часовой стрелки. */
+function rectPoly(x1, y1, x2, y2) {
+  return [[x1, y1], [x2, y1], [x2, y2], [x1, y2]];
+}
+
+/**
+ * Многочастная квартира из брифа: коридор, мокрая зона, кухня, гостиная и
+ * спальни. Это запасной путь, когда модель не прислала свой спек, но он
+ * обязан давать разные планы на разные просьбы и быть пригодным для жизни:
+ * у каждой комнаты дверь, окно и своя мебель.
+ */
+function apartmentFromText(source, area, style, opts) {
+  const assumptions = opts.assumptions.filter((line) => !/^габарит помещения/iu.test(line));
+  const t = 150;
+  const pt = 100;
+  const W = Math.max(4200, Math.round((Math.sqrt(area * 1.52) * 1000) / 50) * 50);
+  const D = Math.max(3600, Math.round((area * 1_000_000) / W / 50) * 50);
+  const hallH = Math.max(1300, Math.min(1900, Math.round((D * 0.23) / 50) * 50));
+  const northBottom = D - hallH;
+  const corrW = 1000;
+  const corrX = Math.round((W * 0.44) / 50) * 50;
+  const leftEdge = corrX - pt / 2;
+  const rightEdge = corrX + corrW + pt / 2;
+  const bathW = Math.max(1600, Math.min(2300, Math.round((W * 0.25) / 50) * 50));
+  const bathEdge = bathW - pt / 2;
+  const hallEdge = northBottom + pt / 2;
+  const roomsWanted = opts.roomsWanted;
+  /* «Кухня-гостиная» — одна комната, а не две. Отдельная кухня — помещение,
+     но не комната: жилых комнат всё равно roomsWanted (гостиная + спальни),
+     поэтому rightCount = roomsWanted − 1. Раньше для 4 комнат с отдельной
+     кухней терялась спальня, а проект назывался 4-комнатным. */
+  const wantsSeparateKitchen =
+    /кухн\p{L}*[^.!;]{0,24}(отдельн|самостоятельн)|отдельн\p{L}*\s+кухн/iu.test(source);
+  const separateKitchen =
+    opts.combinedKitchen !== true && (wantsSeparateKitchen || roomsWanted >= 3);
+  const splitY = separateKitchen ? Math.round((northBottom * 0.54) / 50) * 50 : northBottom;
+  const rightCount = Math.max(1, roomsWanted - 1);
+  const rightBounds = [0];
+  for (let i = 1; i < rightCount; i += 1) rightBounds.push(Math.round((northBottom * i) / rightCount / 50) * 50);
+  rightBounds.push(northBottom);
+
+  assumptions.push(`габарит квартиры ${W} × ${D} мм`);
+  assumptions.push(`коридор ${corrW} мм ведёт от прихожей к комнатам, санузел ${bathW} мм у входа`);
+  assumptions.push(`окна: ${opts.fullHeightWindows ? 'в пол' : 'с подоконником 900 мм'} на север, запад и восток`);
+
+  const rooms = [];
+  const walls = [
+    { x1: -t / 2, y1: -t / 2, x2: W + t / 2, y2: -t / 2, t },
+    { x1: W + t / 2, y1: -t / 2, x2: W + t / 2, y2: D + t / 2, t },
+    { x1: -t / 2, y1: D + t / 2, x2: W + t / 2, y2: D + t / 2, t },
+    { x1: -t / 2, y1: -t / 2, x2: -t / 2, y2: D + t / 2, t },
+    { x1: corrX, y1: 0, x2: corrX, y2: northBottom, t: pt },
+    { x1: corrX + corrW, y1: 0, x2: corrX + corrW, y2: northBottom, t: pt },
+    { x1: 0, y1: northBottom, x2: W, y2: northBottom, t: pt },
+    { x1: bathW, y1: northBottom, x2: bathW, y2: D, t: pt },
+  ];
+  if (separateKitchen) walls.push({ x1: 0, y1: splitY, x2: corrX, y2: splitY, t: pt });
+  for (const at of rightBounds.slice(1, -1)) walls.push({ x1: corrX + corrW, y1: at, x2: W, y2: at, t: pt });
+
+  const floorWood = opts.wood ? 'инженерная доска, дуб натуральный' : style.materials.floor;
+  rooms.push({ name: 'Коридор', poly: rectPoly(corrX + pt / 2, 0, corrX + corrW - pt / 2, northBottom - pt / 2), floor: 'керамогранит' });
+  rooms.push({ name: 'Прихожая', poly: rectPoly(bathW + pt / 2, hallEdge, W, D), floor: 'керамогранит' });
+  rooms.push({ name: 'Санузел', poly: rectPoly(0, hallEdge, bathEdge, D), floor: 'керамогранит' });
+  rooms.push({
+    name: separateKitchen ? 'Гостиная' : 'Кухня-гостиная',
+    poly: rectPoly(0, 0, leftEdge, separateKitchen ? splitY - pt / 2 : northBottom - pt / 2),
+    floor: floorWood,
+  });
+  if (separateKitchen) {
+    rooms.push({ name: 'Кухня', poly: rectPoly(0, splitY + pt / 2, leftEdge, northBottom - pt / 2), floor: 'керамогранит' });
+  }
+
+  const rightNames = [];
+  for (let i = 0; i < rightCount; i += 1) {
+    const isLast = i === rightCount - 1;
+    const name = opts.isKids && isLast && !rightNames.includes('Детская')
+      ? 'Детская'
+      : opts.isOffice && isLast && !rightNames.includes('Кабинет')
+        ? 'Кабинет'
+        : rightCount === 1 ? 'Спальня' : `Спальня ${i + 1}`;
+    rightNames.push(name);
+    const from = rightBounds[i] + (i ? pt / 2 : 0);
+    const to = rightBounds[i + 1] - (i < rightCount - 1 ? pt / 2 : 0);
+    rooms.push({ name, poly: rectPoly(rightEdge, from, W, to), floor: floorWood });
+  }
+
+  const openings = [];
+  const sill = opts.fullHeightWindows ? 100 : 900;
+  const winH = opts.fullHeightWindows ? opts.wallHeight - 150 : 1500;
+  openings.push({ kind: 'window', x: 350, y: -t / 2, w: Math.min(1800, Math.max(900, leftEdge - 700)), dir: 'h', sill, h: winH });
+  openings.push({ kind: 'window', x: rightEdge + 250, y: -t / 2, w: Math.min(1700, Math.max(900, W - rightEdge - 500)), dir: 'h', sill, h: winH });
+  openings.push({ kind: 'window', x: -t / 2, y: 500, w: Math.min(1600, Math.max(900, northBottom - 1000)), dir: 'v', sill, h: winH });
+  for (let i = 0; i < rightCount; i += 1) {
+    const from = rightBounds[i] + (i ? pt / 2 : 0);
+    const to = rightBounds[i + 1] - (i < rightCount - 1 ? pt / 2 : 0);
+    openings.push({ kind: 'window', x: W + t / 2, y: Math.round(from + (to - from) * 0.2), w: Math.min(1500, Math.max(800, Math.round((to - from) * 0.55))), dir: 'v', sill, h: winH });
+  }
+
+  const door = (x, y, w, dir, extra = {}) => openings.push({ kind: 'door', x, y, w, dir, h: 2100, hinge: 'left', swing: 'in', ...extra });
+  door(W - 1100, D + t / 2, 900, 'h');
+  door(corrX, northBottom, corrW, 'h'); // проём из прихожей в коридор
+  door(bathW, D - 800, 800, 'v');
+  door(corrX, separateKitchen ? splitY + 350 : Math.max(350, northBottom - 950), 850, 'v');
+  if (separateKitchen) door(corrX, Math.min(northBottom - 500, splitY + 1100), 850, 'v');
+  for (let i = 0; i < rightCount; i += 1) {
+    const from = rightBounds[i] + (i ? pt / 2 : 0);
+    const to = rightBounds[i + 1] - (i < rightCount - 1 ? pt / 2 : 0);
+    door(corrX + corrW, Math.round((from + to) / 2 - 400), 800, 'v');
+  }
+
+  const furniture = [];
+  const add = (kind, x, y, w, d, rot, name) => furniture.push(piece(kind, x, y, w, d, rot || 0, name));
+  const livingDepth = separateKitchen ? splitY : northBottom;
+  const sofaW = Math.min(2200, Math.max(1400, leftEdge - 700));
+  add('sofa', Math.round((leftEdge - sofaW) / 2), Math.max(150, livingDepth - 1050), sofaW, 850, 180, 'Диван');
+  add('tv_stand', Math.round((leftEdge - Math.min(1600, leftEdge - 600)) / 2), 100, Math.min(1600, leftEdge - 600), 400, 0, 'ТВ-тумба');
+  add('coffee_table', Math.round((leftEdge - 1000) / 2), Math.max(500, Math.round(livingDepth * 0.6)), 1000, 600, 0, 'Журнальный стол');
+  add('rug', Math.max(100, Math.round(leftEdge * 0.15)), Math.max(350, Math.round(livingDepth * 0.48)), Math.min(2200, leftEdge - 300), 1500, 0, 'Ковёр');
+  add('plant', Math.max(150, leftEdge - 650), Math.max(150, livingDepth - 700), 500, 500, 0, 'Растение');
+
+  if (separateKitchen) {
+    const ky = splitY + pt / 2 + 100;
+    const kh = northBottom - ky - 100;
+    add('kitchen_counter', 100, ky, 600, Math.max(900, Math.min(2600, kh)), 270, 'Кухонный фронт');
+    add('fridge', 100, northBottom - 800, 700, 700, 0, 'Холодильник');
+    if (leftEdge > 2500 && kh > 1500) add('dining_table', Math.round(leftEdge * 0.45), ky + 250, 1100, 700, 0, 'Обеденный стол');
+    add('sink', 120, ky + 250, 560, 700, 270, 'Мойка');
+    add('hob', 120, ky + Math.min(1300, Math.max(800, kh - 800)), 560, 600, 270, 'Варочная панель');
+  } else {
+    const ky = Math.max(900, northBottom - 2500);
+    add('kitchen_counter', 100, ky, 600, 1800, 270, 'Кухонный фронт');
+    add('fridge', 100, ky + 1850, 700, 700, 0, 'Холодильник');
+    add('sink', 120, ky + 200, 560, 700, 270, 'Мойка');
+    add('hob', 120, ky + 900, 560, 600, 270, 'Варочная панель');
+  }
+
+  for (let i = 0; i < rightCount; i += 1) {
+    const from = rightBounds[i] + (i ? pt / 2 : 0);
+    const to = rightBounds[i + 1] - (i < rightCount - 1 ? pt / 2 : 0);
+    const rh = to - from;
+    const rw = W - rightEdge;
+    const bedW = Math.max(1200, Math.min(1600, rw - 900));
+    const bedD = Math.max(1800, Math.min(2000, rh - 350));
+    const bx = W - 100 - bedD;
+    const by = Math.round(from + Math.max(100, (rh - bedW) / 2));
+    add('bed_double', bx, by, bedW, bedD, 90, 'Кровать 160×200');
+    add('nightstand', W - 550, by, 450, 450, 0, 'Тумба');
+    /* В маленькой спальне шкаф у западной стены всё равно перекрывает кадр
+       и кровать. Хранение выносим в прихожую: спальни остаются читаемыми. */
+  }
+
+  add('bath', 100, hallEdge + 100, 750, Math.max(1500, Math.min(1800, hallH - 300)), 270, 'Ванна');
+  add('wc', 100, D - 750, 420, 650, 0, 'Унитаз');
+  add('bath_sink', Math.min(bathEdge - 650, 1100), hallEdge + 100, 600, 450, 0, 'Раковина');
+  add('mirror', Math.min(bathEdge - 800, 1000), hallEdge + 100, 500, 60, 0, 'Зеркало');
+  add('wardrobe', W - 800, hallEdge + 150, 1200, 600, 90, 'Шкаф в прихожей');
+
+  const lighting = [];
+  const lamp = (kind, x, y, w) => {
+    const item = { kind, x, y };
+    if (w) item.w = w;
+    lighting.push(item);
+  };
+  lamp('chandelier', Math.round(leftEdge / 2), Math.round(livingDepth * 0.45));
+  if (separateKitchen) lamp('chandelier', Math.round(leftEdge / 2), Math.round((splitY + northBottom) / 2));
+  for (const room of rooms.slice(rooms.length - rightCount)) {
+    const poly = room.poly;
+    lamp('chandelier', Math.round((poly[0][0] + poly[1][0]) / 2), Math.round((poly[0][1] + poly[2][1]) / 2));
+  }
+  for (const [x, y] of [[corrX + 500, 900], [corrX + 500, northBottom - 900], [W - 1200, D - 600], [bathEdge / 2, D - 600]]) lamp('spot', x, y);
+  lamp('led', corrX + 500, 250, 700);
+
+  assumptions.push(`комнат по брифу: ${roomsWanted}; кухня ${separateKitchen ? 'отдельная' : 'в гостиной'}, санузел у входа`);
+  assumptions.push(`в каждой комнате окно и дверь из коридора; мебель расставлена по зонам, а не одним рядом`);
+
+  const total = Math.round((W * D / 1_000_000) * 100) / 100;
+  const raw = {
+    project: `Дизайн-проект: квартира ${String(area).replace('.', ',')} м², ${roomsWanted} ${roomsWanted === 1 ? 'комната' : roomsWanted < 5 ? 'комнаты' : 'комнат'}`,
+    object: `Квартира, ${String(total).replace('.', ',')} м² по полу`,
+    paper: 'A3',
+    heights: { wall: opts.wallHeight, ceiling: opts.ceilingHeight },
+    rooms,
+    walls,
+    openings,
+    furniture,
+    lighting,
+    style,
+    notes: [
+      `Планировка из брифа: ${roomsWanted} ${roomsWanted === 1 ? 'комната' : 'комнаты'}, коридор, прихожая и санузел.`,
+      `Палитра «${style.name}»: стены ${style.palette.wall}, акцент ${style.palette.accent}, текстиль ${style.palette.textile}.`,
+      opts.fullHeightWindows ? 'Окна в пол с плотными шторами по высоте проёма.' : 'Окна с подоконником 900 мм, шторы до пола.',
+      `Площадь пола: ${String(total).replace('.', ',')} м².`,
+    ],
   };
   return { raw, assumptions };
 }
@@ -793,17 +1312,23 @@ export function describeDesign(view, results = null) {
   }
   if (view.error) return `Спек есть, но не читается: ${view.error}`;
   const spec = view.spec;
-  const rooms = spec.rooms.length;
+  const rooms = livingRoomCount(spec.rooms);
+  const spaces = spec.rooms.length;
   const furniture = spec.furniture.length;
   const openings = spec.openings.length;
   const lamps = spec.lighting.length;
   const area = String(view.area).replace('.', ',');
   const parts = [
-    `«${spec.project}»: ${rooms} ${plural(rooms, 'комната', 'комнаты', 'комнат')} на ${area} м², ` +
+    `«${spec.project}»: ${area} м², ${rooms} ${plural(rooms, 'комната', 'комнаты', 'комнат')}` +
+      `${spaces !== rooms ? ` (${spaces} ${plural(spaces, 'помещение', 'помещения', 'помещений')})` : ''}, ` +
       `${furniture} ${plural(furniture, 'предмет', 'предмета', 'предметов')} мебели, ` +
       `${openings} ${plural(openings, 'проём', 'проёма', 'проёмов')}, ` +
       `${lamps} ${plural(lamps, 'светильник', 'светильника', 'светильников')}.`,
   ];
+  if (spec.style?.name) {
+    const source = spec.style.source === 'reference' ? `, по референсу${spec.style.referenceName ? ` «${spec.style.referenceName}»` : ''}` : '';
+    parts.push(`Стиль: ${spec.style.name}${source}; палитра ${spec.style.palette?.wall || ''} / ${spec.style.palette?.accent || ''} / ${spec.style.palette?.textile || ''}.`);
+  }
   const fixed = results || view.artifacts;
   const good = fixed.filter((item) => (item.ok === undefined ? item.exists : item.ok) && item.bytes > 0);
   const bad = fixed.filter((item) => !((item.ok === undefined ? item.exists : item.ok) && item.bytes > 0));

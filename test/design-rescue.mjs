@@ -16,7 +16,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { needsDrawingRepair, rescueDesign } from '../src/agent.mjs';
-import { designView, readSpec } from '../src/design.mjs';
+import { designView, livingRoomCount, readSpec } from '../src/design.mjs';
 
 /* Ровно та просьба, из-за которой задача вернулась без файлов. */
 const TASK =
@@ -70,6 +70,30 @@ function workspace() {
   check(needed === false, 'вызов build_design снимает нужду в досборке');
 }
 
+/* 3b. Разбор фото возвращает path исходника, но файлов проекта не создаёт:
+   это не повод считать задачу сделанной. */
+{
+  const dir = workspace();
+  const needed = needsDrawingRepair({
+    userText: TASK,
+    workspace: dir,
+    toolsUsed: [{ name: 'analyze_image', path: 'refs/interior.jpg' }],
+    answer: '',
+  });
+  check(needed === true, 'analyze_image не отменяет досборку чертежей');
+}
+
+/* 3c. «7 комнат» из 4-комнатной квартиры: считаем жилые, а не все помещения. */
+{
+  const rooms = [
+    { name: 'Коридор' }, { name: 'Прихожая' }, { name: 'Санузел' },
+    { name: 'Кухня-гостиная' }, { name: 'Спальня 1' }, { name: 'Спальня 2' }, { name: 'Детская' },
+  ];
+  check(livingRoomCount(rooms) === 4, 'коридор и санузел не считаются комнатами');
+  check(livingRoomCount([{ name: 'Кухня' }, { name: 'Гостиная' }]) === 1, 'отдельная кухня не считается комнатой');
+  check(livingRoomCount([{ name: 'Кухня-гостиная' }]) === 1, 'кухня-гостиная — одна комната');
+}
+
 /* 4. Готовый проект не перезаписываем: спек уже лежит в папке. */
 {
   const dir = workspace();
@@ -96,9 +120,9 @@ function workspace() {
 
   const view = designView(dir);
   const built = (view.artifacts || []).filter((item) => item.exists && item.bytes > 0);
-  check(built.length === 5, 'собраны все пять листов', built.map((item) => `${item.key}:${item.bytes}`).join(', '));
-  for (const key of ['plan', 'floor', 'ceiling', 'axo', 'scene']) {
-    const file = path.join(dir, 'design', { plan: 'plan.svg', floor: 'floor.svg', ceiling: 'ceiling.svg', axo: 'axo.svg', scene: '3d.html' }[key]);
+  check(built.length === 7, 'собраны все семь листов', built.map((item) => `${item.key}:${item.bytes}`).join(', '));
+  for (const key of ['render', 'style', 'plan', 'floor', 'ceiling', 'axo', 'scene']) {
+    const file = path.join(dir, 'design', { render: 'render.png', style: 'style.svg', plan: 'plan.svg', floor: 'floor.svg', ceiling: 'ceiling.svg', axo: 'axo.svg', scene: '3d.html' }[key]);
     check(fs.existsSync(file), `файл ${path.relative(dir, file)}`, fs.existsSync(file) ? `${fs.statSync(file).size} Б` : 'нет');
   }
 
