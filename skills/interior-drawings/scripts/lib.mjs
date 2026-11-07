@@ -93,8 +93,12 @@ export function sheetFor(spec) {
   };
 }
 
+/* Белый лист — часть самого SVG, а не оформление окна. Иначе прозрачные
+   участки плана на тёмном фоне выглядят «чёрными дырами», а при печати
+   подложку приходится добавлять вручную. */
 export const svgOpen = (sheet) =>
-  `<svg xmlns="http://www.w3.org/2000/svg" width="${sheet.w}mm" height="${sheet.h}mm" viewBox="0 0 ${sheet.w} ${sheet.h}">`;
+  `<svg xmlns="http://www.w3.org/2000/svg" width="${sheet.w}mm" height="${sheet.h}mm" viewBox="0 0 ${sheet.w} ${sheet.h}">` +
+  `<rect x="0" y="0" width="${sheet.w}" height="${sheet.h}" fill="#ffffff"/>`;
 
 export function defs() {
   return `<defs>

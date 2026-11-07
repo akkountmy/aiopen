@@ -10,7 +10,7 @@
 //   - «Версии» возвращают прошлое содержимое файла;
 //   - закрытие с несохранёнными правками спрашивает прямо в окне и не теряет
 //     текст, если человек передумал;
-//   - из просмотра файла есть «Править код»;
+//   - из просмотра файла есть «Править»;
 //   - на телефоне окно занимает весь экран, поле не мельче 16 px (иначе iOS
 //     увеличивает страницу), горизонтальной прокрутки страницы нет;
 //   - на странице нет ошибок в консоли.
@@ -408,15 +408,15 @@ try {
   const closed = await waitFor(`!document.querySelector('#modalRoot .modal.code-modal')`, 6000);
   closed ? ok('чистое окно закрывается сразу') : fail('закрытие чистого окна', 'окно осталось');
 
-  /* 8. Из просмотра листа есть «Править код» — тот же редактор на один файл. */
+  /* 8. Из просмотра листа есть «Править» — тот же редактор на один файл. */
   await evaluate(`document.querySelector('.design-card').click()`);
   const previewOpen = await waitFor(`!!document.querySelector('#modalRoot .modal.file-preview-modal')`, 8000);
-  const hasEdit = await evaluate(`[...document.querySelectorAll('#modalRoot .modal-foot .btn')].some((b) => b.textContent.trim() === 'Править код')`);
+  const hasEdit = await evaluate(`[...document.querySelectorAll('#modalRoot .modal-foot .btn')].some((b) => b.textContent.trim() === 'Править')`);
   if (!previewOpen) {
     fail('просмотр листа из панели дизайна', 'окно не открылось');
   } else {
-    hasEdit ? ok('в просмотре листа есть кнопка «Править код»') : fail('кнопка «Править код» в просмотре', 'её нет в нижней полосе');
-    await clickByText('#modalRoot .modal-foot .btn', 'Править код');
+    hasEdit ? ok('в просмотре листа есть кнопка «Править»') : fail('кнопка «Править» в просмотре', 'её нет в нижней полосе');
+    await clickByText('#modalRoot .modal-foot .btn', 'Править');
     const svgOpened = await waitFor(`(() => {
       const area = document.querySelector('#modalRoot .modal.code-modal .code-input');
       return Boolean(area) && area.value.startsWith('<') && /SVG/.test(document.querySelector('#modalRoot .modal.code-modal .code-meta').textContent);

@@ -4017,7 +4017,7 @@ function codeLangOf(name) {
 const CODE_LANG_TITLE = { json: 'JSON', xml: 'SVG', html: 'HTML', css: 'CSS', js: 'JavaScript', md: 'Markdown', text: 'текст' };
 
 /* Те же расширения, что пускает сервер: список нужен, чтобы не предлагать
-   «Править код» у картинки или PDF — их текстом не открыть. */
+   «Править» у картинки или PDF — их текстом не открыть. */
 const CODE_TEXT_EXT = /\.(json|jsonl|svg|html?|css|js|mjs|md|markdown|txt|csv|tsv|xml|ya?ml|toml|ini|map|webmanifest|sql|sh|ps1|bat|py|viki)$/i;
 
 function codeEditableName(name) {
@@ -4343,7 +4343,7 @@ function codePolyArea(poly) {
    projectId — проект; по умолчанию тот, что открыт в панели файлов;
    quick   — показывать быстрые поля спека (формат листа, высоты);
    onClose — вернуть управление тому, кто открыл. */
-async function codeEditorOpen({ paths = [], active = null, title = 'Правка кода', subtitle = '', projectId = null, quick = false, onClose = null } = {}) {
+async function codeEditorOpen({ paths = [], active = null, title = 'Правка', subtitle = '', projectId = null, quick = false, onClose = null } = {}) {
   const pid = projectId || filesProjectId();
   const list = [];
   for (const item of paths || []) {
@@ -4368,6 +4368,7 @@ async function codeEditorOpen({ paths = [], active = null, title = 'Правка
       reason: '',
       loaded: false,
       loading: false,
+      loadingPromise: null,
       error: null,
       undo: null,
       pref: null,
@@ -4381,6 +4382,7 @@ async function codeEditorOpen({ paths = [], active = null, title = 'Правка
     forceClose: false,
     paintTimer: null,
     fillTimer: null,
+    showSeq: 0,
   };
 
   /* ---- разметка ---- */
@@ -4501,8 +4503,21 @@ async function codeEditorOpen({ paths = [], active = null, title = 'Правка
   const toolVersions = el('button', 'code-tool', 'Версии');
   const toolDownload = el('button', 'code-tool', 'Скачать');
   const toolPreview = el('button', 'code-tool', 'Просмотр');
-  for (const button of [toolFormat, toolQuick, toolVersions, toolDownload, toolPreview]) button.type = 'button';
-  tools.append(toolFormat, toolQuick, toolVersions, toolDownload, toolPreview);
+  /* Если файл не прочитался (сеть, таймаут), окно не должно оставаться с
+     пустым полем: рядом со статусом появляется «Повторить». */
+  const toolRetry = el('button', 'code-tool code-retry', 'Повторить');
+  for (const button of [toolFormat, toolQuick, toolVersions, toolDownload, toolPreview, toolRetry]) button.type = 'button';
+  tools.append(toolFormat, toolQuick, toolVersions, toolDownload, toolPreview, toolRetry);
+
+  toolRetry.addEventListener('click', async () => {
+    const tab = activeTab();
+    if (!tab) return;
+    tab.error = null;
+    tab.loaded = false;
+    tab.loading = false;
+    tab.loadingPromise = null;
+    await showTab();
+  });
 
   const langBadge = el('span', 'code-lead', 'КОД');
 
@@ -4585,6 +4600,7 @@ async function codeEditorOpen({ paths = [], active = null, title = 'Правка
 
   function updateTools(tab) {
     const editable = Boolean(tab) && tab.loaded && tab.editable;
+    toolRetry.classList.toggle('hidden', !(tab && tab.error));
     toolFormat.classList.toggle('hidden', !tab || tab.lang !== 'json');
     toolQuick.classList.toggle('hidden', st.active !== quickPath);
     toolFormat.disabled = !editable;
@@ -4602,25 +4618,43 @@ async function codeEditorOpen({ paths = [], active = null, title = 'Правка
 
   /* ---- загрузка файла ---- */
   async function ensureLoaded(tab) {
-    if (tab.loaded || tab.loading) return;
+    if (tab.loaded) return;
+    /* Повторный вызов (например, человек вернулся на вкладку, пока она ещё
+       грузится) должен ждать тот же запрос, а не выходить сразу: иначе окно
+       показывало пустое поле и выглядело «не загрузившимся». */
+    if (tab.loadingPromise) return tab.loadingPromise;
     tab.loading = true;
     tab.error = null;
-    try {
-      const data = await api(`/api/projects/${st.projectId}/file-text?path=${encodeURIComponent(tab.path)}`);
-      tab.editable = data.editable !== false;
-      tab.reason = data.reason || '';
-      tab.bytes = data.bytes || 0;
-      tab.at = data.at || null;
-      tab.versions = data.history && typeof data.history.count === 'number' ? data.history.count : 0;
-      tab.text = tab.editable ? String(data.text || '') : '';
-      tab.saved = tab.text;
-      tab.hash = data.hash || null;
-      tab.loaded = true;
-    } catch (error) {
-      tab.error = error.message;
-    } finally {
-      tab.loading = false;
-    }
+    tab.loadingPromise = (async () => {
+      const controller = new AbortController();
+      let timer = null;
+      try {
+        /* Без таймаута зависший запрос оставлял «Читаю файл…» навсегда. */
+        timer = setTimeout(() => controller.abort(), 30000);
+        const data = await api(`/api/projects/${st.projectId}/file-text?path=${encodeURIComponent(tab.path)}`, {
+          signal: controller.signal,
+        });
+        tab.editable = data.editable !== false;
+        tab.reason = data.reason || '';
+        tab.bytes = data.bytes || 0;
+        tab.at = data.at || null;
+        tab.versions = data.history && typeof data.history.count === 'number' ? data.history.count : 0;
+        tab.text = tab.editable ? String(data.text || '') : '';
+        tab.saved = tab.text;
+        tab.hash = data.hash || null;
+        tab.loaded = true;
+      } catch (error) {
+        tab.error =
+          error && error.name === 'AbortError'
+            ? 'Файл не загрузился за 30 секунд. Проверьте связь и нажмите «Повторить».'
+            : error.message;
+      } finally {
+        if (timer) clearTimeout(timer);
+        tab.loading = false;
+        tab.loadingPromise = null;
+      }
+    })();
+    return tab.loadingPromise;
   }
 
   /* ---- предпросмотр ---- */
@@ -4732,7 +4766,10 @@ async function codeEditorOpen({ paths = [], active = null, title = 'Правка
   async function showTab() {
     const tab = activeTab();
     if (!tab) return;
-    if (!tab.loaded && !tab.loading) {
+    /* Номер показа: пока файл грузится, человек может перейти на другую
+       вкладку. Ответ старой вкладки не должен перерисовать чужой текст. */
+    const seq = ++st.showSeq;
+    if (!tab.loaded) {
       area.value = '';
       codeNode.innerHTML = '';
       gutterIn.innerHTML = '';
@@ -4741,6 +4778,7 @@ async function codeEditorOpen({ paths = [], active = null, title = 'Правка
       setStatus(tab.path === quickPath ? 'Читаю спек дизайна…' : 'Читаю файл…', '');
       await ensureLoaded(tab);
     }
+    if (seq !== st.showSeq || tab !== activeTab()) return;
     if (tab.error) {
       area.value = '';
       area.readOnly = true;
@@ -5302,13 +5340,14 @@ async function openDesignEditor() {
     if (!paths.includes(artifact.file)) paths.push(artifact.file);
   }
   const rooms = (design.spec && Array.isArray(design.spec.rooms) && design.spec.rooms.length) || 0;
+  const sheets = Math.max(0, paths.length - 1);
   await codeEditorOpen({
     paths,
     active: 'design.json',
     quick: true,
     projectId,
     title: 'Правка дизайн-проекта',
-    subtitle: `${rooms ? `${rooms} комн. · ` : ''}спек и ${codePlural(Math.max(0, paths.length - 1), 'лист', 'листа', 'листов')} · сохранение пересоберёт листы`,
+    subtitle: `${rooms ? `${rooms} комн. · ` : ''}спек${sheets ? ` и ${sheets} ${codePlural(sheets, 'лист', 'листа', 'листов')}` : ''} · сохранение пересоберёт листы`,
   });
 }
 
@@ -6238,6 +6277,264 @@ async function mountDocPreview(container, item) {
   container.appendChild(officeHintBody());
 }
 
+/* Просмотр листа SVG: белая «бумага» на весь лист, вписывание в окно и
+   собственный масштаб. Раньше это был обычный <img>: прозрачный фон SVG
+   сливался с тёмным окном, и казалось, что лист обрезан, а при страничном
+   зуме браузера картинка «дёргалась». Здесь масштаб и сдвиг считаются сами,
+   без перерисовки страницы. */
+function mountSheetPreview(container, url, name) {
+  const viewer = el('div', 'sheet-viewer');
+  const bar = el('div', 'sheet-bar');
+  const zoomOut = el('button', 'sheet-tool sheet-tool-icon', '−');
+  const zoomLabel = el('span', 'sheet-zoom', '100%');
+  const zoomIn = el('button', 'sheet-tool sheet-tool-icon', '+');
+  const fitBtn = el('button', 'sheet-tool', 'Весь лист');
+  const oneBtn = el('button', 'sheet-tool', '1:1');
+  const hint = el('span', 'sheet-hint', 'Колесо — масштаб · перетаскивание — сдвиг');
+  zoomOut.type = 'button';
+  zoomIn.type = 'button';
+  fitBtn.type = 'button';
+  oneBtn.type = 'button';
+  zoomOut.title = 'Уменьшить';
+  zoomOut.setAttribute('aria-label', 'Уменьшить масштаб');
+  zoomIn.title = 'Увеличить';
+  zoomIn.setAttribute('aria-label', 'Увеличить масштаб');
+  zoomLabel.title = 'Текущий масштаб листа';
+  fitBtn.title = 'Показать весь лист целиком';
+  oneBtn.title = 'Масштаб 1:1 — размер листа в пикселях экрана';
+  bar.append(zoomOut, zoomLabel, zoomIn, fitBtn, oneBtn, hint);
+
+  const stage = el('div', 'sheet-stage');
+  stage.tabIndex = 0;
+  stage.setAttribute('role', 'group');
+  stage.setAttribute('aria-label', `Лист ${name}: колесо мыши меняет масштаб, перетаскивание сдвигает лист`);
+  const paper = el('div', 'sheet-paper');
+  const img = el('img', 'sheet-img');
+  img.alt = `Лист ${name}`;
+  img.draggable = false;
+  img.decoding = 'async';
+  const note = el('div', 'sheet-note', 'Загружаю лист…');
+  paper.appendChild(img);
+  stage.append(paper, note);
+  viewer.append(bar, stage);
+  container.appendChild(viewer);
+
+  const PAD = 18;
+  let nw = 0;
+  let nh = 0;
+  let scale = 1;
+  let fitScale = 1;
+  let x = 0;
+  let y = 0;
+  let fitMode = true;
+
+  const scaleMin = () => Math.max(0.02, fitScale * 0.25);
+  const scaleMax = () => Math.max(8, fitScale * 16);
+  function clampScale(value) {
+    return Math.min(scaleMax(), Math.max(scaleMin(), value));
+  }
+
+  function apply() {
+    paper.style.transform = `translate3d(${x.toFixed(2)}px, ${y.toFixed(2)}px, 0) scale(${scale.toFixed(4)})`;
+    zoomLabel.textContent = `${Math.round(scale * 100)}%`;
+  }
+
+  function fit() {
+    const sw = stage.clientWidth;
+    const sh = stage.clientHeight;
+    if (!sw || !sh || !nw || !nh) return;
+    fitScale = Math.min((sw - PAD * 2) / nw, (sh - PAD * 2) / nh);
+    fitScale = Math.max(0.02, fitScale);
+    scale = fitScale;
+    x = (sw - nw * scale) / 2;
+    y = (sh - nh * scale) / 2;
+    fitMode = true;
+    apply();
+  }
+
+  function zoomAt(px, py, factor) {
+    const next = clampScale(scale * factor);
+    if (Math.abs(next - scale) < 0.0001) return;
+    x = px - (px - x) * (next / scale);
+    y = py - (py - y) * (next / scale);
+    scale = next;
+    fitMode = false;
+    apply();
+  }
+
+  function zoomCenter(factor) {
+    const rect = stage.getBoundingClientRect();
+    zoomAt(rect.width / 2, rect.height / 2, factor);
+  }
+
+  function oneToOne() {
+    if (!nw || !nh) return;
+    scale = clampScale(1);
+    x = (stage.clientWidth - nw * scale) / 2;
+    y = (stage.clientHeight - nh * scale) / 2;
+    fitMode = false;
+    apply();
+  }
+
+  function setup() {
+    nw = img.naturalWidth || 1200;
+    nh = img.naturalHeight || 800;
+    paper.style.width = `${nw}px`;
+    paper.style.height = `${nh}px`;
+    note.classList.add('hidden');
+    fit();
+    requestAnimationFrame(() => {
+      if (fitMode) fit();
+    });
+  }
+
+  img.addEventListener('load', setup);
+  img.addEventListener('error', () => {
+    note.textContent = 'Лист не загрузился. Нажмите «Обновить» или закройте окно и попробуйте снова.';
+    note.classList.remove('hidden');
+  });
+  img.src = `${url}&t=${Date.now()}`;
+
+  /* Кнопки: масштаб вокруг центра видимой части, «Весь лист» возвращает
+     вписывание, «1:1» — натуральный размер. */
+  zoomOut.addEventListener('click', () => zoomCenter(1 / 1.25));
+  zoomIn.addEventListener('click', () => zoomCenter(1.25));
+  fitBtn.addEventListener('click', fit);
+  zoomLabel.addEventListener('click', fit);
+  oneBtn.addEventListener('click', oneToOne);
+
+  /* Перетаскивание и щипок. touch-action: none в CSS не даёт браузеру
+     перехватить жест и увеличить всю страницу — отсюда и была «дрожь». */
+  const pointers = new Map();
+  let drag = null;
+  let pinch = null;
+
+  function pinchInfo() {
+    const points = [...pointers.values()];
+    if (points.length < 2) return null;
+    const [a, b] = points;
+    return {
+      cx: (a.x + b.x) / 2,
+      cy: (a.y + b.y) / 2,
+      dist: Math.hypot(a.x - b.x, a.y - b.y),
+    };
+  }
+
+  stage.addEventListener('pointerdown', (event) => {
+    if (event.pointerType === 'mouse' && event.button !== 0) return;
+    stage.focus({ preventScroll: true });
+    pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    try {
+      stage.setPointerCapture(event.pointerId);
+    } catch {
+      /* указатель мог быть уже отпущен */
+    }
+    if (pointers.size === 1) {
+      drag = { x: event.clientX, y: event.clientY, ox: x, oy: y };
+      fitMode = false;
+      stage.classList.add('is-dragging');
+    } else {
+      drag = null;
+      pinch = pointers.size === 2 ? pinchInfo() : null;
+    }
+    event.preventDefault();
+  });
+
+  stage.addEventListener(
+    'pointermove',
+    (event) => {
+      if (!pointers.has(event.pointerId)) return;
+      pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+      if (pointers.size >= 2 && pinch) {
+        const next = pinchInfo();
+        if (!next) return;
+        const rect = stage.getBoundingClientRect();
+        const px = next.cx - rect.left;
+        const py = next.cy - rect.top;
+        x += next.cx - pinch.cx;
+        y += next.cy - pinch.cy;
+        const factor = next.dist / Math.max(1, pinch.dist);
+        const nextScale = clampScale(scale * factor);
+        if (Math.abs(nextScale - scale) > 0.0001) {
+          x = px - (px - x) * (nextScale / scale);
+          y = py - (py - y) * (nextScale / scale);
+          scale = nextScale;
+          fitMode = false;
+        }
+        pinch = next;
+        apply();
+      } else if (drag) {
+        x = drag.ox + (event.clientX - drag.x);
+        y = drag.oy + (event.clientY - drag.y);
+        apply();
+      }
+      event.preventDefault();
+    },
+    { passive: false },
+  );
+
+  function releasePointer(event) {
+    pointers.delete(event.pointerId);
+    pinch = null;
+    if (pointers.size === 1) {
+      const [point] = pointers.values();
+      drag = { x: point.x, y: point.y, ox: x, oy: y };
+    } else if (!pointers.size) {
+      drag = null;
+      stage.classList.remove('is-dragging');
+    }
+  }
+  stage.addEventListener('pointerup', releasePointer);
+  stage.addEventListener('pointercancel', releasePointer);
+  stage.addEventListener('lostpointercapture', releasePointer);
+
+  stage.addEventListener(
+    'wheel',
+    (event) => {
+      event.preventDefault();
+      const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? stage.clientHeight : 1;
+      const factor = Math.exp(-event.deltaY * unit * 0.0015);
+      const rect = stage.getBoundingClientRect();
+      zoomAt(event.clientX - rect.left, event.clientY - rect.top, factor);
+    },
+    { passive: false },
+  );
+
+  stage.addEventListener('dblclick', (event) => {
+    event.preventDefault();
+    if (scale <= fitScale * 1.06) {
+      const rect = stage.getBoundingClientRect();
+      zoomAt(event.clientX - rect.left, event.clientY - rect.top, (fitScale * 2) / scale);
+    } else {
+      fit();
+    }
+  });
+
+  stage.addEventListener('keydown', (event) => {
+    if (event.key === '+' || event.key === '=') {
+      zoomCenter(1.25);
+      event.preventDefault();
+    } else if (event.key === '-' || event.key === '_') {
+      zoomCenter(1 / 1.25);
+      event.preventDefault();
+    } else if (event.key === '0') {
+      fit();
+      event.preventDefault();
+    }
+  });
+
+  /* Поворот телефона и изменение ширины окна: пока лист вписан, вписываем
+     заново; если человек уже приблизил — не сбрасываем его масштаб. */
+  const ro = new ResizeObserver(() => {
+    if (fitMode) fit();
+  });
+  ro.observe(stage);
+
+  return () => {
+    ro.disconnect();
+  };
+}
+
 function openFilePreview(item) {
   /* Та же защита от двойного тапа, что и у скачивания. */
   const key = `${filesProjectId()}:${item.path}`;
@@ -6250,6 +6547,7 @@ function openFilePreview(item) {
   const body = el('div', 'file-preview');
   const ext = fileExtOf(item.name);
   const kind = previewKindOf(item.name);
+  let sheetCleanup = null;
 
   /* Документ Office читается здесь же — без Word и без окна безопасности.
      Для правки человеку нужен сам файл, поэтому подсказываем кнопку «Скачать». */
@@ -6283,10 +6581,16 @@ function openFilePreview(item) {
       ),
     );
   } else if (PREVIEW_IMAGE.test(item.name)) {
-    const img = el('img', 'preview-img');
-    img.src = url;
-    img.alt = item.name;
-    body.appendChild(img);
+    if (/\.svg$/i.test(item.name)) {
+      /* Лист — это страница, а не фотография: белая бумага и свой масштаб. */
+      body.classList.add('file-preview-sheet');
+      sheetCleanup = mountSheetPreview(body, url, item.name);
+    } else {
+      const img = el('img', 'preview-img');
+      img.src = url;
+      img.alt = item.name;
+      body.appendChild(img);
+    }
   } else if (ext === 'pdf') {
     const holder = el('div', 'pdf-box');
     body.appendChild(holder);
@@ -6301,13 +6605,13 @@ function openFilePreview(item) {
      человек остаётся там же, где выбирал файл. */
   const reopenDrawer = Boolean(state.filesDrawerOpen) && filesNarrow();
   /* У текстовых файлов (спек дизайна, листы SVG, страница 3D, любой .json/.md)
-     первой кнопкой стоит «Править код»: до сих пор такой файл можно было
+     первой кнопкой стоит «Править»: до сих пор такой файл можно было
      только скачать и править в блокноте, а потом загрузить назад. Страница
      HTML раньше открывалась вовсе без кнопок — теперь у неё есть хотя бы эта. */
   const actions = [];
   if (codeEditableName(item.name)) {
     actions.push({
-      label: 'Править код',
+      label: 'Править',
       onClick: () => {
         closeModal();
         openFileEditor(item);
@@ -6337,6 +6641,10 @@ function openFilePreview(item) {
     rootClass: 'preview-open',
     actions,
     onClose: () => {
+      if (sheetCleanup) {
+        sheetCleanup();
+        sheetCleanup = null;
+      }
       if (reopenDrawer && !state.filesDrawerOpen) {
         state.filesDrawerOpen = true;
         syncFilesPanel();
