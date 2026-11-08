@@ -14,10 +14,10 @@ scripts/plan.mjs       план: --mode=plan|floor|ceiling
 scripts/elevation.mjs  развёртка стены (длина × высота, зоны отделки, проёмы, мебель, выноски)
 scripts/axo.mjs        аксонометрия 30°, стены срезаны на 1150 мм
 scripts/scene.mjs      интерактивная 3D-сцена (three.js локально, без CDN)
-scripts/visual.mjs     фотореалистичный кадр design/render.png из 3D-сцены
+scripts/visual.mjs     главный кадр design/render.png: векторный hero + resvg (без Chromium)
 scripts/style.mjs      лист «Палитра и материалы» с фото-референсом
 scripts/render.mjs     SVG/HTML → PDF/PNG через Edge или Chrome
-scripts/shot.mjs       скриншот HTML через Playwright Chromium (для WebGL)
+scripts/shot.mjs       скриншот HTML через Playwright Chromium (только явный запасной путь)
 ```
 
 ## Быстрый старт
@@ -168,10 +168,15 @@ openings[], furniture[], callouts[]}}`. `finishes` — зоны по высот�
 берётся из `style`, поэтому референс меняет не только подпись, но и цвет стен, пола,
 фасадов и текстиля.
 
-`visual.mjs` делает главный кадр `design/render.png` (1600×1000) через `shot.mjs`.
-`shot.mjs` снимает PNG через Playwright Chromium (`playwright-core` ищется в
-`./node_modules`, в DSH.OPEN.WEB и в `~/.dsh`). Для статичного кадра страница открывается
-с `?shot=1` — после 4-го кадра цикл рендера останавливается; HUD и подписи скрыты.
+`visual.mjs` делает главный кадр `design/render.png` (1600×1000) **без браузера**:
+`hero.mjs` собирает изометрический разрез квартиры вектором (стены, полы, мебель,
+тени, палитра), `@resvg/resvg-js` растрирует SVG. Это единицы мегабайт памяти и
+секунды на тарифе 500 МБ, где Chromium + SwiftShader упирались в OOM.
+
+Старый браузерный путь остался только для локальной проверки:
+`DSHOW_RENDER_BROWSER=1 node scripts/visual.mjs …` → `scene.mjs` + `shot.mjs`
+(Playwright Chromium, `?shot=1`, HUD скрыт). В production автоматического отката
+на Chromium нет: при нехватке памяти он превращает «нет картинки» в рестарт сервиса.
 
 `style.mjs` собирает A3-лист «Палитра и материалы»: фото-референс, 8 цветов с HEX,
 материалы, свет, 4 решения, анти-примеры и штамп. Если референса нет — рисует мудборд
@@ -197,6 +202,10 @@ openings[], furniture[], callouts[]}}`. `finishes` — зоны по высот�
   Пишите JSON из Node/Python, а скрипты уже терпят BOM.
 - Headless Edge на машинах без GPU отдаёт **пустой** кадр WebGL (PNG валидный, но белый).
   Для 3D снимайте `shot.mjs` (Chromium + SwiftShader), а не `render.mjs`.
+- `@resvg/resvg-js` 2.6.2 падает на полигоне, целиком выходящем за viewBox, и на
+  вырожденных гранях (`Option::unwrap()` в `geom.rs`). Поэтому полы/ковры проецируются
+  тем же `to()`, что и мебель, а грани с площадью < 2 px² отбрасываются. Не отдавайте
+  resvg «сырые» миллиметровые координаты — сначала масштаб и сдвиг в 1600×1000.
 - `render.mjs` требует установленный Edge/Chrome; путь можно задать `EDGE_PATH`.
 - SVG в PNG: страница получает `svg{width:100vw;height:100vh}`, иначе снимется только
   левый верхний угол.
