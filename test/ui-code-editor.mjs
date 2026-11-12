@@ -449,17 +449,56 @@ try {
   const closed = await waitFor(`!document.querySelector('#modalRoot .modal.code-modal')`, 6000);
   closed ? ok('чистое окно закрывается сразу') : fail('закрытие чистого окна', 'окно осталось');
 
-  /* 7. Панель дизайна: лист открывается, но «Править» в просмотре нет.
-        Сам design.json из списка файлов — тоже только для просмотра. */
+  /* 7. Панель дизайна: каждый готовый лист открывается своим просмотром
+        (PNG, SVG-лист или 3D-сцена), но «Править» в просмотре нет. */
   if (design) {
-    await evaluate(`document.querySelector('.design-card').click()`);
-    const previewOpen = await waitFor(`!!document.querySelector('#modalRoot .modal.file-preview-modal')`, 8000);
-    const hasEdit = await evaluate(`[...document.querySelectorAll('#modalRoot .modal-foot .btn')].some((b) => b.textContent.trim() === 'Править')`);
-    previewOpen && !hasEdit
-      ? ok('лист из панели дизайна открывается без кнопки «Править»')
-      : fail('просмотр листа', JSON.stringify({ previewOpen, hasEdit }));
-    await clickByText('#modalRoot .modal-foot .btn', 'Закрыть');
-    await waitFor(`!document.querySelector('#modalRoot .modal.file-preview-modal')`, 6000);
+    const cards = await evaluate(`[...document.querySelectorAll('.design-card')].map((card) => ({
+      key: card.dataset.key,
+      title: (card.querySelector('.design-name') || {}).textContent || '',
+      missing: card.classList.contains('is-missing'),
+    }))`);
+    const readyCards = cards.filter((card) => !card.missing);
+    const failed = [];
+    for (const card of readyCards) {
+      const clicked = await evaluate(`(() => {
+        const node = document.querySelector('.design-card[data-key=${JSON.stringify(card.key)}]');
+        if (!node) return false;
+        node.click();
+        return true;
+      })()`);
+      const previewOpen = clicked && (await waitFor(`!!document.querySelector('#modalRoot .modal.file-preview-modal')`, 8000));
+      let contentOk = false;
+      if (previewOpen && card.key === 'scene') {
+        contentOk = await waitFor(`(() => {
+          const frame = document.querySelector('#modalRoot .preview-frame');
+          return Boolean(frame) && frame.classList.contains('is-ready');
+        })()`, 15000);
+        contentOk =
+          contentOk &&
+          (await evaluate(`fetch(document.querySelector('#modalRoot .preview-frame').src)
+            .then((r) => r.text())
+            .then((text) => /three\\.global|__design/.test(text))
+            .catch(() => false)`));
+      } else if (previewOpen) {
+        contentOk = await waitFor(`(() => {
+          const img = document.querySelector('#modalRoot .sheet-img, #modalRoot .preview-img');
+          return Boolean(img) && img.complete && img.naturalWidth > 0;
+        })()`, 15000);
+      }
+      const hasEdit = previewOpen
+        ? await evaluate(`[...document.querySelectorAll('#modalRoot .modal-foot .btn')].some((b) => b.textContent.trim() === 'Править')`)
+        : false;
+      if (!previewOpen || !contentOk || hasEdit) {
+        failed.push(`${card.title}: ${JSON.stringify({ previewOpen, contentOk, hasEdit })}`);
+      }
+      if (previewOpen) {
+        await clickByText('#modalRoot .modal-foot .btn', 'Закрыть');
+        await waitFor(`!document.querySelector('#modalRoot .modal.file-preview-modal')`, 6000);
+      }
+    }
+    failed.length === 0 && readyCards.length > 0
+      ? ok('каждый лист дизайна открывается без кнопки «Править»', `${readyCards.length} листов`)
+      : fail('просмотр листов дизайна', failed.join('; ') || 'нет готовых листов');
 
     const specPreview = await openPreviewOf('design.json', false);
     const specEdit = await evaluate(`[...document.querySelectorAll('#modalRoot .modal-foot .btn')].some((b) => b.textContent.trim() === 'Править')`);

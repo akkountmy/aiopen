@@ -11,12 +11,16 @@
  * Отключить принудительно: DSHOW_DEEPSEEK_SEARCH=0.
  */
 
+import { getDeepSeekKey } from './keys.mjs';
+
 const BASE = String(process.env.DSHOW_DEEPSEEK_BASE || 'https://api.deepseek.com').replace(/\/+$/, '');
-const KEY = String(process.env.DSHOW_DEEPSEEK_KEY || process.env.DEEPSEEK_API_KEY || '').trim();
 const TIMEOUT_MS = Math.max(5000, Number(process.env.DSHOW_DEEPSEEK_TIMEOUT_MS) || 25000);
 
 export function deepseekEnabled() {
-  return Boolean(KEY) && process.env.DSHOW_DEEPSEEK_SEARCH !== '0';
+  /* Ключ читаем при каждом вызове: в облаке он приходит из env, локально —
+   * из закрытого хранилища DSH. Раньше модуль запоминал только env и молча
+   * выключался в чекауте, где ключ лежит в ~/.dsh/.credentials.yaml. */
+  return Boolean(getDeepSeekKey()) && process.env.DSHOW_DEEPSEEK_SEARCH !== '0';
 }
 
 function errorText(raw) {
@@ -29,7 +33,8 @@ function errorText(raw) {
 }
 
 async function call(path, payload, { timeoutMs = TIMEOUT_MS, signal } = {}) {
-  if (!deepseekEnabled()) throw new Error('DeepSeek Search выключен');
+  const key = getDeepSeekKey();
+  if (!key || process.env.DSHOW_DEEPSEEK_SEARCH === '0') throw new Error('DeepSeek Search выключен');
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   const onAbort = () => controller.abort();
@@ -41,7 +46,7 @@ async function call(path, payload, { timeoutMs = TIMEOUT_MS, signal } = {}) {
     const response = await fetch(BASE + path, {
       method: 'POST',
       headers: {
-        authorization: `Bearer ${KEY}`,
+        authorization: `Bearer ${key}`,
         'content-type': 'application/json',
         accept: 'application/json',
         'user-agent': 'dshow-deepsearch/1.0',

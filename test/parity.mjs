@@ -48,6 +48,18 @@ test('навыки: тело отдаётся, неизвестный id объ�
   assert.match(missing.text, /office-docx/);
 });
 
+test('навыки: файл рядом с навыком открывается тем же инструментом', async () => {
+  /* Шаблоны и примеры лежат в папке навыка, а не в рабочей папке человека:
+     обычным чтением проекта их не достать, поэтому их отдаёт use_skill. */
+  const template = await executeTool('use_skill', { id: 'jobs-to-be-done', file: 'template.md' }, ctx);
+  assert.match(template.text, /Jobs-to-be-Done/);
+  assert.equal(template.meta.file, 'template.md');
+  const body = await executeTool('use_skill', { id: 'jobs-to-be-done' }, ctx);
+  assert.ok(Array.isArray(body.meta.files) && body.meta.files.includes('template.md'), 'тело навыка сообщает, какие файлы лежат рядом');
+  const escaped = await executeTool('use_skill', { id: 'jobs-to-be-done', file: '../../src/skills.mjs' }, ctx);
+  assert.match(escaped.text, /только из папки навыка/);
+});
+
 test('навыки: каталог в промпте короткий и перечисляет навыки', () => {
   const text = skillsPromptText();
   assert.match(text, /office-docx/);

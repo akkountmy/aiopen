@@ -21,6 +21,22 @@ export const DASHBOARD_FILES_DIR = path.join(DATA_DIR, 'dashboard-files');
  *  принадлежит человеку, а не папке, и не должно пропадать при удалении
  *  проекта. Доступ к файлу — только у автора и у администратора. */
 export const SUPPORT_DIR = path.join(DATA_DIR, 'support');
+/** Раздел «Телеграм»: каналы, посты (JSONL) и дайджесты. Живёт отдельно от
+ *  индекса: лента растёт неограниченно, а index.json пишется целиком. */
+export const TELEGRAM_DIR = path.join(DATA_DIR, 'telegram');
+/** Реестры задания из харнесса (dsh-task-brief): один json на задание плюс
+ *  человеческая копия .md. Отдельная папка — потому что это не файлы проектов
+ *  и не переписка: реестр переживает и смену проекта, и удаление диалога. */
+export const TASK_BRIEF_DIR = path.join(DATA_DIR, 'task-briefs');
+/** Токен, которым харнесс присылает реестр (POST /api/tasks/briefs). Без него
+ *  приём реестров закрыт: иначе любой желающий писал бы задания на доску. */
+export const TASK_BRIEF_TOKEN = String(process.env.DSHOW_TASKS_TOKEN || '').trim();
+/** Второй транспорт «Телеграма»: публичный JSON канала с моста TelegramRSS
+ *  (https://tg.i-c-a.su). Нужен там, где контейнер не пускает t.me напрямую.
+ *  Пустое значение в DSHOW_TG_BRIDGE отключает мост, оставляя только t.me. */
+export const TELEGRAM_BRIDGE = String(process.env.DSHOW_TG_BRIDGE ?? 'https://tg.i-c-a.su')
+  .trim()
+  .replace(/\/+$/, '');
 export const LOGS_DIR = path.join(DATA_DIR, 'logs');
 export const INDEX_FILE = path.join(DATA_DIR, 'index.json');
 
@@ -195,9 +211,16 @@ export const TASK_STATE = {
  *  занимает 5 462 знака, потому что без дизайн-системы, глубины содержания,
  *  технических критериев и самопроверки слабый лендинг и получается. Замеры:
  *  лендинг 17 150 знаков, «лендинг и финмодель» (два блока) — 18 071,
- *  финансы одни — 12 609. Тест держит и предел, и свободный остаток. */
+ *  финансы одни — 12 609. Тест держит и предел, и свободный остаток.
+ *  Лимит 21 000 (11.11.2026) — под каталог навыков: 26 PM-навыков добавили
+ *  4 564 знака (каталог 10 889 → 15 453), и самый тяжёлый случай — лендинг —
+ *  вырос до 19 467 при прежнем пределе 19 500, то есть запас под новые правила
+ *  кончился (33 знака вместо 1 200). Замеры после подъёма: лендинг 19 467,
+ *  финансы 16 087, обычный вопрос 14 054; свободно 1 533. Дальше растить
+ *  каталог молча нельзя: следующий шаг — сжимать описания навыков, а не
+ *  поднимать предел. */
 export const PROMPT_BUDGET = {
-  limitChars: 19500,
+  limitChars: 21000,
   reserveChars: 1200,
 };
 
@@ -562,7 +585,7 @@ export const ASR = {
 };
 
 export function ensureDirs() {
-  for (const dir of [DATA_DIR, WORKSPACES_DIR, CHATS_DIR, UPLOADS_DIR, LOGS_DIR, DASHBOARD_FILES_DIR, SUPPORT_DIR]) {
+  for (const dir of [DATA_DIR, WORKSPACES_DIR, CHATS_DIR, UPLOADS_DIR, LOGS_DIR, DASHBOARD_FILES_DIR, SUPPORT_DIR, TELEGRAM_DIR, TASK_BRIEF_DIR]) {
     fs.mkdirSync(dir, { recursive: true });
   }
 }

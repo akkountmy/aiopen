@@ -111,9 +111,12 @@ export function startHardWatchdog({
   try {
     shared = new SharedArrayBuffer(4);
     const beat = new Int32Array(shared);
-    /* Метка — секунды эпохи в общей памяти: Atomics работает только с целыми
-       массивами, поэтому миллисекунды здесь не нужны, хватает секунды. */
-    Atomics.store(beat, 0, Math.floor(now() / 1000));
+    /* Метка — не время, а счётчик ударов: сравнивать секунды нельзя. Сторож
+       проверяет раз в checkMs, главный поток бьёт раз в checkMs — они
+       расходятся на доли секунды, и округление до целой секунды показывало
+       «молчит 1 с» у совершенно живого процесса. Счётчик меняется только
+       настоящим ударом, поэтому расхождение в долях секунды ему не мешает. */
+    Atomics.store(beat, 0, 0);
     /* Код сторожа — строка, а не отдельный файл: он должен ехать вместе с
        модулем и не зависеть от того, что попало в образ. Строку в stderr поток
        пишет сам: главный поток в этот момент занят и ничего не обработает. */
@@ -122,10 +125,14 @@ export function startHardWatchdog({
       const beat = new Int32Array(workerData.shared);
       const limit = workerData.stallSec;
       let fired = false;
+      let seen = Atomics.load(beat, 0);
+      let quiet = 0;
       setInterval(() => {
         if (fired) return;
-        const last = Atomics.load(beat, 0);
-        const silent = Math.floor(Date.now() / 1000) - last;
+        const current = Atomics.load(beat, 0);
+        if (current !== seen) { seen = current; quiet = 0; return; }
+        quiet += 1;
+        const silent = Math.round((quiet * workerData.checkMs) / 1000);
         if (silent < limit) return;
         fired = true;
         const line = '[watchdog] главный поток молчит ' + silent + ' с — сервис не отвечает, нужен внешний перезапуск\\n';
@@ -158,8 +165,10 @@ export function startHardWatchdog({
       /* Поток сторожа упал — остаётся мягкий сторож в главном потоке. */
     });
     worker.unref?.();
+    let ticks = 0;
     timer = setInterval(() => {
-      Atomics.store(beat, 0, Math.floor(now() / 1000));
+      ticks += 1;
+      Atomics.store(beat, 0, ticks);
     }, checkMs);
     timer.unref?.();
   } catch (error) {

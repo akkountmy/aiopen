@@ -3,7 +3,9 @@
 // «www.», имена файлов проекта, ссылки вида [текст](page.html), и то, что код
 // и обычные слова ссылками не становятся.
 // Часть 2 (браузер) проверяет, что клик по файлу в сообщении открывает окно
-// просмотра сервиса, а внешняя ссылка идёт в новую вкладку.
+// просмотра сервиса, клик по записи — полосу прослушивания внизу панели
+// «Файлы проекта» (а не отдельное окно со звуком), а внешняя ссылка идёт в
+// новую вкладку.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -16,6 +18,8 @@ const PASS = process.env.DSHOW_PASS || '';
 const STAMP = Date.now().toString().slice(-6);
 const PROJECT = `Проверка ссылок в ответах ${STAMP}`;
 const HTML_NAME = `page-${STAMP}.html`;
+const WAV_NAME = `голос-${STAMP}.wav`;
+const MP3_NAME = `озвучка-${STAMP}.mp3`;
 const MARK = `страница-${STAMP}`;
 
 const results = [];
@@ -29,6 +33,28 @@ const fail = (name, detail) => {
 };
 const check = (name, condition, detail) => (condition ? ok(name, typeof detail === 'string' ? detail : '') : fail(name, detail));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/* Тишина в WAV: проверяем полосу прослушивания, а не звук, поэтому запись
+   собирается здесь же и проверке не нужен файл на диске. */
+function buildWav(seconds = 1, rate = 8000) {
+  const dataSize = Math.round(seconds * rate) * 2;
+  const buf = Buffer.alloc(44 + dataSize);
+  buf.write('RIFF', 0);
+  buf.writeUInt32LE(36 + dataSize, 4);
+  buf.write('WAVE', 8);
+  buf.write('fmt ', 12);
+  buf.writeUInt32LE(16, 16);
+  buf.writeUInt16LE(1, 20);
+  buf.writeUInt16LE(1, 22);
+  buf.writeUInt32LE(rate, 24);
+  buf.writeUInt32LE(rate * 2, 28);
+  buf.writeUInt16LE(2, 32);
+  buf.writeUInt16LE(16, 34);
+  buf.write('data', 36);
+  buf.writeUInt32LE(dataSize, 40);
+  return buf;
+}
+
 
 /* ------------------------- разбор markdown ------------------------- */
 
@@ -243,12 +269,21 @@ try {
 
   const uploaded = await evaluate(`(async () => {
     const body = new TextEncoder().encode(${JSON.stringify(`<!doctype html><html lang="ru"><head><meta charset="utf-8"><title>Страница</title></head><body><h1>Страница проекта</h1><p>${MARK}</p></body></html>`)});
-    const res = await fetch('/api/projects/' + ${JSON.stringify(projectId)} + '/upload?path=' + encodeURIComponent(${JSON.stringify(HTML_NAME)}), {
+    const page = await fetch('/api/projects/' + ${JSON.stringify(projectId)} + '/upload?path=' + encodeURIComponent(${JSON.stringify(HTML_NAME)}), {
       method: 'POST', headers: { 'x-filename': encodeURIComponent(${JSON.stringify(HTML_NAME)}) }, body,
     });
-    return res.status;
+    /* Запись кладём рядом со страницей: на ней проверяем, что звук из ответа
+       поднимает полосу прослушивания, а не открывает отдельное окно. */
+    const raw = atob(${JSON.stringify(buildWav(1).toString('base64'))});
+    const wav = new Uint8Array(raw.length);
+    for (let i = 0; i < raw.length; i++) wav[i] = raw.charCodeAt(i);
+    const sound = await fetch('/api/projects/' + ${JSON.stringify(projectId)} + '/upload?path=' + encodeURIComponent(${JSON.stringify(WAV_NAME)}), {
+      method: 'POST', headers: { 'x-filename': encodeURIComponent(${JSON.stringify(WAV_NAME)}) }, body: wav,
+    });
+    return { html: page.status, wav: sound.status };
   })()`);
-  check('страница загружена в проект', uploaded === 200, String(uploaded));
+  check('страница загружена в проект', uploaded.html === 200, String(uploaded.html));
+  check('запись загружена в проект', uploaded.wav === 200, String(uploaded.wav));
 
   await goto(BASE + '/');
   await waitFor(`!!document.getElementById('app') && !document.getElementById('app').classList.contains('hidden')`, 20000);
@@ -322,7 +357,82 @@ try {
   const openedSecond = await waitFor(`!!document.querySelector('.file-preview-modal')`, 15000);
   check('markdown-ссылка [страница](файл) открывает просмотр', openedSecond);
 
+  await evaluate(`document.querySelector('.file-preview-modal .modal-close')?.click()`);
+  await waitFor(`!document.querySelector('.file-preview-modal')`, 8000);
+
+  /* Имя записи с расширением .mp3 ведёт в ту же полосу. Файла с таким именем в
+     проекте нет, поэтому смотрим сразу после нажатия: полоса уже поднята, звук
+     ищется по адресу этого файла, а окно просмотра не открылось. */
+  const mp3Probe = await evaluate(`(() => {
+    const probe = document.createElement('div');
+    probe.className = 'md';
+    probe.id = 'chatSoundProbe';
+    probe.innerHTML = ${JSON.stringify(render(`Готова озвучка: ${MP3_NAME}.`))};
+    document.getElementById('thread').appendChild(probe);
+    const link = probe.querySelector('a[data-file-path]');
+    const hint = link ? link.getAttribute('title') : '';
+    if (link) link.click();
+    const bar = document.getElementById('filesAudio');
+    const audio = document.querySelector('.audio-dock-audio');
+    return {
+      hint,
+      open: !!bar && !bar.classList.contains('hidden'),
+      src: audio ? new URL(audio.src, location.href).searchParams.get('path') || '' : '',
+      modal: !!document.querySelector('.file-preview-modal'),
+    };
+  })()`);
+  check(
+    'ссылка на mp3 поднимает полосу прослушивания, а не окно просмотра',
+    mp3Probe && mp3Probe.hint.includes('Слушать в полосе') && mp3Probe.open && !mp3Probe.modal && mp3Probe.src === MP3_NAME,
+    mp3Probe,
+  );
+
+  /* Настоящая запись: полоса остаётся на экране, её строка в панели
+     подсвечена, а окно просмотра так и не открылось. */
+  const wavClicked = await evaluate(`(() => {
+    const probe = document.getElementById('chatSoundProbe');
+    const block = document.createElement('div');
+    block.className = 'md';
+    block.innerHTML = ${JSON.stringify(render(`Озвучка готова: ${WAV_NAME}.`))};
+    probe.after(block);
+    const link = block.querySelector('a[data-file-path]');
+    if (link) link.click();
+    return !!link;
+  })()`);
+  const wavBar = await waitFor(
+    `(() => {
+      const bar = document.getElementById('filesAudio');
+      return !!bar && !bar.classList.contains('hidden') && !!bar.querySelector('.audio-bar');
+    })()`,
+    8000,
+  );
+  await sleep(600);
+  const wavState = await evaluate(`(() => {
+    const bar = document.getElementById('filesAudio');
+    const audio = document.querySelector('.audio-dock-audio');
+    return {
+      open: !!bar && !bar.classList.contains('hidden'),
+      title: (document.getElementById('filesAudioTitle') || {}).textContent || '',
+      src: audio ? new URL(audio.src, location.href).searchParams.get('path') || '' : '',
+      listening: [...document.querySelectorAll('#filesList .file-row.is-listening')].map((row) => row.dataset.audio),
+      modal: !!document.querySelector('.file-preview-modal'),
+    };
+  })()`);
+  check(
+    'клик по записи включает её в полосе внизу панели файлов',
+    wavClicked &&
+      wavBar &&
+      wavState.open &&
+      !wavState.modal &&
+      wavState.src === WAV_NAME &&
+      wavState.title === WAV_NAME.replace(/\.wav$/i, '') &&
+      wavState.listening.includes(WAV_NAME),
+    wavState,
+  );
+
+  await evaluate(`document.querySelector('#chatSoundProbe')?.remove()`);
   await evaluate(`document.querySelector('#chatLinkProbe')?.remove()`);
+
 } catch (error) {
   fail('браузерная часть', error.message);
 } finally {

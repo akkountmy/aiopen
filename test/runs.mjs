@@ -287,9 +287,11 @@ try {
   /* 1. Обрыв соединения посреди ответа — задача продолжается. */
   const first = await startRun(laptop, 'Расскажи про Делимобиль');
   check(Boolean(first.runId), 'сервис вернул идентификатор задачи');
-  const firstRead = await readRunStream(first.response, { abortAfterType: 'delta' });
+  /* Текст ответа уходит в ленту одним куском в самом конце (см. runTurn), так
+     что обрыв проверяем сразу после начала работы, а не по первому куску. */
+  const firstRead = await readRunStream(first.response, { abortAfterType: 'start' });
   first.controller.abort();
-  check(firstRead.events.some((e) => e.type === 'delta'), 'вкладка получила первые куски ответа');
+  check(firstRead.events.some((e) => e.type === 'start'), 'вкладка получила начало работы');
 
   await sleep(250);
   const liveAfterDrop = (await api('/api/runs', { cookie: laptop })).data.runs;
@@ -314,7 +316,9 @@ try {
   check(attach.status === 200, 'подключение к идущей задаче принято', `HTTP ${attach.status}`);
   const attached = await readRunStream(attach);
   const snapshot = attached.events.find((e) => e.type === 'snapshot');
-  check(Boolean(snapshot?.run?.text), 'снимок отдал уже готовый текст', `${snapshot?.run?.text?.length || 0} символов`);
+  /* Пока работа идёт, текста в снимке ещё нет: он приходит одним куском в конце.
+     Проверяем, что снимок описывает задачу, а догон сходится с сохранённым. */
+  check(Boolean(snapshot?.run), 'снимок отдал состояние идущей задачи', `текст ${snapshot?.run?.text?.length || 0} символов`);
   const streamed = attached.events.filter((e) => e.type === 'delta').map((e) => e.text).join('');
   const total = (snapshot?.run?.text || '') + streamed;
   check(
@@ -340,7 +344,12 @@ try {
   const phoneAttach = await fetch(`${BASE}/api/runs/${third.runId}/stream`, { headers: { cookie: phone } });
   const phoneRead = await readRunStream(phoneAttach);
   const phoneSnapshot = phoneRead.events.find((e) => e.type === 'snapshot');
-  check(Boolean(phoneSnapshot?.run?.text), 'второе устройство получило тот же ответ');
+  /* У второго устройства текст складывается из снимка и догона: ответ приходит
+     тем же куском, что и в первой вкладке. */
+  const phoneTotal =
+    (phoneSnapshot?.run?.text || '') +
+    phoneRead.events.filter((e) => e.type === 'delta').map((e) => e.text).join('');
+  check(phoneTotal.includes('Делимобиль'), 'второе устройство получило тот же ответ', `${phoneTotal.length} символов`);
   third.controller.abort();
   await waitFinished(laptop);
 

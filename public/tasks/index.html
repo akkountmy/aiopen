@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#151517" />
+    <title>Реестры задания — DSH Open</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <!-- Отдельная страница со своим набором файлов: она не участвует в сборке
+         app.js/styles.css, поэтому обновляется независимо от них. -->
+    <link rel="stylesheet" href="/tasks/tasks.css?v=__ASSET_VERSION__" />
+    <script src="/tasks/app.js?v=__ASSET_VERSION__" defer></script>
+  </head>
+  <body>
+    <header class="tb-head">
+      <a class="tb-back" href="/">← DSH Open</a>
+      <h1 class="tb-title">Реестры задания</h1>
+      <span class="tb-sub">пункты, переменные и вердикт «всё ли учтено»</span>
+    </header>
+
+    <main class="tb-layout">
+      <nav class="tb-list" id="list" aria-label="Задания">
+        <div class="tb-card-skeleton"></div>
+        <div class="tb-card-skeleton"></div>
+      </nav>
+      <section class="tb-detail" id="detail">
+        <p class="tb-text">Выберите задание слева.</p>
+      </section>
+    </main>
+  </body>
+</html>

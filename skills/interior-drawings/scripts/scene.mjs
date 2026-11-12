@@ -180,7 +180,7 @@ export function sceneHtml(spec) {
     fail('WebGL недоступен в этом браузере');
     return;
   }
-  renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 2));
+  renderer.setPixelRatio(SHOT ? 1 : Math.min(devicePixelRatio || 1, 2));
   renderer.setSize(innerWidth, innerHeight);
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -1431,6 +1431,13 @@ export function sceneHtml(spec) {
       document.body.dataset.ready = '1';
       window.__designReady = true;
       document.title = 'DESIGN_OK ' + (SPEC.project || '');
+      /* Кадр для PNG уже нарисован. В режиме снимка останавливаем цикл:
+         иначе Chromium продолжает считать кадры, пока снимает 1,6 Мп, и
+         снимок на слабом CPU растягивается на десятки секунд. */
+      if (SHOT) {
+        renderer.shadowMap.autoUpdate = false;
+        renderer.setAnimationLoop(null);
+      }
     }
   });
   setTimeout(function () {

@@ -1,12 +1,15 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { CAPACITY, CONTEXT, ESCALATION, MODEL, REVIEW, SPLIT, costUsd } from './config.mjs';
 import { buildArtifacts, describeDesign, designView, specFromText, writeSpec } from './design.mjs';
 import { documentExcerpt, documentKind } from './doccheck.mjs';
+import { normalizeHistory, repairHistoryInPlace } from './history.mjs';
 import { getDeepSeekKey } from './keys.mjs';
 import { chooseProfile, chooseStepRoute, describeStepRoute, isMechanicalTool } from './model.mjs';
 import { createNarrationGate } from './narration.mjs';
 import { createReasoningGate, looksRussian } from './reasoning.mjs';
 import { summaryPrompt, systemPrompt, titlePrompt } from './prompt.mjs';
-import { describeReview, reviewAnswer } from './review.mjs';
+import { describeReview, needsReview, reviewAnswer } from './review.mjs';
 import { skillsPromptText } from './skills.mjs';
 import { continuePrompt, taskSummaryLine, updateTaskState } from './taskstate.mjs';
 import { applyReference, availableToolDefs, TOOL_LABELS, executeTool, listTree, toolSummary } from './tools.mjs';
@@ -66,6 +69,20 @@ const MISSING_FILES_ANSWER =
   'поэтому папка «Дизайн-проект» пустая. Повторите задачу — при повторе сборка запускается заново. ' +
   'Если файлы снова не появятся, это сбой модели, а не вашей задачи: напишите в «Поддержку».';
 
+/* Модель остановилась на плане или обещании. Один адресный шаг дешевле, чем
+   человек, который ждёт у пустой папки и потом пишет «продолжи». */
+const DELIVERABLE_REPAIR_PROMPT =
+  'Ты остановился до результата: в ответе обещано продолжение или запрошен файл, но работа не доведена. ' +
+  'Не повторяй план и не пиши «сейчас сделаю». Продолжай выполнение прямо сейчас: ' +
+  'создай запрошенный файл профильным инструментом (create_word, create_excel, create_pptx, create_pdf, ' +
+  'narrate_document, write_file), проверь, что он существует, и только потом отвечай итогом. ' +
+  'Если файл не нужен, а нужен текст — выдай весь результат здесь, а не обещание. ' +
+  'В конце назови точные имена готовых файлов.';
+
+const MISSING_DELIVERABLE_NOTE =
+  'Работа не доведена до готового результата: файл не создан или ответ оборван. ' +
+  'Нажмите «Продолжить» — я подхвачу задачу с этого места и не буду начинать заново.';
+
 /**
  * Собрать дизайн-проект без модели, когда она дважды ответила текстом.
  * Спек строится из самой просьбы, листы — тем же генератором, что и у
@@ -107,8 +124,44 @@ export async function rescueDesign({ workspace, userText, attachments = [] } = {
    «сделано» и оставалась с пустой папкой. */
 const FILE_WRITING_TOOLS = new Set([
   'write_file', 'append_file', 'edit_file', 'create_excel', 'create_word',
-  'create_pptx', 'create_pdf', 'create_drawing', 'build_design', 'extract_archive',
+  'create_pptx', 'create_deck', 'create_pdf', 'create_drawing', 'build_design', 'extract_archive',
+  'narrate_document',
 ]);
+
+/* Что человек просил сделать файлом. Проверяем не «был ли хоть один файл», а
+   именно запрошенный формат: текст в чате не заменяет Word, а .txt — PDF. */
+const FORMAT_RULES = [
+  { id: 'word', format: /\b(?:word|docx?)\b|ворд/iu, tools: ['create_word'], ext: /\.docx?$/i },
+  { id: 'excel', format: /\b(?:excel|xlsx?)\b|эксель/iu, tools: ['create_excel'], ext: /\.xlsx?$/i },
+  /* Презентация бывает двух пород: редактируемый .pptx и дизайнерская дека в PDF —\n     поэтому слайд-дека тоже закрывает просьбу «сделай презентацию». */
+  { id: 'pptx', format: /\b(?:pptx?|powerpoint)\b|презентац|слайд/iu, tools: ['create_pptx', 'create_deck'], ext: /\.(?:pptx?|pdf)$/i },
+  { id: 'pdf', format: /\bpdf\b|пдф/iu, tools: ['create_pdf', 'create_deck'], ext: /\.(?:pdf)$/i },
+  { id: 'audio', format: /\bmp3\b|аудио|аудиокниг|озвуч|начита/iu, tools: ['narrate_document'], ext: /\.(?:mp3|wav|m4a|ogg)$/i },
+];
+const ACTION_VERB_SRC =
+  'создай|создать|создайте|сделай|сделать|сделайте|собери|собрать|соберите|подготовь|подготовить|подготовьте|оформи|оформить|оформите|сохрани|сохранить|сохраните|выгрузи|выгрузить|выгрузите|сформируй|сформировать|сформируйте|запиши|записать|запишите|пришли|прислать|пришлите|отправь|отправить|отправьте|сгенерируй|сгенерировать|сгенерируйте|составь|составить|составьте|напиши|написать|напишите';
+const MAKE_VERB = new RegExp(`(?:${ACTION_VERB_SRC})`, 'iu');
+/* «Книга на 60–65 минут» — это не только текст: в этом продукте книги слушают.
+   Раньше такой запрос не называл ни Word, ни MP3, поэтому агент заканчивал
+   docx-ом и молчал про озвучку. Теперь книга с хронометражем требует оба файла. */
+const BOOK_MINUTES =
+  /(?:книг|аудиокниг)[^.!?\n]{0,100}\d{1,3}\s*(?:[-–—]\s*\d{1,3})?\s*мин/iu;
+/* Markdown — служебный черновик, а не результат. Удаляем только парный .md,
+   рядом с которым уже есть docx/pdf/mp3, и только если его не просили явно. */
+const MARKDOWN_ASK = /(?:\bmd\b|markdown|маркдаун|\.md\b)/iu;
+const SUMMARY_INTENT = new RegExp(
+  `(?:${ACTION_VERB_SRC}|нужен|нужна|нужно|хочу|хотел|требуется)[^.!?\\n]{0,100}(?:выжимк|конспект|отчёт|отчет|смет|таблиц|резюме)`,
+  'iu',
+);
+const FILE_ACTION_ASK =
+  /(?:создай|сделай|собери|подготовь|сохрани|выгрузи|оформи|сформируй|запиши|пришли)[^.!?\n]{0,120}(?:файл|файлом)|(?:в\s+файл|файлом|дай\s+скачать|можно\s+скачать)/iu;
+const SUMMARY_ASK = SUMMARY_INTENT;
+/* Обещание продолжения в конце ответа — самый частый вид «зависания»:
+   модель рассказала план и остановилась, а работа осталась в папке. */
+const PROMISE =
+  /(?:сейчас|сразу|далее|затем|теперь|дальше)\s+(?:же\s+)?(?:соберу|сделаю|подготовлю|создам|сформирую|сгенерирую|озвучу|проверю|приступлю|перейду|начну|запущу|доделаю|завершу|оформлю|напишу|посчитаю|изучу|разберу)|(?:приступаю|приступаем|начинаю|продолжаю)\s+(?:к|с|работ|сборк|подготовк|озвучк)/iu;
+const HONEST_REFUSAL = /(?:не могу|не получится|не удалось|нет возможности|не поддержива|не смог)/iu;
+const OUTPUT_FILE = /\.(?:docx?|xlsx?|pptx?|pdf|mp3|wav|m4a|ogg|zip|txt|md|html|csv|json|svg|png|jpe?g)$/i;
 
 /** Нужен ли один корректирующий шаг: просили чертёж, а результата нет. */
 export function needsDrawingRepair({ userText = '', workspace = '', toolsUsed = [], answer = '', tried = false } = {}) {
@@ -132,6 +185,144 @@ export function needsDrawingRepair({ userText = '', workspace = '', toolsUsed = 
   return true;
 }
 
+/** Формат упомянут как задача, а не как «прочитай готовый Word». */
+function formatRequested(value, rule) {
+  const match = rule.format.exec(value);
+  if (!match) return false;
+  /* «Озвучь…» — уже глагол создания, отдельный формат можно не называть. */
+  if (rule.id === 'audio' && /(?:озвуч|начита)/iu.test(value)) return true;
+  const boundary = Math.max(
+    value.lastIndexOf('!', match.index - 1),
+    value.lastIndexOf('?', match.index - 1),
+    value.lastIndexOf('\n', match.index - 1),
+  );
+  const before = value.slice(boundary + 1, match.index);
+  return MAKE_VERB.test(before);
+}
+
+/** Какие форматы человек назвал явно. Пустой список — формат не задан. */
+export function requestedFormats(text) {
+  const value = String(text || '');
+  const rules = FORMAT_RULES.filter((rule) => formatRequested(value, rule));
+  if (!rules.length && BOOK_MINUTES.test(value)) {
+    /* Формат не назван, но есть книга и хронометраж: в этом продукте такую
+       книгу и слушают, поэтому нужны оба файла. Явно названный Word/PDF
+       сильнее: «книга в Word на 40 минут» — это только документ. */
+    for (const id of ['word', 'audio']) rules.push(FORMAT_RULES.find((rule) => rule.id === id));
+  }
+  if (rules.length) return rules;
+  return FILE_ACTION_ASK.test(value)
+    ? [{ id: 'file', tools: [...FILE_WRITING_TOOLS], ext: OUTPUT_FILE }]
+    : [];
+}
+
+/**
+ * Убирает markdown-черновики, которые агент оставил рядом с готовым файлом.
+ * Человеку нужен docx/pdf/mp3, а не два одинаковых по смыслу файла. Чужой
+ * markdown не трогаем: только созданный в этом ходе и только парный к
+ * docx/pdf/mp3. Явную просьбу «сделай .md» уважаем.
+ */
+export function cleanupUnrequestedMarkdown({ workspace = '', userText = '', startedMs = 0 } = {}) {
+  if (!workspace || !startedMs || MARKDOWN_ASK.test(String(userText || ''))) return [];
+  const removed = [];
+  let files = [];
+  try {
+    files = listTree(workspace, '.', { depth: 3, maxEntries: 600 }).filter(
+      (item) => !item.dir && /\.md$/i.test(item.path),
+    );
+  } catch {
+    return removed;
+  }
+  for (const item of files) {
+    const modified = Date.parse(item.modified || '');
+    if (!Number.isFinite(modified) || modified < startedMs - 2000) continue;
+    const full = path.join(workspace, item.path);
+    const base = full.replace(/\.md$/i, '');
+    if (!['.docx', '.pdf', '.mp3', '.m4a', '.wav'].some((ext) => fs.existsSync(base + ext))) continue;
+    try {
+      fs.rmSync(full);
+      removed.push(item.path);
+    } catch {
+      /* файл уже удалён или занят — результат важнее уборки */
+    }
+  }
+  return removed;
+}
+
+/** Файлы, появившиеся в проекте за текущий ход: страховка, если инструмент
+ *  писал через run_js и не вернул path. */
+function recentOutputs(workspace, startedMs = 0) {
+  if (!workspace) return [];
+  const since = Number(startedMs) || 0;
+  try {
+    return listTree(workspace, '.', { depth: 3, maxEntries: 600 })
+      .filter((item) => !item.dir && OUTPUT_FILE.test(item.path))
+      .filter((item) => {
+        if (!since) return true;
+        const modified = Date.parse(item.modified || '');
+        return Number.isFinite(modified) && modified >= since - 2000;
+      })
+      .map((item) => item.path);
+  } catch {
+    return [];
+  }
+}
+
+function toolSucceeded(toolsUsed, names) {
+  return (Array.isArray(toolsUsed) ? toolsUsed : []).some(
+    (tool) => tool?.status !== 'error' && names.includes(String(tool.name || '')),
+  );
+}
+
+function formatSatisfied(rule, toolsUsed, workspace, startedMs) {
+  if (toolSucceeded(toolsUsed, rule.tools)) return true;
+  const outputs = recentOutputs(workspace, startedMs);
+  if (rule.id === 'file') return outputs.length > 0;
+  return outputs.some((file) => rule.ext.test(file));
+}
+
+/**
+ * Работа закончилась текстом, хотя человек ждал файл или модель сама
+ * пообещала продолжить. Возвращаем true — сервис даёт ещё один шаг с явным
+ * заданием, вместо того чтобы показывать «готово» и ждать «продолжи».
+ */
+export function needsDeliverableRepair({
+  userText = '',
+  workspace = '',
+  toolsUsed = [],
+  answer = '',
+  startedMs = 0,
+  tried = false,
+} = {}) {
+  if (tried) return false;
+  const text = String(userText || '');
+  const said = String(answer || '').trim();
+  if (!text) return false;
+  const formats = requestedFormats(text);
+  const summaryAsked = SUMMARY_ASK.test(text);
+  const promised = PROMISE.test(said);
+  if (!formats.length && !summaryAsked && !promised) return false;
+  /* Честное «не могу» — не зависание, а результат: досборка его не исправит. */
+  if (HONEST_REFUSAL.test(said) && said.length < 1500) return false;
+
+  const outputs = recentOutputs(workspace, startedMs);
+  if (formats.length) {
+    return formats.some((rule) => !formatSatisfied(rule, toolsUsed, workspace, startedMs));
+  }
+  if (promised) {
+    /* Файл уже есть — «теперь можно озвучить» это не обрыв, а следующий
+       необязательный шаг. Досборку включаем только при пустом результате. */
+    if (outputs.length || toolSucceeded(toolsUsed, [...FILE_WRITING_TOOLS])) return false;
+    return said.length < 1600;
+  }
+  if (summaryAsked) {
+    /* Короткая отписка вместо выжимки/отчёта — тоже обрыв. Содержательный
+       текстовый ответ принимаем: не каждая выжимка обязана быть файлом. */
+    return !outputs.length && said.length < 700;
+  }
+  return false;
+}
+
 function friendlyError(error) {
   const status = error?.status;
   if (error?.name === 'AbortError') return 'Генерация остановлена.';
@@ -142,6 +333,16 @@ function friendlyError(error) {
   const message = String(error?.message || '');
   if (/fetch failed|ENOTFOUND|ECONNREFUSED|network|socket/i.test(message)) {
     return 'Нет связи с сервисом. Проверьте интернет и повторите.';
+  }
+  /* Запрос отвергнут по формату. Самая частая причина — разметка вызовов
+     инструментов в истории; её уже починили перед сохранением, поэтому
+     повтор сообщения проходит. Молчать об этом нельзя: раньше человек видел
+     «не удалось получить ответ» и не понимал, что делать. */
+  if (status === 400) {
+    if (/role 'tool'|tool_calls|tool_call_id/i.test(message)) {
+      return 'Запрос к модели отклонён: в истории диалога сбилась разметка вызовов инструментов. Разметку уже исправил — отправьте сообщение ещё раз, ответ придёт.';
+    }
+    return 'Запрос к модели отклонён. Если это повторяется, покажите администратору строку [agent] из журнала службы — там точная причина.';
   }
   return 'Не удалось получить ответ. Попробуйте ещё раз.';
 }
@@ -485,6 +686,7 @@ const SUBAGENT_TOOLS = [
   'create_word',
   'create_excel',
   'create_pptx',
+  'create_deck',
   'create_pdf',
   'run_js',
   'web_search',
@@ -556,7 +758,49 @@ async function runLimited(items, limit, worker) {
   return results;
 }
 
-export async function runTurn({
+/**
+ * Ответ отдаётся один раз и уже окончательным.
+ *
+ * Финальный ревью-пасс (src/review.mjs) правит текст уже после того, как он
+ * ушёл в ленту, и человек видел это как «ответ пришёл, а через пару секунд сам
+ * изменился». Поэтому текст ответа копим здесь и отдаём одним куском в самом
+ * конце — после ревью и досборок. Прогресс, подписи инструментов и рассуждения
+ * идут в поток как раньше: работа видна, а готовый ответ больше не переписывается
+ * у человека на глазах.
+ */
+export async function runTurn(options = {}) {
+  const emitRaw = typeof options.emit === 'function' ? options.emit : () => {};
+  const flush = (text) => {
+    if (!text) return;
+    try {
+      emitRaw({ type: 'delta', text });
+    } catch {
+      /* лента недоступна — текст всё равно сохранён на сервере */
+    }
+  };
+  const held = [];
+  const holdEmit = (event) => {
+    if (event?.type === 'delta') {
+      if (event.text) held.push(String(event.text));
+      return;
+    }
+    emitRaw(event);
+  };
+  let outcome;
+  try {
+    outcome = await runTurnInner({ ...options, emit: holdEmit });
+  } catch (error) {
+    /* Остановка или сбой: показываем то, что модель успела сказать. */
+    flush(held.join(''));
+    throw error;
+  }
+  /* Итог важнее накопленных кусков: в нём уже учтены правки ревью и всё, что
+     досборки добавили после потока. */
+  flush(String(outcome?.text || '') || held.join(''));
+  return outcome;
+}
+
+async function runTurnInner({
   workspace,
   chat,
   projectName,
@@ -579,6 +823,15 @@ export async function runTurn({
      стороной, remember — функция их записи. */
   facts = [],
   remember = null,
+  /* Создание проекта и диалога: функция сервера, которая заводит проект в
+     аккаунте человека и открывает в нём диалог. Есть только у основной задачи:
+     субагент работает внутри уже открытого проекта и новых не создаёт. */
+  createProjectChat = null,
+  /* Личный слой: свои блок на дашборде и тема в Top news — это тоже строки
+     аккаунта человека, а не файлы проекта. Есть только у основной задачи:
+     вложенная работа не меняет то, что человек видит на своём экране. */
+  createPersonalBlock = null,
+  createNewsTopic = null,
   /* Набор инструментов для этого хода: null — все доступные. Субагенты
      получают суженный список, чтобы не писать файлы и не зацикливаться. */
   toolFilter = null,
@@ -594,6 +847,19 @@ export async function runTurn({
   search = false,
 }) {
   const usage = { tokensIn: 0, tokensOut: 0 };
+  /* Разметку вызовов инструментов проверяем до первого запроса к модели:
+     осиротевший ответ или незакрытый вызов — это не повод показывать человеку
+     «не удалось получить ответ», а повод починить историю. Иначе диалог
+     остаётся сломанным навсегда: каждый следующий ход падает так же. */
+  if (Array.isArray(chat.history)) {
+    const healed = repairHistoryInPlace(chat.history);
+    if (healed.changed) {
+      console.warn(
+        `[history] диалог ${chat.id || '—'}: починил разметку вызовов инструментов — ` +
+          `убрал ${healed.removed}, закрыл ${healed.filled}`,
+      );
+    }
+  }
   const toolsUsed = [];
   const skillsText = skillsPromptText();
   const trimStats = createTrimStats();
@@ -633,6 +899,12 @@ export async function runTurn({
     }
   }
 
+  /* Продолжение узнаём до добавления текущей реплики: если в истории уже есть
+     ход человека, это не первый вопрос и здороваться заново нельзя. */
+  const continuing =
+    Boolean(chat.memory) ||
+    Boolean(chat.task?.goal) ||
+    (Array.isArray(chat.history) && chat.history.some((item) => item?.role === 'user'));
   const turnMessage = { role: 'user', content: buildUserContent(userText, images) };
   chat.history.push(turnMessage);
 
@@ -668,6 +940,13 @@ export async function runTurn({
   /* Досборка чертежей даётся один раз за ход: повторные шаги не должны
      превращаться в цикл «сделай ещё раз». */
   let repairTried = false;
+  /* Досборка результата (файл/выжимка) — до двух раз: первый шаг обычно
+     возвращает модель к работе, второй нужен, если она снова ушла в план. */
+  const DELIVERABLE_REPAIRS_MAX = 2;
+  let deliverableRepairs = 0;
+  let incomplete = false;
+  let incompleteNote = '';
+  const startedMs = Date.now();
   /* Что вернул предыдущий шаг: по этому решается, кто ведёт следующий. Профиль
      хода — только база; внутри хода шаги неравноценны (см. chooseStepRoute). */
   let previousStep = null;
@@ -695,6 +974,11 @@ export async function runTurn({
          задача видит, чей файл чей. */
       const folder = `.dshow/work/parts/${String(index + 1).padStart(2, '0')}-${slugify(task.name)}`;
       try {
+        /* createProjectChat, createPersonalBlock и createNewsTopic сюда
+           намеренно не передаются: проекты, свои блоки и свои темы заводит
+           только основная задача. У воркера depth > 0, и инструменты отказали бы
+           сами, но и функций у него быть не должно — право менять аккаунт
+           человека не наследуется вложенной работой. */
         const outcome = await runTurn({
           workspace,
           chat: nested,
@@ -732,7 +1016,31 @@ export async function runTurn({
     });
   }
 
-  const toolCtx = { workspace, signal, remember, projectName, userName, facts, depth, ownerId, attachments, spawnAgent: spawnSubagents };
+  /* Флаги «в этом ходу уже создан проект / добавлен блок / добавлена тема»
+     лежат в отдельных объектах, а не прямо в toolCtx: executeTool вызывает
+     ветку с копией контекста ({ ...ctx, signal }), и присваивание
+     ctx.createdProject = true терялось бы между шагами — агент создал бы второй
+     проект за тот же ход. Объекты копируются по ссылке, поэтому флаг виден
+     следующему вызову. Блок и тема считаются отдельно: это разные экраны. */
+  const projectGuard = { createdProject: false };
+  const personalGuard = { block: false, topic: false };
+  const toolCtx = {
+    workspace,
+    signal,
+    remember,
+    projectName,
+    userName,
+    facts,
+    depth,
+    ownerId,
+    attachments,
+    spawnAgent: spawnSubagents,
+    createProjectChat,
+    createPersonalBlock,
+    createNewsTopic,
+    projectGuard,
+    personalGuard,
+  };
 
   /* За пять шагов до предела модель получает предупреждение, а человек —
      строку в живом статусе. Раньше предел наступал внезапно: агент упирался в
@@ -773,8 +1081,10 @@ export async function runTurn({
         if (signal.aborted) throw Object.assign(new Error('aborted'), { name: 'AbortError' });
       }
     }
-    const system = systemPrompt({ projectName, projectContext, memory: chat.memory, userName, question: userText, facts, skillsText, filesBrief, task: chat.task, modes: { thinking, search } });
-    const messages = [{ role: 'system', content: system }, ...chat.history];
+    const system = systemPrompt({ projectName, projectContext, memory: chat.memory, userName, question: userText, facts, skillsText, filesBrief, task: chat.task, modes: { thinking, search }, continuing });
+    /* История уходит модели только в допустимом виде: даже если что-то попало
+       в неё посреди шага, запрос не будет отвергнут из-за разметки вызовов. */
+    const messages = [{ role: 'system', content: system }, ...normalizeHistory(chat.history).messages];
 
     /* У каждого шага свой буфер начала реплики — см. src/narration.mjs. */
     const narration = createNarrationGate({ emit: (text) => emit({ type: 'delta', text }) });
@@ -904,6 +1214,46 @@ export async function runTurn({
         finalText = `${finalText}${finalText ? '\n\n' : ''}${MISSING_FILES_ANSWER}`;
         emit({ type: 'progress', step: steps, limit: stepLimit, note: 'листы не собрались — сказал прямо' });
         chat.history.push({ role: 'assistant', content: MISSING_FILES_ANSWER });
+        finished = true;
+        break;
+      }
+      /* Общий случай: человек просил файл/выжимку, а модель закончила
+         обещанием «сейчас соберу». Не отдаём это как готовый ответ — даём
+         адресный шаг и только после него показываем итог. */
+      const missingDeliverable = needsDeliverableRepair({
+        userText,
+        workspace,
+        toolsUsed,
+        answer: result.text || '',
+        startedMs,
+      });
+      if (missingDeliverable) {
+        if (deliverableRepairs < DELIVERABLE_REPAIRS_MAX) {
+          deliverableRepairs += 1;
+          finalText = finalText.slice(0, Math.max(0, finalText.length - stepAnswer.length));
+          chat.task = updateTaskState(chat.task, {
+            userText,
+            tools: toolsUsed,
+            steps,
+            segments: Math.ceil(steps / segmentSize),
+          });
+          emit({
+            type: 'progress',
+            step: steps,
+            limit: stepLimit,
+            note: deliverableRepairs === 1 ? 'результат ещё не готов — продолжаю сам' : 'файла нет — ещё одна попытка',
+          });
+          chat.history.push({ role: 'user', content: continuePrompt(chat.task, DELIVERABLE_REPAIR_PROMPT) });
+          continue;
+        }
+        incomplete = true;
+        incompleteNote = MISSING_DELIVERABLE_NOTE;
+        /* Сказанное уже ушло в ленту — не выдёргиваем его задним числом,
+           просто честно помечаем, что результат не доведён. */
+        finalText = `${finalText}${finalText ? '\n\n' : ''}${MISSING_DELIVERABLE_NOTE}`;
+        emit({ type: 'delta', text: `${finalText === MISSING_DELIVERABLE_NOTE ? '' : '\n\n'}${MISSING_DELIVERABLE_NOTE}` });
+        emit({ type: 'progress', step: steps, limit: stepLimit, note: 'результат не готов — нужна кнопка «Продолжить»' });
+        chat.history.push({ role: 'assistant', content: finalText });
         finished = true;
         break;
       }
@@ -1076,7 +1426,7 @@ export async function runTurn({
   if (!finished) {
     chat.task = updateTaskState(chat.task, { userText, tools: toolsUsed, steps });
     try {
-      const system = systemPrompt({ projectName, projectContext, memory: chat.memory, userName, question: userText, facts, skillsText, filesBrief, task: chat.task, modes: { thinking, search } });
+      const system = systemPrompt({ projectName, projectContext, memory: chat.memory, userName, question: userText, facts, skillsText, filesBrief, task: chat.task, modes: { thinking, search }, continuing });
       /* Карточка задачи в финальном сообщении помогает итогу быть по делу:
          модель называет готовые файлы, а не пересказывает процесс. */
       const card = taskSummaryLine(chat.task);
@@ -1098,7 +1448,7 @@ export async function runTurn({
           model: route.model,
           messages: [
             { role: 'system', content: system },
-            ...chat.history,
+            ...normalizeHistory(chat.history).messages,
             { role: 'user', content: card ? `${WRAP_UP_PROMPT}\n\n${card}` : WRAP_UP_PROMPT },
           ],
           max_tokens: CONTEXT.maxOutputTokens,
@@ -1129,8 +1479,33 @@ export async function runTurn({
     }
   }
 
+  /* Markdown-черновик не должен доживать до «Файлов проекта»: человеку нужен
+     один читаемый документ и озвучка, а не .md рядом с .docx. */
+  const removedDrafts = cleanupUnrequestedMarkdown({ workspace, userText, startedMs });
+  if (removedDrafts.length) {
+    console.log(`[agent] убраны md-черновики: ${removedDrafts.join(', ')}`);
+  }
+
   /* Карточка задачи закрывает ход: она же станет началом следующего. */
   chat.task = updateTaskState(chat.task, { userText, tools: toolsUsed, steps });
+
+  /* Последний рубеж: даже если ответ пришёл не через обычную ветку (потолок
+     шагов, аварийный итог), не выдаём его за готовый, когда запрошенного
+     файла нет. Человек получит честную пометку и кнопку продолжения. */
+  if (!incomplete && needsDeliverableRepair({ userText, workspace, toolsUsed, answer: finalText, startedMs })) {
+    incomplete = true;
+    incompleteNote = MISSING_DELIVERABLE_NOTE;
+    let added = '';
+    if (!finalText.includes(MISSING_DELIVERABLE_NOTE)) {
+      added = `${finalText ? '\n\n' : ''}${MISSING_DELIVERABLE_NOTE}`;
+      finalText += added;
+    }
+    const last = chat.history[chat.history.length - 1];
+    if (last?.role === 'assistant') last.content = finalText;
+    /* Пометку отдаём в поток: иначе в ленте останется бодрое «готово», а
+       после перезагрузки появится другое сообщение. */
+    if (added) emit({ type: 'delta', text: added });
+  }
 
   /* Финальный ревью-пасс: сверяем ответ с тем, что вернули инструменты.
      Дорогой вызов делаем только для содержательных ответов с инструментами;
@@ -1139,6 +1514,11 @@ export async function runTurn({
      и та же модель повторяет свои слепые зоны. */
   let review = null;
   if (finalText && REVIEW.enabled) {
+    /* Проверка идёт вне потока: в ленте её не видно, поэтому без строки в живом
+       статусе пауза перед ответом читалась бы как зависание. */
+    if (needsReview({ answer: finalText, tools: toolsUsed, depth })) {
+      emit({ type: 'progress', step: steps, limit: stepLimit, note: 'сверяю ответ с результатами работы' });
+    }
     try {
       const createdFiles = toolsUsed.map((tool) => tool.path).filter(Boolean);
       /* Файлы проекта — чтобы ответ, ссылающийся на документ из прошлого хода,
@@ -1191,7 +1571,7 @@ export async function runTurn({
     if (reviewLine) console.log(`[review] ${reviewLine}`);
   }
 
-  return { text: finalText, usage, tools: toolsUsed, steps, memory: chat.memory, trim: trimStats, route: { ...route, steps: stepRoutes }, review, reasoning: reasoningText };
+  return { text: finalText, usage, tools: toolsUsed, steps, memory: chat.memory, trim: trimStats, route: { ...route, steps: stepRoutes }, review, reasoning: reasoningText, incomplete, incompleteNote };
 }
 
 /* Название диалога не должно зависеть от модели: если её ответ пустой,

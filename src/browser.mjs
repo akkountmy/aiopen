@@ -19,6 +19,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { assertPublicUrl } from './search.mjs';
@@ -76,6 +77,18 @@ async function optionalModule(name) {
     return await import(name);
   } catch {
     return null;
+  }
+}
+
+const resolver = createRequire(import.meta.url);
+
+/** Пакет установлен — по резолву пути, без загрузки модуля (миллисекунды). */
+function hasPackage(name) {
+  try {
+    resolver.resolve(name);
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -232,6 +245,78 @@ async function buildCandidates() {
 }
 
 /**
+ * Chromium, скачанный Playwright в свой кэш, — без импорта Playwright.
+ * Нужен только для честного ответа в /api/health, поэтому ищем файл глазами.
+ */
+function peekPlaywrightChrome() {
+  try {
+    const roots = [];
+    const envPath = String(process.env.PLAYWRIGHT_BROWSERS_PATH || '').trim();
+    if (envPath && envPath !== '0') roots.push(envPath);
+    else {
+      if (process.platform === 'win32' && process.env.LOCALAPPDATA) roots.push(path.join(process.env.LOCALAPPDATA, 'ms-playwright'));
+      if (process.platform === 'darwin') roots.push(path.join(process.env.HOME || '', 'Library', 'Caches', 'ms-playwright'));
+      roots.push(path.join(process.env.HOME || process.env.USERPROFILE || '', '.cache', 'ms-playwright'));
+    }
+    const inside = [
+      path.join('chrome-win', 'chrome.exe'),
+      path.join('chrome-linux', 'chrome'),
+      path.join('chrome-mac', 'Chromium.app', 'Contents', 'MacOS', 'Chromium'),
+    ];
+    for (const root of roots) {
+      if (!root || !fs.existsSync(root)) continue;
+      for (const dir of fs.readdirSync(root)) {
+        if (!/^chromium/i.test(dir)) continue;
+        for (const rel of inside) {
+          const file = path.join(root, dir, rel);
+          if (fs.existsSync(file)) return file;
+        }
+      }
+    }
+  } catch {
+    /* Нет каталога или нет прав — просто «не нашли». */
+  }
+  return '';
+}
+
+/**
+ * Быстрый ответ для /api/health: без запуска браузера и без загрузки
+ * playwright/puppeteer. Раньше отчёт тянул импорт библиотек и распаковку
+ * встроенного Chromium — первый /api/health стоил ~4 секунды и тормозил цикл.
+ */
+function peekCandidates() {
+  const off = String(process.env.DSHOW_BROWSER || '').trim().toLowerCase();
+  if (process.env.DSHOW_NO_BROWSER === '1' || ['off', '0', 'false', 'no'].includes(off)) {
+    return { list: [], reason: 'браузер выключен в этом окружении (DSHOW_BROWSER=off)' };
+  }
+  const forced = String(process.env.DSHOW_BROWSER_DRIVER || '').trim().toLowerCase();
+  const custom = String(process.env.DSHOW_CHROME_PATH || '').trim();
+  if (custom && !fs.existsSync(custom)) {
+    return { list: [], reason: `DSHOW_CHROME_PATH указывает на несуществующий файл: ${custom}` };
+  }
+  const want = (driver) => !forced || forced === driver;
+  const playwright = hasPackage('playwright') || hasPackage('playwright-core');
+  const puppeteer = hasPackage('puppeteer-core');
+  const bundled = custom ? '' : peekPlaywrightChrome();
+  const system = custom || platformChrome();
+  const list = [];
+  if (custom && playwright && want('playwright')) list.push({ label: 'Chrome по DSHOW_CHROME_PATH', executablePath: custom });
+  if (custom && puppeteer && want('puppeteer')) list.push({ label: 'Chrome по DSHOW_CHROME_PATH', executablePath: custom });
+  if (bundled && playwright && want('playwright')) list.push({ label: 'Chromium Playwright', executablePath: bundled });
+  if (system && !custom && puppeteer && want('puppeteer')) list.push({ label: 'системный Chrome', executablePath: system });
+  if (system && !custom && playwright && want('playwright')) list.push({ label: 'системный Chrome', executablePath: system });
+  if (!list.length && !custom && puppeteer && want('puppeteer') && hasPackage('@sparticuz/chromium')) {
+    list.push({ label: 'встроенный Chromium (@sparticuz)', executablePath: '' });
+  }
+  const reason = list.length
+    ? ''
+    : forced
+      ? `DSHOW_BROWSER_DRIVER=${forced}, но подходящего Chromium нет`
+      : 'нет Chromium: ни рядом с сервисом, ни встроенного, ни системного';
+  return { list, reason };
+}
+
+/**
  * Рабочий движок выбирается запуском, а не наличием файла: чужой Chromium без
  * системных библиотек спокойно лежит рядом и всё равно не поднимается —
  * в облаке так и бывает, поэтому перебираем кандидатов до первого живого.
@@ -335,12 +420,12 @@ export async function browserStatus({ probe: deep = false } = {}) {
       diagnostics: found.driver ? '' : state.diagnostics,
     };
   }
-  const list = await buildCandidates();
+  const list = peekCandidates();
   return {
-    engine: list.length ? list[0].label : null,
-    executable: list.length && list[0].executablePath ? path.basename(list[0].executablePath) : '',
+    engine: list.list.length ? list.list[0].label : null,
+    executable: list.list.length && list.list[0].executablePath ? path.basename(list.list[0].executablePath) : '',
     available: null,
-    reason: list.length ? '' : candidates.reason || '',
+    reason: list.list.length ? '' : list.reason,
   };
 }
 
@@ -442,9 +527,9 @@ function pageFacts() {
 }
 
 /** Страница под нужный драйвер: Playwright работает через контекст, puppeteer — через viewport. */
-async function openSession(found, browser, viewport) {
+async function openSession(found, browser, viewport, { deviceScaleFactor = 1 } = {}) {
   if (found.driver === 'playwright') {
-    const context = await browser.newContext({ viewport, deviceScaleFactor: 1, locale: 'ru-RU' });
+    const context = await browser.newContext({ viewport, deviceScaleFactor, locale: 'ru-RU' });
     const page = await context.newPage();
     return {
       page,
@@ -453,7 +538,7 @@ async function openSession(found, browser, viewport) {
     };
   }
   const page = await browser.newPage();
-  await page.setViewport({ ...viewport, deviceScaleFactor: 1 });
+  await page.setViewport({ ...viewport, deviceScaleFactor });
   return {
     page,
     close: () => page.close(),
@@ -817,6 +902,8 @@ export async function printHtml(options = {}) {
 
   let browser = null;
   let session = null;
+  let probe = null;
+  let probeError = '';
   try {
     browser = await launch(found, timeoutMs);
     session = await openSession(found, browser, { width, height });
@@ -825,6 +912,15 @@ export async function printHtml(options = {}) {
     await session.waitIdle(Math.min(8000, timeoutMs));
     /* Шрифты и графика в SVG появляются не мгновенно: даём кадру устояться. */
     await sleep(Math.min(1500, Math.max(0, Number(options.settleMs) || 350)));
+    /* Замер раскладки: генератор деки передаёт пробу, которая считает геометрию
+       текста до печати. Ошибка пробы не должна стоить файла. */
+    if (typeof options.probe === 'function') {
+      try {
+        probe = await options.probe({ page });
+      } catch (error) {
+        probeError = String(error?.message || error);
+      }
+    }
     if (pngPath) await page.screenshot({ path: pngPath, fullPage: false });
     if (pdfPath) {
       const size = options.pageSize && typeof options.pageSize === 'object'
@@ -838,7 +934,134 @@ export async function printHtml(options = {}) {
       engine: found.label,
       pdfBytes: pdfPath && fs.existsSync(pdfPath) ? fs.statSync(pdfPath).size : 0,
       pngBytes: pngPath && fs.existsSync(pngPath) ? fs.statSync(pngPath).size : 0,
+      probe,
+      probeError,
     };
+  } finally {
+    if (session) await session.close().catch(() => {});
+    if (browser) await browser.close().catch(() => {});
+    releaseGate();
+  }
+}
+
+/* WebGL в облаке: у Chromium нет GPU, поэтому кадр рисует SwiftShader.
+   Флаги безвредны и для обычного Chrome, а без них 3D-сцена остаётся пустой. */
+const SHOT_GL_ARGS = [
+  '--use-gl=angle',
+  '--use-angle=swiftshader',
+  '--enable-unsafe-swiftshader',
+  '--allow-file-access-from-files',
+];
+
+function uniqueArgs(list) {
+  return [...new Set((list || []).filter(Boolean))];
+}
+
+/**
+ * Снимок локальной HTML-страницы тем же браузером, что и проверка страниц.
+ * Нужен генератору визуализации: в node-сборке Amvera нет ни Playwright-
+ * Chromium, ни Edge, а встроенный @sparticuz/chromium есть. Раньше скриншот
+ * искал только Playwright/Edge и на сервере честно падал «нет браузера»,
+ * хотя остальные листы собирались. Ждём data-ready — сцена сама говорит,
+ * когда WebGL-кадр готов, а не угадываем по таймеру.
+ */
+export async function shotHtml(options = {}) {
+  if (!options.file) throw new Error('Не указан HTML-файл для снимка');
+  const file = path.resolve(String(options.file));
+  if (!fs.existsSync(file)) throw new Error(`Нет HTML-файла для снимка: ${options.file}`);
+  if (!options.pngPath) throw new Error('Не указан путь для PNG');
+  const pngPath = path.resolve(String(options.pngPath));
+
+  const width = Math.min(3200, Math.max(400, Math.round(Number(options.width) || 1600)));
+  const height = Math.min(3200, Math.max(300, Math.round(Number(options.height) || 1000)));
+  const dpr = Math.min(2, Math.max(1, Number(options.dpr) || 1));
+  const timeoutMs = Math.min(MAX_TIMEOUT_MS, Math.max(15000, Number(options.timeoutMs) || 45000));
+  const readyTimeout = Math.min(30000, Math.max(1000, Number(options.readyTimeout) || 25000));
+  const settleMs = Math.min(3000, Math.max(0, Number(options.settleMs ?? 700)));
+
+  const base = await engine();
+  if (!base.driver) throw new Error(base.reason || 'браузер в окружении не запускается');
+  const startedAt = Date.now();
+  const mark = (label) => {
+    if (process.env.DSHOW_SHOT_DEBUG === '1') console.error(`[shotHtml] ${label}: ${Date.now() - startedAt}ms`);
+  };
+  mark(`движок ${base.driver}`);
+  /* Аргументы движка дополняем, а не заменяем: @sparticuz уже приносит
+     --single-process и библиотеки, Playwright — свои настройки песочницы. */
+  const found = { ...base, args: uniqueArgs([...(base.args || []), ...SHOT_GL_ARGS]) };
+
+  const granted = await acquireGate(Number(process.env.DSHOW_BROWSER_QUEUE_MS) || DEFAULT_QUEUE_MS);
+  if (!granted) throw new Error('браузер занят другой проверкой — попробуйте через минуту');
+
+  let browser = null;
+  let session = null;
+  const errors = [];
+  try {
+    browser = await launch(found, timeoutMs);
+    mark('запуск');
+    session = await openSession(found, browser, { width, height }, { deviceScaleFactor: dpr });
+    const { page } = session;
+    page.on('pageerror', (error) => errors.push(String(error?.message || error).slice(0, 300)));
+    page.on('console', (message) => {
+      if (message.type() !== 'error') return;
+      /* «Failed to load resource» — это сеть, а не сломанный кадр. */
+      const text = String(message.text() || '').slice(0, 300);
+      if (!/^Failed to load resource/i.test(text)) errors.push(text);
+    });
+
+    const url = pathToFileURL(file).href + String(options.query || '');
+    await page.goto(url, { waitUntil: 'load', timeout: timeoutMs });
+    mark('загрузка страницы');
+
+    let ready = true;
+    if (options.waitReady !== false) {
+      /* Строкой, а не функцией: puppeteer с тяжёлой WebGL-страницей иногда
+         не выполняет функциональный предикат и честно ждёт таймаут, хотя
+         data-ready уже стоит. Строковое выражение проверено на Edge и
+         Playwright и одинаково понимается обоими драйверами. */
+      const readyExpr =
+        'Boolean(document.body && (document.body.dataset.ready === "1" || window.__designReady === true))';
+      try {
+        /* У Playwright аргумент идёт перед опциями, у puppeteer — опции вторым.
+           Опрос по таймеру, а не по requestAnimationFrame: с --disable-gpu
+           headless-браузер засыпает после первых кадров, и rAF-опрос,
+           которым по умолчанию пользуется puppeteer, не просыпается. */
+        if (found.driver === 'playwright') {
+          await page.waitForFunction(readyExpr, null, { timeout: readyTimeout, polling: 100 });
+        } else {
+          await page.waitForFunction(readyExpr, { timeout: readyTimeout, polling: 100 });
+        }
+      } catch (error) {
+        ready = false;
+        errors.push('сцена не отметила готовность (data-ready)');
+        if (process.env.DSHOW_SHOT_DEBUG === '1') {
+          console.error('[shotHtml] ready wait failed', found.driver, String(error?.message || error).slice(0, 500));
+        }
+      }
+    }
+
+    await sleep(settleMs);
+    mark('готовность кадра');
+    fs.mkdirSync(path.dirname(pngPath), { recursive: true });
+    await page.screenshot({ path: pngPath, fullPage: false });
+    mark('снимок');
+    const bytes = fs.existsSync(pngPath) ? fs.statSync(pngPath).size : 0;
+    if (!bytes) throw new Error('PNG не снялся');
+    const minBytes = Math.max(0, Number(options.minBytes) || 0);
+    if (bytes < minBytes) throw new Error(`PNG слишком маленький: ${bytes} байт`);
+    return {
+      png: pngPath,
+      bytes,
+      width,
+      height,
+      dpr,
+      ready,
+      engine: found.label || found.driver,
+      errors: [...new Set(errors)].slice(0, 5),
+    };
+  } catch (error) {
+    const tail = errors.length ? ` (${errors.slice(-2).join('; ')})` : '';
+    throw new Error(`${shortError(error)}${tail}`);
   } finally {
     if (session) await session.close().catch(() => {});
     if (browser) await browser.close().catch(() => {});

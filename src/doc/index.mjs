@@ -3,13 +3,25 @@
  * прежний ручной сборщик. Сервис не должен падать из-за необязательной библиотеки,
  * поэтому любая ошибка «про»-движка логируется и приводит к откату на запасной.
  */
+import { createRequire } from 'node:module';
 import { createDocumentPdf, createPresentationPdf } from '../pdf.mjs';
 import { toList } from './theme.mjs';
 
 const CACHE = new Map();
 const ISSUES = [];
+const resolver = createRequire(import.meta.url);
 
 const moduleFlavour = { docx: 'docx', xlsx: 'exceljs', pptx: 'pptxgenjs', pdf: 'pdfkit' };
+
+/** Есть ли пакет в образе — по резолву пути, без выполнения модуля. */
+function resolveLibrary(name) {
+  try {
+    resolver.resolve(name);
+    return true;
+  } catch {
+    return null;
+  }
+}
 
 /** Есть ли библиотека в образе. Проверка кэшируется после первого вызова. */
 export async function hasLibrary(kind) {
@@ -22,12 +34,21 @@ export async function hasLibrary(kind) {
   const name = moduleFlavour[kind];
   let ok = false;
   if (name) {
-    try {
-      await import(name);
-      ok = true;
-    } catch (error) {
-      ok = false;
-      recordIssue(kind, `библиотека ${name} недоступна: ${error?.message || error}`);
+    /* Раньше здесь был `import(name)`: правдиво, но каждый первый вызов
+       /api/health платил 6–7 секунд за загрузку четырёх тяжёлых библиотек
+       (в том числе блокируя событийный цикл). Резолв пути отвечает на тот же
+       вопрос «пакет есть в образе» за миллисекунды; если пакет окажется
+       битым, сборка документа поймает ошибку и откатится на запасной движок. */
+    const present = resolveLibrary(name);
+    if (present) ok = true;
+    else if (present === null) {
+      try {
+        await import(name);
+        ok = true;
+      } catch (error) {
+        ok = false;
+        recordIssue(kind, `библиотека ${name} недоступна: ${error?.message || error}`);
+      }
     }
   }
   CACHE.set(kind, ok);

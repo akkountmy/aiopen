@@ -329,6 +329,26 @@ test('тяжёлая история сжимается со сводкой в п
   assert.ok(historyFiles.length >= 1, 'срезанная история не выгружена');
 });
 
+test('ответ уходит в ленту одним куском в конце, а не по ходу работы', async () => {
+  reset();
+  behavior = ({ isSubagent }) => (isSubagent
+    ? { kind: 'text', text: 'ok' }
+    : requests.length === 1
+      ? { kind: 'tool', name: 'run_js', args: { code: "print('42');" } }
+      : { kind: 'text', text: 'Итог: 42 — столько вернул расчёт.' });
+  const seen = [];
+  const outcome = await runTurn(baseTurn({ emit: (event) => seen.push(event), toolFilter: ['run_js'] }));
+
+  /* Финальный ревью-пасс может править текст уже после потока, и человек видел,
+     как ответ пришёл и через пару секунд сам изменился. Значит, в ленте должен
+     быть ровно один кусок текста, равный итогу, и прийти он должен после работы. */
+  const deltas = seen.filter((event) => event.type === 'delta');
+  assert.equal(deltas.length, 1, 'ответ пришёл частями');
+  assert.equal(deltas[0].text, outcome.text, 'в ленту ушёл не итоговый текст');
+  const lastTool = seen.map((event) => event.type).lastIndexOf('tool');
+  assert.ok(seen.indexOf(deltas[0]) > lastTool, 'текст ответа ушёл раньше окончания работы');
+});
+
 let failed = 0;
 for (const item of tests) {
   try {

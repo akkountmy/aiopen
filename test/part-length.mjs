@@ -1,7 +1,7 @@
 // Длину части озвучки выбирает не человек, а структура книги: короткие главы
 // собираются в получасовые части, глава на 20–45 минут идёт целиком, простыня
 // режется внутри. Отдельное правило — короткая выжимка: если весь текст
-// укладывается в 45 минут звука, это всегда ОДИН MP3, даже когда внутри есть
+// укладывается в 50 минут звука, это всегда ОДИН MP3, даже когда внутри есть
 // главы: «часть 1 из 2» у получасовой записи только мешает. Здесь проверяем
 // оба правила и заодно то, что заголовки глав вообще распознаются — `\b` после
 // кириллицы в JavaScript не срабатывает, и однажды из-за этого главы не
@@ -9,6 +9,8 @@
 //
 //   node test/part-length.mjs
 import {
+  CHARS_PER_MINUTE,
+  MAX_PART_MINUTES,
   PART_MINUTES,
   SINGLE_FILE_MINUTES,
   choosePartMinutes,
@@ -32,7 +34,7 @@ const check = (name, condition, details = '') => (condition ? ok(name, details) 
 /* Глава заданной длины: заголовок отдельным абзацем и текст после него — так
    выглядит книга после разбора docx. */
 const chapter = (name, minutes) =>
-  `\n\n${name}\n\n` + 'Предложение про рынок лизинга и его участников. '.repeat(Math.ceil((minutes * 750) / 53));
+  `\n\n${name}\n\n` + 'Предложение про рынок лизинга и его участников. '.repeat(Math.ceil((minutes * CHARS_PER_MINUTE) / 53));
 const book = (sizes) => sizes.map((minutes, index) => chapter(`Глава ${index + 1}`, minutes)).join('\n');
 
 /* Заголовки: кириллица и разные написания — раньше здесь молча ломался regex. */
@@ -66,18 +68,18 @@ const summaryParts = narrationParts(summary);
 check('выжимка на 30 минут с главами — один MP3', summaryParts.length === 1, `частей ${summaryParts.length}`);
 check('план той же выжимки — одна часть', planParts(summary).length === 1, `частей ${planParts(summary).length}`);
 
-/* Порог 45 минут: ровно на нём ещё один файл, чуть больше — уже части. */
-const atThreshold = 'Слово. '.repeat(Math.floor((SINGLE_FILE_MINUTES * 750) / 7));
+/* Порог 50 минут: ровно на нём ещё один файл, чуть больше — уже части. */
+const atThreshold = 'Слово. '.repeat(Math.floor((SINGLE_FILE_MINUTES * CHARS_PER_MINUTE) / 7));
 check(
   `выжимка на ${SINGLE_FILE_MINUTES} минут — ещё один MP3`,
   narrationParts(atThreshold).length === 1,
-  `${(atThreshold.length / 750).toFixed(1)} мин, частей ${narrationParts(atThreshold).length}`,
+  `${(atThreshold.length / CHARS_PER_MINUTE).toFixed(1)} мин, частей ${narrationParts(atThreshold).length}`,
 );
-const overThreshold = 'Слово. '.repeat(Math.ceil(((SINGLE_FILE_MINUTES + 5) * 750) / 7));
+const overThreshold = 'Слово. '.repeat(Math.ceil(((SINGLE_FILE_MINUTES + 5) * CHARS_PER_MINUTE) / 7));
 check(
   'длиннее порога — режется на части',
   narrationParts(overThreshold).length > 1,
-  `${(overThreshold.length / 750).toFixed(1)} мин, частей ${narrationParts(overThreshold).length}`,
+  `${(overThreshold.length / CHARS_PER_MINUTE).toFixed(1)} мин, частей ${narrationParts(overThreshold).length}`,
 );
 check(
   'большая книга с главами — несколько частей',
@@ -95,11 +97,27 @@ check(
 const longBook = book([12, 30, 18, 9, 41]);
 const longMinutes = choosePartMinutes(longBook);
 const longParts = splitIntoParts(longBook, { minutes: longMinutes });
-const sizes = longParts.map((part) => Math.round((part.length / 750) * 10) / 10);
+const sizes = longParts.map((part) => Math.round((part.length / CHARS_PER_MINUTE) * 10) / 10);
 check(
   'ни одна часть не длиннее 45 минут',
   sizes.every((size) => size <= 45.5),
   `${sizes.join(' / ')} мин`,
+);
+
+/* «Книга на 60–65 минут» — общий хронометраж, а не одна часть на час:
+   иначе синтез теряет весь файл при перезапуске и человек долго ждёт. */
+const sixtyFive = 'Слово. '.repeat(Math.ceil((62 * CHARS_PER_MINUTE) / 7));
+const sixtyFiveParts = narrationParts(sixtyFive, { minutes: 65 });
+const sixtyFiveSizes = sixtyFiveParts.map((part) => Math.round((part.length / CHARS_PER_MINUTE) * 10) / 10);
+check(
+  'книга на 62 минуты режется на части не длиннее 45',
+  sixtyFiveParts.length > 1 && sixtyFiveSizes.every((size) => size <= 45.5),
+  `${sixtyFiveSizes.join(' / ')} мин`,
+);
+check(
+  'явные 65 минут не поднимают потолок части',
+  Math.max(...sixtyFiveSizes) <= MAX_PART_MINUTES + 0.5,
+  `максимум ${Math.max(...sixtyFiveSizes)} мин при потолке ${MAX_PART_MINUTES}`,
 );
 
 /* Документ без заголовков (PDF-выгрузка, договор) — полчаса. */

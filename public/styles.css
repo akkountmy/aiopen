@@ -992,6 +992,21 @@ body.resizing {
   white-space: nowrap;
 }
 
+/* Время последней работы в строке диалога: те же часы, что под сообщениями.
+   Цифры табличные — строка не дёргается, когда время обновляется. */
+.chat-row .c-when {
+  flex: none;
+  color: var(--text-4);
+  font-size: var(--fs-11);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.chat-row:hover .c-when,
+.chat-row.active .c-when {
+  color: var(--text-3);
+}
+
 /* Диалог, в котором прямо сейчас работает агент: маленькая пульсирующая
    точка. Она видна и когда открыт другой проект — задача от переключения не
    срывается, и это видно в списке. */
@@ -1832,10 +1847,32 @@ html.kb-open .scroll-jump {
 .msg-head .work-label {
   display: none;
   color: var(--text-4);
+  /* Длинная подпись шага уступает место времени, а не выдавливает его за край. */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .msg.streaming .msg-head .work-label {
   display: inline;
+}
+
+/* Время сообщения: у просьбы — под пузырём справа, у ответа — в шапке рядом с
+   подписью шага. Видно всегда, а не по наведению: за временем как раз и
+   возвращаются, а на телефоне наводить нечем. */
+.msg-when {
+  flex: none;
+  color: var(--text-4);
+  font-size: var(--fs-11);
+  font-variant-numeric: tabular-nums;
+  line-height: var(--lh-16);
+  white-space: nowrap;
+}
+
+.msg-user .msg-when {
+  max-width: min(760px, 88%);
+  padding-right: 2px;
 }
 
 .msg.streaming .msg-head .dot {
@@ -2277,20 +2314,118 @@ html.kb-open .scroll-jump {
   line-height: var(--lh-20);
 }
 
-.cursor {
+/* Задача встала до результата: одна кнопка вместо просьбы «напишите
+   продолжи». Плашка не кричит, но её видно и на телефоне. */
+.msg-incomplete {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+  padding: 10px 12px;
+  max-width: 640px;
+  border: 1px solid rgba(226, 168, 62, 0.35);
+  background: rgba(226, 168, 62, 0.09);
+  border-radius: var(--radius-md);
+  color: var(--text-2);
+  font-size: var(--fs-13);
+  line-height: var(--lh-20);
+}
+
+.msg-incomplete > span {
+  flex: 1 1 240px;
+}
+
+.msg-continue {
+  flex: 0 0 auto;
+  height: 30px;
+  padding: 0 14px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-xs);
+  background: var(--text);
+  color: var(--bg);
+  font-size: var(--fs-12);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.msg-continue:hover {
+  opacity: 0.88;
+}
+
+/* Курсор живого ответа. Раньше это был отдельный <span> внутри markdown, и
+   каждая перерисовка потока создавала его заново: анимация мигания стартовала
+   с нуля по 12 раз в секунду, поэтому курсор выглядел вкопанным. Теперь курсор
+   — псевдоэлемент самого .md: узел живёт весь ответ, и мигание, покачивание и
+   свечение не сбрасываются. */
+.msg.streaming .md::after {
+  content: "";
   display: inline-block;
   width: 7px;
   height: 15px;
-  background: var(--accent);
+  margin-left: 3px;
   border-radius: 2px;
+  background: linear-gradient(180deg, #8fb0ff, var(--accent));
+  box-shadow: 0 0 0 0 rgba(86, 134, 254, 0);
   vertical-align: -2px;
-  margin-left: 2px;
-  animation: blink 1s steps(2, start) infinite;
+  animation:
+    caret-blink 1.05s ease-in-out infinite,
+    caret-sway 1.05s ease-in-out infinite,
+    caret-glow 2.1s ease-in-out infinite;
 }
 
-@keyframes blink {
+@keyframes caret-blink {
+  0%,
+  40% {
+    opacity: 1;
+  }
+  50%,
+  92% {
+    opacity: 0.15;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+
+@keyframes caret-sway {
+  0%,
+  100% {
+    transform: translateY(0) scaleY(1);
+  }
+  20% {
+    transform: translateY(-2px) scaleY(0.86);
+  }
+  40% {
+    transform: translateY(0) scaleY(1.06);
+  }
+}
+
+@keyframes caret-glow {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(86, 134, 254, 0);
+  }
   50% {
-    opacity: 0;
+    box-shadow: 0 0 9px 2px rgba(86, 134, 254, 0.5);
+  }
+}
+
+/* Если движение мешает, курсор всё равно должен быть живым: оставляем плавное
+   проявление-затухание без покачивания и свечения. */
+@media (prefers-reduced-motion: reduce) {
+  .msg.streaming .md::after {
+    animation: caret-fade 1.6s ease-in-out infinite !important;
+  }
+}
+
+@keyframes caret-fade {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.3;
   }
 }
 
@@ -2392,6 +2527,16 @@ html.kb-open .scroll-jump {
   flex-wrap: wrap;
   gap: 4px;
   margin-top: 3px;
+}
+
+/* Время постановки в очередь — под текстом задачи, тем же кеглем, что и
+   подписи файлов. */
+.queue-when {
+  margin-top: 2px;
+  color: var(--text-4);
+  font-size: var(--fs-11);
+  font-variant-numeric: tabular-nums;
+  line-height: var(--lh-16);
 }
 
 .queue-file {
@@ -2960,6 +3105,194 @@ html.kb-open .scroll-jump {
   padding: 2px 8px 14px;
   scrollbar-width: thin;
   scrollbar-color: var(--layer-3) transparent;
+}
+
+/* -------------------- прослушивание MP3 в панели файлов --------------------
+   Карточка стоит последней в колонке панели, после списка: список прокручивается,
+   а плеер остаётся на месте — закреплён внизу на десктопе. Ширину карточка не
+   задаёт сама: она в потоке панели, поэтому разделитель слева тянет и её.
+   Шапка — это лицо записи, как на образце: обложка, название, подпись и живая
+   волна; управление живёт ниже и занимает две невысокие строки. */
+.files-audio {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin: 6px 10px;
+  padding: 8px 10px;
+  padding-bottom: max(9px, env(safe-area-inset-bottom));
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 16px;
+  background:
+    radial-gradient(130% 170% at 6% 0%, color-mix(in srgb, var(--accent) 13%, transparent), transparent 56%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0) 58%),
+    color-mix(in srgb, var(--layer-1) 88%, transparent);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.1),
+    0 8px 24px rgba(0, 0, 0, 0.22);
+  backdrop-filter: blur(24px) saturate(160%);
+  -webkit-backdrop-filter: blur(24px) saturate(160%);
+}
+
+.files-audio-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+/* Обложка — та же плитка с нотой, что и в окне: узнаваемый знак звука. */
+.files-audio-art {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+  background:
+    radial-gradient(120% 120% at 22% 12%, rgba(255, 255, 255, 0.34), transparent 58%),
+    linear-gradient(
+      158deg,
+      color-mix(in srgb, var(--accent) 86%, #fff 14%),
+      color-mix(in srgb, var(--accent-fill) 90%, #000 10%)
+    );
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.26),
+    0 3px 9px rgba(0, 0, 0, 0.28);
+  color: #fff;
+}
+
+.files-audio-art svg {
+  width: 17px;
+  height: 17px;
+  fill: currentColor;
+  opacity: 0.95;
+}
+
+.files-audio-meta {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+/* Имя записи — одна строка с многоточием: длинное название не должно
+   растягивать панель. Полный путь — в подсказке. */
+.files-audio-title {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 15px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Вторая строка — как исполнитель на образце: формат и длительность. */
+.files-audio-sub {
+  overflow: hidden;
+  color: var(--text-3);
+  font-size: 10px;
+  line-height: 12px;
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.files-audio-close {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+  transition:
+    background 0.16s ease,
+    color 0.16s ease;
+}
+
+.files-audio-close:hover {
+  background: var(--layer-3);
+  color: var(--text);
+}
+
+.files-audio-close svg {
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+/* Панель — от 264 до 420 px: та же карточка, но на пару пикселей компактнее,
+   чтобы в узкой колонке дорожка оставалась длинной. */
+.files-audio-mount {
+  min-width: 0;
+}
+
+.files-audio .audio-bar {
+  gap: 4px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+.files-audio .audio-toggle {
+  min-width: 44px;
+  height: 26px;
+  padding: 0 10px;
+}
+
+.files-audio .audio-toggle svg {
+  width: 14px;
+  height: 14px;
+}
+
+.files-audio .audio-skip {
+  height: 26px;
+  padding: 0 7px 0 6px;
+}
+
+.files-audio .audio-skip svg {
+  width: 14px;
+  height: 14px;
+}
+
+.files-audio .audio-actions {
+  gap: 6px;
+}
+
+.files-audio .audio-speed {
+  height: 26px;
+  padding: 0 6px 0 8px;
+  font-size: 11px;
+}
+
+.files-audio .audio-time {
+  font-size: 9.5px;
+}
+
+/* Строка записи, которая сейчас в полосе: по ней видно, что включено именно
+   это, а не соседний файл с похожим именем. */
+.file-row.is-listening {
+  background: var(--layer-hover);
+  color: var(--text);
+}
+
+.file-row.is-listening .f-icon {
+  color: var(--accent);
 }
 
 /* Подсказка во всю панель, пока над ней держат файлы с компьютера. */
@@ -6148,10 +6481,746 @@ html.kb-open .scroll-jump {
   padding: 18px 16px 20px;
 }
 
-.audio-preview {
+/* --------------------- одна запись: полоса управления --------------------- */
+
+/* Док: единственный аудио-элемент приложения, 1×1 и прозрачный. Не display:none
+   — иначе iOS не считает его источником звука и убирает запись с экрана
+   блокировки. Стоит в body, поэтому закрытие окна и смена проекта его не касаются. */
+.audio-dock {
+  position: fixed;
+  left: 0;
+  bottom: 0;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* Плеер — стеклянная карточка, как на системном экране «сейчас играет»:
+   обложка, название с подписью, волна, дорожка с временем и управление внизу.
+   Вертикали меньше, чем у образца: обложка 44 px, управление — одна строка.
+   Всё собрано на токенах: светлая тема сама подхватывает свои цвета. */
+.audio-player {
+  --audio-ease: cubic-bezier(0.32, 0.72, 0, 1);
+  position: relative;
   display: block;
   width: 100%;
+}
+
+.audio-preview {
   margin: 2px 0 4px;
+}
+
+.audio-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  padding: 7px 10px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.11);
+  border-radius: 16px;
+  background:
+    radial-gradient(130% 170% at 6% 0%, color-mix(in srgb, var(--accent) 13%, transparent), transparent 56%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.075), rgba(255, 255, 255, 0) 55%),
+    color-mix(in srgb, var(--layer-1) 82%, transparent);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    0 12px 30px rgba(0, 0, 0, 0.26);
+  backdrop-filter: blur(24px) saturate(165%);
+  -webkit-backdrop-filter: blur(24px) saturate(165%);
+}
+
+/* На светлой теме белая карточка на белом фоне терялась бы: рамка и тень
+   держат её форму, а слабый акцентный ореол в углу даёт глубину. */
+[data-theme='light'] .audio-bar,
+[data-theme='light'] .files-audio {
+  border-color: rgba(255, 255, 255, 0.75);
+  background:
+    radial-gradient(130% 170% at 6% 0%, color-mix(in srgb, var(--accent) 9%, transparent), transparent 56%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.82), rgba(255, 255, 255, 0.5) 58%),
+    color-mix(in srgb, var(--layer-1) 78%, transparent);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.95),
+    0 12px 30px rgba(31, 41, 55, 0.14);
+}
+
+/* В панели файлов карточкой служит сам блок .files-audio, поэтому полоса внутри
+   не рисует вторую рамку и не добавляет отступов. */
+.audio-player.is-compact .audio-bar {
+  gap: 4px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+/* Шапка карточки: обложка, две строки названия и живая волна. */
+.audio-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+/* Обложка: градиентная плитка с нотой — вместо пустого места и вместо чужой
+   картинки, которой у записи нет. */
+.audio-art {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background:
+    radial-gradient(120% 120% at 22% 12%, rgba(255, 255, 255, 0.34), transparent 58%),
+    linear-gradient(
+      158deg,
+      color-mix(in srgb, var(--accent) 86%, #fff 14%),
+      color-mix(in srgb, var(--accent-fill) 90%, #000 10%)
+    );
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.26),
+    0 4px 12px rgba(0, 0, 0, 0.3);
+  color: #fff;
+}
+
+.audio-art svg {
+  width: 19px;
+  height: 19px;
+  fill: currentColor;
+  opacity: 0.95;
+}
+
+.audio-art.has-cover,
+.files-audio-art.has-cover {
+  background-image: var(--audio-cover);
+  background-color: var(--layer-3);
+  background-position: center;
+  background-size: cover;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.16),
+    0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.audio-art.has-cover svg,
+.files-audio-art.has-cover svg {
+  display: none;
+}
+
+.audio-id {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.audio-title {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 16px;
+  letter-spacing: -0.012em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.audio-sub {
+  overflow: hidden;
+  color: var(--text-3);
+  font-size: 10.5px;
+  line-height: 13px;
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Эквалайзер: пять столбиков в правом верхнем углу плеера. Живут всегда и
+   только на CSS — к аудиопотоку не подключены вовсе, поэтому голос не дрожит
+   и не заикается. Каждая полоса идёт в своём ритме: отрицательные задержки
+   держат их в разных фазах с первого кадра, без «раскачки» при открытии. */
+.audio-wave,
+.files-audio-wave {
+  flex: none;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 2px;
+  width: 24px;
+  height: 16px;
+  padding-bottom: 1px;
+  color: var(--text-2);
+}
+
+.audio-wave i,
+.files-audio-wave i {
+  width: 2.5px;
+  border-radius: 2px;
+  background: currentColor;
+  opacity: 0.72;
+  height: 34%;
+  transform-origin: 50% 100%;
+  transform: scaleY(0.55);
+  animation: eq-live-a 1.55s ease-in-out infinite;
+  will-change: transform;
+}
+
+.audio-wave i:nth-child(2),
+.files-audio-wave i:nth-child(2) {
+  height: 64%;
+  animation-name: eq-live-b;
+  animation-duration: 1.85s;
+  animation-delay: -0.42s;
+}
+
+.audio-wave i:nth-child(3),
+.files-audio-wave i:nth-child(3) {
+  height: 100%;
+  animation-name: eq-live-c;
+  animation-duration: 1.35s;
+  animation-delay: -0.86s;
+}
+
+.audio-wave i:nth-child(4),
+.files-audio-wave i:nth-child(4) {
+  height: 52%;
+  animation-name: eq-live-b;
+  animation-duration: 1.7s;
+  animation-delay: -0.21s;
+}
+
+.audio-wave i:nth-child(5),
+.files-audio-wave i:nth-child(5) {
+  height: 28%;
+  animation-name: eq-live-a;
+  animation-duration: 2.05s;
+  animation-delay: -0.64s;
+}
+
+/* Когда запись играет, эквалайзер чуть ярче — но ритм тот же: к звуку он
+   по-прежнему не привязан. */
+.audio-player.is-playing .audio-wave i,
+.files-audio:has(.audio-player.is-playing) .files-audio-wave i {
+  opacity: 0.92;
+}
+
+@keyframes eq-live-a {
+  0%,
+  100% {
+    transform: scaleY(0.34);
+  }
+  28% {
+    transform: scaleY(0.96);
+  }
+  52% {
+    transform: scaleY(0.48);
+  }
+  74% {
+    transform: scaleY(0.78);
+  }
+}
+
+@keyframes eq-live-b {
+  0%,
+  100% {
+    transform: scaleY(0.62);
+  }
+  22% {
+    transform: scaleY(0.3);
+  }
+  46% {
+    transform: scaleY(1);
+  }
+  68% {
+    transform: scaleY(0.44);
+  }
+  86% {
+    transform: scaleY(0.82);
+  }
+}
+
+@keyframes eq-live-c {
+  0%,
+  100% {
+    transform: scaleY(0.52);
+  }
+  18% {
+    transform: scaleY(0.95);
+  }
+  38% {
+    transform: scaleY(0.36);
+  }
+  58% {
+    transform: scaleY(1);
+  }
+  78% {
+    transform: scaleY(0.6);
+  }
+}
+
+
+/* Дорожка прогресса: линия 3 px и хват 16 px по высоте — пальцем попадать
+   удобно, а полоса не раздувает карточку. */
+.audio-seek {
+  width: 100%;
+  min-width: 0;
+  height: 14px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+.audio-seek::-webkit-slider-runnable-track {
+  height: 3px;
+  border-radius: 999px;
+  background: linear-gradient(
+    to right,
+    color-mix(in srgb, var(--text) 82%, transparent) 0 var(--audio-fill, 0%),
+    color-mix(in srgb, var(--text) 22%, transparent) var(--audio-fill, 0%) 100%
+  );
+}
+
+.audio-seek::-webkit-slider-thumb {
+  width: 8px;
+  height: 8px;
+  margin-top: -2.5px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--text);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.45);
+  transform: scale(1);
+  transition: transform 0.18s var(--audio-ease);
+  -webkit-appearance: none;
+}
+
+.audio-seek:hover::-webkit-slider-thumb,
+.audio-seek:focus-visible::-webkit-slider-thumb,
+.audio-seek:active::-webkit-slider-thumb,
+.audio-player.is-scrubbing .audio-seek::-webkit-slider-thumb {
+  transform: scale(1.25);
+}
+
+.audio-seek:disabled::-webkit-slider-thumb {
+  opacity: 0;
+}
+
+.audio-seek::-moz-range-track {
+  height: 3px;
+  border-radius: 999px;
+  background: var(--line-strong);
+}
+
+.audio-seek::-moz-range-progress {
+  height: 3px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text) 82%, transparent);
+}
+
+.audio-seek::-moz-range-thumb {
+  width: 8px;
+  height: 8px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--text);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.45);
+}
+
+.audio-seek:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.audio-seek:disabled::-moz-range-thumb {
+  opacity: 0;
+}
+
+/* Время и дорожка в одну строку, как на образце: прошедшее слева, оставшееся
+   справа, полоса между ними. */
+.audio-time {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-3);
+  font-size: 10px;
+  line-height: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.audio-time .audio-cur {
+  color: var(--text-2);
+  justify-self: start;
+}
+
+.audio-time .audio-dur {
+  justify-self: end;
+}
+
+/* Управление — один ряд по центру: две перемотки, плей и скорость. Раньше
+   скорость стояла отдельно у правого края, и ряд выглядел перекошенным. */
+.audio-controls {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: clamp(6px, 2.4vw, 16px);
+  margin-top: 0;
+}
+
+.audio-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Перемотка — пилюля того же размера и материала, что кнопка скорости:
+   тонкая рамка, прозрачная подложка, стрелка и число рядом. */
+.audio-skip {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  height: 28px;
+  padding: 0 8px 0 6px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--layer-2) 46%, transparent);
+  color: var(--text-2);
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  transition:
+    background 0.16s ease,
+    color 0.16s ease,
+    border-color 0.16s ease,
+    transform 0.16s var(--audio-ease);
+}
+
+.audio-skip:hover {
+  background: var(--layer-3);
+  color: var(--text);
+}
+
+.audio-skip:active {
+  transform: scale(0.95);
+}
+
+.audio-skip svg {
+  width: 15px;
+  height: 15px;
+  overflow: visible;
+  transition: transform 0.2s var(--audio-ease);
+}
+
+.audio-skip:hover svg {
+  transform: translateY(-0.5px);
+}
+
+.audio-skip-label {
+  color: currentColor;
+  font-size: 11.5px;
+  line-height: 1;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+}
+
+/* Долгое удержание: кнопка подсвечивается акцентом, а дорожка едет плавно. */
+.audio-skip.is-holding {
+  border-color: color-mix(in srgb, var(--accent) 44%, transparent);
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  color: var(--accent);
+}
+
+.audio-skip.is-holding .audio-skip-label {
+  color: currentColor;
+}
+
+/* Плей — такая же пилюля, только с акцентной заливкой, когда запись идёт.
+   Пока звучит — кнопка мягко пульсирует ореолом: видно с первого взгляда,
+   что прослушивание не остановилось. */
+.audio-toggle {
+  position: relative;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 46px;
+  height: 28px;
+  padding: 0 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--layer-2) 46%, transparent);
+  color: var(--text-2);
+  cursor: pointer;
+  transition:
+    background 0.16s ease,
+    color 0.16s ease,
+    border-color 0.16s ease,
+    transform 0.16s var(--audio-ease);
+}
+
+.audio-toggle:hover {
+  background: var(--layer-3);
+  color: var(--text);
+}
+
+.audio-toggle:active {
+  transform: scale(0.95);
+}
+
+.audio-toggle svg {
+  position: relative;
+  z-index: 1;
+  width: 15px;
+  height: 15px;
+  fill: currentColor;
+}
+
+.audio-player.is-playing .audio-toggle {
+  border-color: color-mix(in srgb, var(--accent) 52%, transparent);
+  background: color-mix(in srgb, var(--accent) 17%, transparent);
+  color: color-mix(in srgb, var(--accent) 86%, var(--text) 14%);
+}
+
+/* Ореол — отдельный слой, который меняет только прозрачность и масштаб.
+   Раньше пульсировали box-shadow и background самой кнопки: браузер
+   перерисовывал карточку с blur 60 раз в секунду, и на слабых машинах
+   звук начинал подхрипывать. Теперь анимацию забирает композитор. */
+.audio-toggle::after {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  z-index: 0;
+  border-radius: inherit;
+  background: color-mix(in srgb, var(--accent) 55%, transparent);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.audio-player.is-playing .audio-toggle::after {
+  animation: audio-play-pulse 1.7s ease-in-out infinite;
+}
+
+/* Знак внутри тоже дышит: кнопка заметна боковым зрением, но не мигает
+   навязчиво, как индикатор ошибки. */
+.audio-player.is-playing .audio-toggle svg {
+  animation: audio-play-icon 1.7s ease-in-out infinite;
+}
+
+.audio-toggle.is-icon-in svg {
+  animation: audio-icon-in 0.24s var(--audio-ease);
+}
+
+/* Ореол растёт от рамки и гаснет — «дыхание», а не резкое мигание. */
+@keyframes audio-play-pulse {
+  0%,
+  100% {
+    opacity: 0.08;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.28;
+    transform: scale(1.16);
+  }
+}
+
+@keyframes audio-play-icon {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.62;
+  }
+}
+
+@keyframes audio-icon-in {
+  from {
+    opacity: 0;
+    transform: scale(0.72);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* Скорость — видимая пилюля с текущим темпом, а не спрятанное «три точки». */
+.audio-speed {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  height: 28px;
+  padding: 0 7px 0 9px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--layer-2) 46%, transparent);
+  color: var(--text-2);
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  transition:
+    background 0.16s ease,
+    color 0.16s ease,
+    border-color 0.16s ease;
+}
+
+.audio-speed:hover {
+  background: var(--layer-3);
+  color: var(--text);
+}
+
+.audio-speed[aria-expanded='true'] {
+  border-color: color-mix(in srgb, var(--text) 24%, transparent);
+  background: var(--layer-3);
+  color: var(--text);
+}
+
+.audio-speed-chev {
+  display: grid;
+  place-items: center;
+  width: 10px;
+  height: 10px;
+  opacity: 0.65;
+}
+
+.audio-speed-chev svg {
+  width: 10px;
+  height: 10px;
+}
+
+.audio-skip:focus-visible,
+.audio-toggle:focus-visible,
+.audio-speed:focus-visible,
+.audio-menu-item:focus-visible,
+.audio-seek:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Меню скоростей — список в один столбец, как меню iOS: строка с галочкой
+   слева, выбор без заливки. position: fixed, потому что список выше кнопки,
+   а окно вокруг прокручивается. Координаты ставит app.js. */
+.audio-menu {
+  /* Галочка выбранной строки — маской, чтобы текст оставался ровно «0,9×»
+     и его можно было читать и проверять как обычный текст. */
+  --audio-check: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'><path d='M4.4 10.5l3.3 3.3 7.9-7.9' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+  position: fixed;
+  z-index: 300;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  width: 176px;
+  max-height: 62vh;
+  overflow-y: auto;
+  padding: 5px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--layer-1);
+  background: color-mix(in srgb, var(--layer-1) 86%, transparent);
+  box-shadow:
+    0 12px 32px rgba(0, 0, 0, 0.38),
+    0 0 0 0.5px rgba(255, 255, 255, 0.06);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+}
+
+.audio-menu[hidden] {
+  display: none;
+}
+
+.audio-menu-item {
+  position: relative;
+  height: 34px;
+  padding: 0 12px 0 30px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-2);
+  font: inherit;
+  font-size: var(--fs-13);
+  font-variant-numeric: tabular-nums;
+  text-align: left;
+  cursor: pointer;
+}
+
+.audio-menu-item:hover {
+  background: var(--layer-2);
+  color: var(--text);
+}
+
+/* Отметка выбора — галочка слева, а не залитая строка: так выбранная скорость
+   видна, но не спорит с акцентом кнопки воспроизведения. */
+.audio-menu-item[aria-checked='true'] {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.audio-menu-item[aria-checked='true']::before {
+  content: '';
+  position: absolute;
+  left: 9px;
+  top: 50%;
+  width: 15px;
+  height: 15px;
+  margin-top: -7.5px;
+  background: currentColor;
+  -webkit-mask: var(--audio-check) center / contain no-repeat;
+  mask: var(--audio-check) center / contain no-repeat;
+}
+
+/* Кто просил меньше движения — без проседаний и наплывов. */
+@media (prefers-reduced-motion: reduce) {
+  .audio-seek::-webkit-slider-thumb,
+  .audio-skip,
+  .audio-toggle,
+  .audio-speed {
+    transition: none;
+  }
+
+  .audio-skip:active,
+  .audio-toggle:active {
+    transform: none;
+  }
+
+  .audio-toggle.is-icon-in svg {
+    animation: none;
+  }
+
+  .audio-wave i,
+  .files-audio-wave i {
+    animation: none;
+  }
+
+  .audio-player.is-playing .audio-toggle::after {
+    animation: none;
+  }
+
+  .audio-player.is-playing .audio-toggle svg {
+    animation: none;
+  }
 }
 
 /* ---------------------------- озвучка документа ---------------------------- */
@@ -7035,6 +8104,20 @@ html.kb-open .scroll-jump {
   display: none !important;
 }
 
+/* «Top news» — второй экран-раздел и ведёт себя так же, но со своим классом:
+   один общий класс на два экрана заставил бы dashboardOpen() считать открытым
+   дашборд, а hideDashboard() — снимать чужой класс. */
+.app.news-open .scroll,
+.app.news-open .composer-wrap {
+  display: none !important;
+}
+
+/* Кнопки прокрутки диалога над разделом не нужны: листается сам раздел. */
+.app.news-open .scroll-jump {
+  opacity: 0;
+  pointer-events: none;
+}
+
 /* Панель файлов на широком экране — третья колонка, и на дашборде она
    остаётся на месте: документы к заданиям лежат в папке проекта, их удобно
    видеть, не уходя с экрана. Ширина колонки дашборда от этого меняется, поэтому
@@ -7388,16 +8471,20 @@ html.kb-open .scroll-jump {
 
 .dash-card-actions {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 6px;
 }
 
+/* Подпись «Запустить сейчас» длиннее прежней: в узкой карточке она не должна
+   рваться на две строки внутри кнопки высотой 32px — переносится весь ряд. */
 .dash-run,
 .dash-setup {
   height: 32px;
   padding: 0 10px;
   gap: 6px;
   font-size: var(--fs-13);
+  white-space: nowrap;
 }
 
 .dash-run svg,
@@ -7425,15 +8512,6 @@ html.kb-open .scroll-jump {
 .dash-del svg {
   width: 15px;
   height: 15px;
-}
-
-.dash-foot {
-  margin: 22px 0 0;
-  max-width: 82ch;
-  color: var(--text-4);
-  font-size: var(--fs-12);
-  line-height: var(--lh-18);
-  text-wrap: pretty;
 }
 
 .dash-error {
@@ -7707,6 +8785,954 @@ html.kb-open .scroll-jump {
     .dash-grid {
       grid-template-columns: minmax(0, 1fr);
     }
+  }
+}
+
+
+/* -------------------------------- top news -------------------------------
+   Утренний выпуск: крупный заголовок, тумблер и шесть редакционных карточек.
+   Каркас экрана общий с дашбордом (.dash, .dash-scroll, .dash-inner,
+   .dash-notice) — здесь только то, чего у дашборда нет. Цвета берутся из
+   переменных темы, поэтому светлая и тёмная темы работают без отдельных
+   правил; у каждой темы свой спокойный акцент. */
+
+.tn-inner {
+  width: min(1120px, 100%);
+}
+
+/* ------------------------------- шапка ------------------------------- */
+
+.tn-hero {
+  position: relative;
+  margin: 0 0 20px;
+  padding: 2px 2px 20px;
+  border-bottom: 1px solid var(--line);
+}
+
+.tn-hero-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.tn-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-3);
+  font-size: var(--fs-11);
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.tn-eyebrow::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--amber);
+  box-shadow: 0 0 0 3px rgba(247, 173, 49, 0.13);
+}
+
+.tn-date {
+  color: var(--text-3);
+  font-family: var(--mono);
+  font-size: var(--fs-11);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.tn-hero-main {
+  margin-top: 12px;
+}
+
+.tn-hero-copy {
+  min-width: 0;
+}
+
+/* Заголовок и тумблер — одна строка: переключатель стоит вплотную справа от
+   надписи, подписи «Включено» рядом нет. Перенос запрещён намеренно: иначе на
+   узкой колонке тумблер падал вниз и оказывался под заголовком, слева от
+   кнопки «Своя тема». */
+.tn-title-row {
+  position: relative;
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: flex-end;
+  gap: 18px;
+}
+
+/* Заголовок раздела — единственное место с засечками: он задаёт «газетный»
+   тон, а карточки остаются привычными и быстро читаются. */
+.tn-title {
+  margin: 0;
+  color: var(--text);
+  font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
+  font-size: clamp(38px, 5.2vw, 58px);
+  font-weight: 600;
+  line-height: 0.96;
+  letter-spacing: -0.035em;
+}
+
+.tn-sub {
+  margin: 12px 0 0;
+  color: var(--text-2);
+  font-size: var(--fs-14);
+  line-height: var(--lh-22);
+  text-wrap: pretty;
+}
+
+/* Тумблер — только дорожка, без подписи: состояние видно по цвету и бегунку.
+   Сам input прозрачный и лежит поверх дорожки, поэтому нажатие работает и по
+   дорожке, и по её краю. Вокруг дорожки — невидимый отступ (padding с
+   отрицательным margin), чтобы пальцем не приходилось попадать в 26 px. */
+.tn-switch {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  padding: 11px;
+  margin: -11px;
+  border: 0;
+  border-radius: 999px;
+  background: none;
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.18s ease;
+}
+
+.tn-switch:hover {
+  background: var(--layer-2);
+}
+
+.tn-switch-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.tn-switch-track {
+  display: flex;
+  flex: none;
+  align-items: center;
+  width: 44px;
+  height: 26px;
+  padding: 2px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--layer-3);
+  transition: background 0.2s ease, border-color 0.2s ease;
+}
+
+.tn-switch-thumb {
+  display: block;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--text-3);
+  transition: transform 0.2s ease, background 0.2s ease;
+}
+
+.tn-switch-input:checked + .tn-switch-track {
+  border-color: var(--accent-fill);
+  background: var(--accent-fill);
+}
+
+.tn-switch-input:checked + .tn-switch-track .tn-switch-thumb {
+  background: #fff;
+  transform: translateX(18px);
+}
+
+.tn-switch-input:focus-visible + .tn-switch-track {
+  outline: 2px solid var(--accent-strong);
+  outline-offset: 3px;
+}
+
+.tn-switch.busy {
+  cursor: progress;
+  opacity: 0.65;
+}
+
+.tn-switch.busy .tn-switch-thumb {
+  animation: tn-pulse-soft 1s ease-in-out infinite;
+}
+
+/* Строка состояния шапки: «Собираем выпуск…» и кнопка «Своя тема». Своей
+   высоты не резервирует — когда показывать нечего, строка целиком скрыта
+   (класс hidden ставит app.js), и пустого места под подзаголовком не остаётся. */
+.tn-hero-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 18px;
+  margin-top: 12px;
+}
+
+.tn-building {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--accent-strong);
+  font-size: var(--fs-12);
+  font-weight: 600;
+}
+
+.tn-pulse {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent-strong);
+  animation: tn-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes tn-pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+    box-shadow: 0 0 0 0 rgba(86, 134, 254, 0.3);
+  }
+  50% {
+    opacity: 1;
+    box-shadow: 0 0 0 4px rgba(86, 134, 254, 0);
+  }
+}
+
+@keyframes tn-pulse-soft {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+/* ------------------------------- выключено ------------------------------- */
+
+.tn-off {
+  display: grid;
+  grid-template-columns: 224px minmax(0, 1fr);
+  gap: 30px;
+  /* Обложка тянется по высоте текста, а не центрируется: иначе её нижняя
+     граница не совпадала с нижней границей кнопки «Включить Top news». */
+  align-items: stretch;
+  padding: 26px;
+  border: 1px solid var(--line);
+  border-radius: calc(var(--radius-lg) + 2px);
+  background:
+    radial-gradient(90% 120% at 0% 0%, rgba(224, 185, 107, 0.08), transparent 52%),
+    var(--layer-1);
+}
+
+/* Обложка выключенного выпуска: номер, время и газетные линейки. Это не
+   картинка, а типографика — она одинаково чёткая на любом экране. */
+.tn-off-art {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 9px;
+  padding: 22px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: calc(var(--radius-lg) + 1px);
+  background: linear-gradient(145deg, var(--layer-2), var(--layer-1) 70%);
+}
+
+.tn-off-art::before {
+  content: "";
+  position: absolute;
+  top: -58px;
+  right: -46px;
+  width: 190px;
+  height: 190px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(224, 185, 107, 0.22), transparent 66%);
+}
+
+.tn-off-art::after {
+  content: "TOP NEWS";
+  position: absolute;
+  top: 18px;
+  left: 20px;
+  color: var(--text-3);
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+}
+
+.tn-off-mark {
+  position: relative;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 42px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: -0.05em;
+}
+
+.tn-off-rule {
+  position: relative;
+  height: 1px;
+  background: linear-gradient(90deg, var(--line-strong), transparent);
+}
+
+.tn-off-rule.short {
+  width: 54%;
+}
+
+.tn-off-copy {
+  min-width: 0;
+}
+
+.tn-off-kicker {
+  color: var(--amber);
+  font-size: var(--fs-11);
+  font-weight: 650;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.tn-off-copy h2 {
+  max-width: 22ch;
+  margin: 9px 0 0;
+  color: var(--text);
+  font-size: var(--fs-21);
+  font-weight: 650;
+  line-height: 1.18;
+  letter-spacing: -0.02em;
+  text-wrap: balance;
+}
+
+.tn-off-copy p {
+  max-width: 62ch;
+  margin: 10px 0 0;
+  color: var(--text-2);
+  font-size: var(--fs-13);
+  line-height: var(--lh-20);
+  text-wrap: pretty;
+}
+
+.tn-off-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+  margin-top: 18px;
+}
+
+.tn-enable {
+  min-width: 178px;
+}
+
+.tn-topics {
+  display: flex;
+  grid-column: 1 / -1;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-top: 2px;
+}
+
+.tn-topic {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--tint);
+  color: var(--text-2);
+  font-size: var(--fs-12);
+  white-space: nowrap;
+}
+
+.tn-topic svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: var(--tn-accent);
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* ------------------------------- выпуск ------------------------------- */
+
+.tn-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+/* Карточка — колонка на всю высоту ряда сетки. Строки новостей делят остаток
+   высоты поровну (см. .tn-story), поэтому подсветка при наведении доходит до
+   нижней кромки карточки, а разграничительная линия стоит по её середине.
+   Без этого карточка-соседка растягивала ряд, а содержимое оставалось своей
+   высоты: под второй новостью повисало пустое место, которое не подсвечивалось
+   при наведении и сдвигало линию вверх. */
+.tn-block {
+  --tn-accent: var(--text-2);
+  --tn-tint: rgba(255, 255, 255, 0.04);
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: calc(var(--radius-lg) + 2px);
+  background:
+    radial-gradient(120% 90% at 100% 0%, var(--tn-tint), transparent 58%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.018), transparent 34%),
+    var(--layer-1);
+  transition: border-color 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.tn-block:hover {
+  border-color: var(--line-strong);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.12);
+  transform: translateY(-1px);
+}
+
+.tn-block::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 2px;
+  background: linear-gradient(90deg, var(--tn-accent), transparent 72%);
+  opacity: 0.8;
+}
+
+.tn-tone-gold {
+  --tn-accent: #e0b96b;
+  --tn-tint: rgba(224, 185, 107, 0.11);
+}
+
+.tn-tone-blue {
+  --tn-accent: #7fb0ff;
+  --tn-tint: rgba(127, 176, 255, 0.1);
+}
+
+.tn-tone-green {
+  --tn-accent: #6cd6a4;
+  --tn-tint: rgba(108, 214, 164, 0.1);
+}
+
+.tn-tone-violet {
+  --tn-accent: #b8a0ff;
+  --tn-tint: rgba(184, 160, 255, 0.1);
+}
+
+.tn-tone-sky {
+  --tn-accent: #67c9f0;
+  --tn-tint: rgba(103, 201, 240, 0.1);
+}
+
+.tn-tone-rose {
+  --tn-accent: #f08aa8;
+  --tn-tint: rgba(240, 138, 168, 0.1);
+}
+
+.tn-block-head {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 18px 13px;
+  border-bottom: 1px solid var(--line);
+}
+
+.tn-cat-icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--tn-tint);
+  color: var(--tn-accent);
+}
+
+.tn-cat-icon svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.tn-cat-copy {
+  min-width: 0;
+  flex: 1;
+}
+
+.tn-cat-title {
+  margin: 0;
+  color: var(--text);
+  font-size: var(--fs-16);
+  font-weight: 650;
+  line-height: 1.2;
+  letter-spacing: -0.012em;
+}
+
+.tn-cat-kicker {
+  display: block;
+  margin-top: 2px;
+  overflow: hidden;
+  color: var(--text-3);
+  font-size: var(--fs-11);
+  letter-spacing: 0.02em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tn-cat-index {
+  flex: none;
+  color: var(--text-3);
+  font-family: var(--mono);
+  font-size: var(--fs-11);
+  letter-spacing: 0.04em;
+}
+
+/* Две новости блока делят тело карточки СТРОГО пополам: две равные строки
+   сетки. Разделитель — это border-top второй строки, поэтому он всегда стоит
+   точно по центру, а подсветка при наведении доходит до нижней кромки.
+   `minmax(auto, 1fr)` вместо жёсткого `1fr`: если текста (вопреки плашке
+   строки) окажется больше половины, строка вырастет, а не обрежет текст. */
+.tn-stories {
+  display: grid;
+  flex: 1 1 auto;
+  grid-template-rows: minmax(auto, 1fr) minmax(auto, 1fr);
+  min-height: 0;
+}
+
+.tn-story {
+  position: relative;
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) 14px;
+  align-content: start;
+  gap: 8px;
+  padding: 15px 18px 16px;
+  color: inherit;
+  text-decoration: none;
+  transition: background 0.18s ease;
+}
+
+.tn-story + .tn-story {
+  border-top: 1px solid var(--line);
+}
+
+/* Колонка рассказа: текст сверху, источник прижат к нижней кромке половины.
+   Так свободное место (когда текст короче плашки) оказывается между описанием и
+   источником, а не рваной дырой посреди текста. */
+.tn-story-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+/* Обе истории блока равны: один кегль заголовка и описания, разница только в
+   порядке и номере строки. Раньше первая была крупнее второй, и выпуск читался
+   как «одна новость плюс примечание». */
+.tn-lead .tn-story-headline,
+.tn-brief .tn-story-headline {
+  font-size: var(--fs-16);
+  line-height: 1.32;
+  letter-spacing: -0.01em;
+}
+
+.tn-lead .tn-story-summary,
+.tn-brief .tn-story-summary {
+  color: var(--text-2);
+  -webkit-line-clamp: 3;
+}
+
+.tn-story:hover .tn-story-headline {
+  color: var(--tn-accent);
+}
+
+.tn-story:hover {
+  background: rgba(255, 255, 255, 0.026);
+}
+
+.tn-story:focus-visible {
+  z-index: 1;
+  outline: 2px solid var(--accent-strong);
+  outline-offset: -2px;
+}
+
+.tn-rank {
+  padding-top: 3px;
+  color: var(--tn-accent);
+  font-family: var(--mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.tn-story-headline {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  /* Плашка в две строки: однострочный заголовок не «поднимает» описание, и
+     половины остаются равными. Ниже плашки остаётся небольшой воздух — он
+     ровно такой же, как у двухстрочного заголовка, который эту плашку
+     заполняет целиком. */
+  min-height: calc(2 * 1.34em);
+  margin: 0;
+  color: var(--text);
+  font-size: var(--fs-16);
+  font-weight: 600;
+  line-height: 1.34;
+  letter-spacing: -0.01em;
+  text-wrap: pretty;
+  transition: color 0.18s ease;
+}
+
+.tn-story:hover .tn-story-headline {
+  color: var(--tn-accent);
+}
+
+.tn-story-summary {
+  display: -webkit-box;
+  overflow: hidden;
+  margin: 7px 0 0;
+  color: var(--text-2);
+  font-size: var(--fs-13);
+  line-height: 1.5;
+  text-wrap: pretty;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  /* Описание — тоже плашка в две строки: столько же, сколько в подрезке текста
+     (см. newsCardSummary в app.js). Одна строка описания не сдвигает источник. */
+  min-height: calc(2 * 1.5em);
+}
+
+.tn-story-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  /* Прижимаем источник к низу половины: свободное место остаётся над ним. */
+  margin-top: auto;
+  padding-top: 9px;
+  color: var(--text-3);
+  font-size: var(--fs-11);
+}
+
+.tn-source {
+  color: var(--text-2);
+  font-weight: 600;
+}
+
+.tn-dot {
+  width: 2px;
+  height: 2px;
+  border-radius: 50%;
+  background: var(--text-3);
+}
+
+.tn-arrow {
+  margin-top: 4px;
+  color: var(--text-3);
+  opacity: 0;
+  transform: translate(-3px, 3px);
+  transition: opacity 0.18s ease, transform 0.18s ease, color 0.18s ease;
+}
+
+.tn-arrow svg {
+  display: block;
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.tn-story:hover .tn-arrow {
+  color: var(--tn-accent);
+  opacity: 1;
+  transform: none;
+}
+
+/* Монограмма источника вместо favicon: первая буква в квадрате тона блока.
+   Не грузит CDN и не выдаёт белые квадраты, пока иконка не пришла. */
+.tn-mark {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--tn-tint);
+  color: var(--tn-accent);
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+/* Скрытая подпись для скринридера: «Новость 1 из 2» рядом с визуальным
+   номером, который сам по себе ничего не объясняет. */
+.tn-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Блоки появляются мягко, но без fill-mode: иначе анимация удержала бы
+   transform:none и убила hover-подъём. */
+.tn-block {
+  animation: tn-rise 0.4s ease backwards;
+  animation-delay: calc(var(--i, 0) * 45ms);
+}
+
+@keyframes tn-rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+/* ------------------------------- пусто и загрузка ------------------------------- */
+
+.tn-empty {
+  padding: 56px 24px;
+  border: 1px dashed var(--line-strong);
+  border-radius: calc(var(--radius-lg) + 2px);
+  text-align: center;
+}
+
+.tn-empty-mark {
+  color: var(--text-3);
+  font-family: var(--mono);
+  font-size: var(--fs-12);
+  letter-spacing: 0.12em;
+}
+
+.tn-empty h2 {
+  margin: 10px 0 0;
+  color: var(--text);
+  font-size: var(--fs-19);
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+
+.tn-empty p {
+  max-width: 48ch;
+  margin: 8px auto 0;
+  color: var(--text-3);
+  font-size: var(--fs-13);
+  line-height: var(--lh-20);
+  text-wrap: pretty;
+}
+
+.tn-skeleton .tn-skel {
+  height: 286px;
+  border: 1px solid var(--line);
+  border-radius: calc(var(--radius-lg) + 2px);
+  background: linear-gradient(100deg, var(--layer-1) 22%, var(--layer-2) 42%, var(--layer-1) 62%);
+  background-size: 220% 100%;
+  animation: tn-shimmer 1.5s ease-in-out infinite;
+}
+
+@keyframes tn-shimmer {
+  to {
+    background-position: -220% 0;
+  }
+}
+
+/* Панель файлов может сузить колонку сильнее, чем окно: ориентируемся на
+   ширину самого раздела, а не только на media-запросы. */
+@container dash (max-width: 720px) {
+  .tn-title-row {
+    gap: 14px;
+  }
+
+  .tn-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tn-block,
+  .tn-skel,
+  .tn-pulse,
+  .tn-switch.busy .tn-switch-thumb {
+    animation: none;
+  }
+
+  .tn-block,
+  .tn-story,
+  .tn-arrow,
+  .tn-switch,
+  .tn-switch-track,
+  .tn-switch-thumb {
+    transition: none;
+  }
+
+  .tn-block:hover,
+  .tn-story:hover {
+    transform: none;
+  }
+}
+
+/* ------------------------------- светлая тема ------------------------------- */
+
+[data-theme="light"] .tn-block {
+  background:
+    radial-gradient(120% 90% at 100% 0%, var(--tn-tint), transparent 58%),
+    linear-gradient(180deg, #ffffff, #fbfbfc);
+}
+
+[data-theme="light"] .tn-block:hover {
+  box-shadow: 0 12px 26px rgba(17, 24, 39, 0.07);
+}
+
+[data-theme="light"] .tn-story:hover {
+  background: rgba(17, 24, 39, 0.024);
+}
+
+[data-theme="light"] .tn-off {
+  background:
+    radial-gradient(90% 120% at 0% 0%, rgba(154, 107, 22, 0.07), transparent 52%),
+    var(--layer-1);
+}
+
+[data-theme="light"] .tn-tone-gold {
+  --tn-accent: #9a6b16;
+  --tn-tint: rgba(154, 107, 22, 0.08);
+}
+
+[data-theme="light"] .tn-tone-blue {
+  --tn-accent: #2456b8;
+  --tn-tint: rgba(36, 86, 184, 0.07);
+}
+
+[data-theme="light"] .tn-tone-green {
+  --tn-accent: #157a4b;
+  --tn-tint: rgba(21, 122, 75, 0.07);
+}
+
+[data-theme="light"] .tn-tone-violet {
+  --tn-accent: #6544c4;
+  --tn-tint: rgba(101, 68, 196, 0.07);
+}
+
+[data-theme="light"] .tn-tone-sky {
+  --tn-accent: #0b6b8a;
+  --tn-tint: rgba(11, 107, 138, 0.07);
+}
+
+[data-theme="light"] .tn-tone-rose {
+  --tn-accent: #a12a4b;
+  --tn-tint: rgba(161, 42, 75, 0.07);
+}
+
+/* ------------------------------- узкие экраны ------------------------------- */
+
+@media (max-width: 900px) {
+  .tn-off {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 20px;
+  }
+
+  .tn-off-art {
+    width: min(280px, 100%);
+    aspect-ratio: 1.35 / 0.82;
+  }
+}
+
+@media (max-width: 760px) {
+  .tn-title-row {
+    gap: 14px;
+  }
+
+  .tn-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .tn-title {
+    font-size: clamp(36px, 10vw, 46px);
+  }
+}
+
+@media (max-width: 520px) {
+  .tn-hero {
+    padding-bottom: 16px;
+  }
+
+  .tn-sub {
+    margin-top: 9px;
+    font-size: var(--fs-13);
+  }
+
+  .tn-off {
+    padding: 16px;
+  }
+
+  .tn-off-art {
+    width: 100%;
+    aspect-ratio: 1.55 / 0.82;
+  }
+
+  .tn-off-copy h2 {
+    font-size: var(--fs-19);
+  }
+
+  .tn-off-actions {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .tn-enable {
+    width: 100%;
+  }
+
+  .tn-block-head {
+    padding: 14px 14px 12px;
+  }
+
+  .tn-story {
+    grid-template-columns: 22px minmax(0, 1fr);
+    padding: 14px;
+  }
+
+  .tn-arrow {
+    display: none;
+  }
+
+  /* Кегль заголовка общий для обеих историй — он задан выше и здесь не
+     меняется; на узком экране сокращаем только описание. */
+  .tn-story-summary {
+    font-size: var(--fs-12);
+    -webkit-line-clamp: 4;
+  }
+
+  /* В одну колонку карточка не растягивается до высоты строки сетки, поэтому
+     плашка в две строки тут не нужна: на узком экране отдаём заголовку до
+     четырёх строк, чтобы он не обрывался на полуслове. */
+  .tn-story-headline {
+    -webkit-line-clamp: 4;
   }
 }
 
@@ -9901,5 +11927,202 @@ html.compact-input .empty-title {
     flex: 1 1 auto;
     height: 38px;
     font-size: var(--fs-12);
+  }
+}
+
+/* Значок «Мой блок»: только у своих блоков на карточке дашборда и в выпуске —
+   по нему видно, что добавлено лично. Блоки основы значков не носят. */
+.personal-badge {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--layer-2);
+  color: var(--text-4);
+  font-size: var(--fs-11);
+  font-weight: 650;
+  letter-spacing: 0.015em;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.personal-badge.is-own {
+  border-color: rgba(86, 134, 254, 0.35);
+  background: rgba(86, 134, 254, 0.12);
+  color: var(--accent-strong);
+}
+
+/* В шапке темы выпуска значок идёт отдельной строкой под подзаголовком. */
+.tn-cat-copy .personal-badge {
+  margin-top: 6px;
+}
+
+/* Пояснение внизу окна: «это личное, основа не меняется». Пунктирная рамка —
+   чтобы читалось как сноска, а не как ошибка формы. */
+.personal-note {
+  margin: 4px 0 0;
+  padding: 9px 11px;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--layer-1);
+  color: var(--text-3);
+  font-size: var(--fs-12);
+  line-height: var(--lh-18);
+  text-wrap: pretty;
+}
+
+/* Свой блок в сетке дашборда: синий значок и такая же спокойная рамка. Основа
+   узнаётся по цветным значкам, свои блоки — по этому. */
+.dash-ico-own {
+  background: rgba(86, 134, 254, 0.14);
+  color: var(--accent-strong);
+}
+
+.dash-own-btn {
+  gap: 6px;
+}
+
+.dash-own-btn svg {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.dash-card-own {
+  border-color: rgba(86, 134, 254, 0.28);
+}
+
+.dash-card-own:hover {
+  border-color: rgba(86, 134, 254, 0.45);
+}
+
+/* Своя тема в выпуске: кнопка в шапке и сама карточка. */
+.tn-own-btn {
+  height: 28px;
+  margin-left: auto;
+  gap: 6px;
+  padding: 0 10px;
+  font-size: var(--fs-12);
+  white-space: nowrap;
+}
+
+.tn-own-btn svg {
+  width: 13px;
+  height: 13px;
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* Верхняя акцентная полоса у своей темы чуть плотнее: карточка должна
+   отличаться от основы, но не ярче её. */
+.tn-block-own::before {
+  opacity: 1;
+}
+
+.tn-own-del {
+  width: 28px;
+  height: 28px;
+  color: var(--text-4);
+}
+
+.tn-own-del svg {
+  width: 15px;
+  height: 15px;
+}
+
+.tn-own-del:hover:not(:disabled) {
+  background: var(--layer-hover);
+  color: var(--danger);
+}
+
+/* Состояние своей темы: «собираем» и «ничего не нашлось» — одной строкой, без
+   скелетов-заглушек. Это честный ответ, а не сломанный блок. */
+.tn-own-state {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 8px;
+  padding: 22px 18px 24px;
+  color: var(--text-3);
+  font-size: var(--fs-13);
+  line-height: var(--lh-20);
+}
+
+/* Тост с действием: кнопка «Отменить» справа от текста. Отступ справа меньше,
+   потому что кнопка уже несёт свою рамку. */
+.toast.has-action {
+  align-items: center;
+  padding-right: 10px;
+}
+
+.toast-text {
+  min-width: 0;
+}
+
+.toast-action {
+  flex: none;
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--layer-3);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--fs-12);
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.toast-action:hover:not(:disabled) {
+  background: var(--layer-hover);
+}
+
+.toast-action:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+@container dash (max-width: 560px) {
+  /* Кнопок в шапке стало четыре («Свой блок», «Вернуть удалённые»,
+     «Включить всё», обновление). На телефоне ряд переносится под заголовок
+     целиком: иначе он вылезал бы за правый край. */
+  .dash-head {
+    flex-wrap: wrap;
+  }
+
+  .dash-head-actions {
+    flex: 1 1 100%;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+  }
+
+  .tn-own-btn {
+    margin-left: 0;
+  }
+
+  .tn-own-state {
+    padding: 18px 14px 20px;
+  }
+}
+
+/* Тосты живут в корне страницы, вне раздела, поэтому здесь — ширина окна. */
+@media (max-width: 560px) {
+  .toast.has-action {
+    flex-wrap: wrap;
+  }
+
+  .toast-action {
+    margin-left: auto;
   }
 }

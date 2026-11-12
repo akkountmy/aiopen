@@ -172,6 +172,17 @@
               <svg class="dash-btn-ico" viewBox="0 0 20 20" aria-hidden="true"><rect x="3.2" y="3.2" width="5.6" height="5.6" rx="1.5" /><rect x="11.2" y="3.2" width="5.6" height="5.6" rx="1.5" /><rect x="3.2" y="11.2" width="5.6" height="5.6" rx="1.5" /><rect x="11.2" y="11.2" width="5.6" height="5.6" rx="1.5" /></svg>
               <span class="dash-btn-label">Дашборд</span>
             </button>
+            <!-- Top news — второй экран-раздел той же природы, что и «Дашборд»:
+                 кнопка-значок в шапке и экран на месте диалога. Значок — газета,
+                 а не самолётик: раздел про утренний выпуск, а не про мессенджер. -->
+            <button id="newsBtn" class="btn btn-ghost dash-btn" type="button" title="Top news: две главные новости в каждой теме" aria-label="Top news" aria-pressed="false">
+              <svg class="dash-btn-ico" viewBox="0 0 20 20" aria-hidden="true">
+                <path d="M4 4.4h8.8v11.2H4z" />
+                <path d="M12.8 7.3H16v8.3H4.8" />
+                <path d="M6.2 7.2h4.4M6.2 9.7h4.4M6.2 12.2h3" />
+              </svg>
+              <span class="dash-btn-label">Top news</span>
+            </button>
             <button id="themeToggle" class="btn btn-ghost btn-icon theme-toggle" type="button" title="Светлая тема" aria-label="Переключить тему">
               <svg class="icon-moon" viewBox="0 0 20 20" aria-hidden="true"><path d="M16 11.5A6.5 6.5 0 018.5 4a6.5 6.5 0 107.5 7.5z" /></svg>
               <svg class="icon-sun hidden" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="3.6" /><path d="M10 2v1.8M10 16.2V18M2 10h1.8M16.2 10H18M4.3 4.3l1.3 1.3M14.4 14.4l1.3 1.3M15.7 4.3l-1.3 1.3M5.6 14.4l-1.3 1.3" /></svg>
@@ -200,6 +211,10 @@
                   <p class="dash-sub">Законы, налоги, деньги компании, кадры, закупки и рынок. Агент сам готовит отчёт по расписанию — в отдельном диалоге, с файлами.</p>
                 </div>
                 <div class="dash-head-actions">
+                  <button id="dashAddOwn" class="btn btn-quiet dash-all-btn dash-own-btn" type="button" title="Добавить свой блок в дашборд" aria-label="Добавить свой блок в дашборд">
+                    <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4.75v10.5M4.75 10h10.5" /></svg>
+                    Свой блок
+                  </button>
                   <button id="dashRestore" class="btn btn-quiet dash-all-btn hidden" type="button">Вернуть удалённые</button>
                   <button id="dashEnableAll" class="btn btn-quiet dash-all-btn" type="button">Включить всё</button>
                   <button id="dashRefresh" class="btn btn-ghost btn-icon" type="button" title="Обновить" aria-label="Обновить">
@@ -209,11 +224,81 @@
               </header>
               <div id="dashNotice" class="dash-notice hidden" role="status"></div>
               <div id="dashGrid" class="dash-grid" aria-busy="true"></div>
-              <p class="dash-foot">
-                Отчёт создаётся в проекте, выбранном в настройках задания (по умолчанию — первый проект).
-                Каждый запуск расходует баланс так же, как обычный запрос. Запуски, пропущенные из-за простоя
-                сервиса, не догоняются — следующее сработает по расписанию.
-              </p>
+            </div>
+          </div>
+        </section>
+
+        <!-- --------------------------------- top news -------------------------------
+             Утренний выпуск: шесть тем, по две главные новости. Тот же каркас, что у
+             дашборда: экран занимает место диалога, пока он открыт (см. .app.news-open
+             в styles.css). Ничего лишнего и никакого ручного обновления: выпуск
+             собирает сервер, а экран только показывает готовое. -->
+        <section id="newsView" class="dash tn-view hidden" aria-label="Top news">
+          <div class="dash-scroll">
+            <div class="dash-inner tn-inner">
+              <header class="tn-hero">
+                <div class="tn-hero-top">
+                  <span class="tn-eyebrow">Утренний выпуск</span>
+                  <span id="newsDate" class="tn-date"></span>
+                </div>
+                <div class="tn-hero-main">
+                  <div class="tn-hero-copy">
+                    <!-- Тумблер стоит справа от надписи и говорит сам за себя:
+                         подписи «TOP NEWS · Включено» рядом нет — состояние видно
+                         по дорожке. Текст состояния нужен только скринридеру. -->
+                    <div class="tn-title-row">
+                      <h1 class="tn-title">Top news</h1>
+                      <label class="tn-switch" for="newsToggle" title="Включить или выключить Top news">
+                        <input id="newsToggle" class="tn-switch-input" type="checkbox" role="switch" aria-label="Включить Top news" />
+                        <span class="tn-switch-track" aria-hidden="true"><span class="tn-switch-thumb"></span></span>
+                      </label>
+                      <span id="newsSwitchText" class="tn-sr" role="status">Выключено</span>
+                    </div>
+                    <p class="tn-sub">Две главные новости в каждой теме. Один выпуск, без лишнего шума.</p>
+                  </div>
+                </div>
+                <div id="newsMeta" class="tn-hero-meta hidden">
+                  <span id="newsBuilding" class="tn-building hidden" role="status"><span class="tn-pulse" aria-hidden="true"></span>Собираем выпуск…</span>
+                  <!-- Своя тема — рядом со временем выпуска, справа: это действие
+                       выпуска, а не его состояние. Видна только когда выпуск включён. -->
+                  <button id="newsOwnTopic" class="btn btn-quiet tn-own-btn hidden" type="button" title="Своя тема в выпуске" aria-label="Добавить свою тему в выпуск">
+                    <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4.75v10.5M4.75 10h10.5" /></svg>
+                    Своя тема
+                  </button>
+                </div>
+              </header>
+
+              <div id="newsNotice" class="dash-notice hidden" role="status"></div>
+
+              <div id="newsOff" class="tn-off hidden">
+                <div class="tn-off-art" aria-hidden="true">
+                  <span class="tn-off-mark">07:00</span>
+                  <span class="tn-off-rule"></span>
+                  <span class="tn-off-rule"></span>
+                  <span class="tn-off-rule short"></span>
+                </div>
+                <div class="tn-off-copy">
+                  <span class="tn-off-kicker">Шесть тем · двенадцать историй</span>
+                  <h2>Спокойная сводка вместо бесконечной прокрутки</h2>
+                  <p>Главное, мир, экономика, технологии, Телеграм и соцсети. В каждой теме — две новости, которые действительно важны.</p>
+                  <div class="tn-off-actions">
+                    <button id="newsEnable" class="btn btn-primary tn-enable" type="button">Включить Top news</button>
+                  </div>
+                </div>
+                <div id="newsTopics" class="tn-topics" aria-hidden="true"></div>
+              </div>
+
+              <div id="newsBody" class="tn-body hidden">
+                <div id="newsGrid" class="tn-grid" aria-live="polite"></div>
+              </div>
+
+              <div id="newsEmpty" class="tn-empty hidden">
+                <span class="tn-empty-mark" aria-hidden="true">07:00</span>
+                <h2 id="newsEmptyTitle">Выпуск пока пуст</h2>
+                <p id="newsEmptyText">Появится здесь в 07:00 по Минску.</p>
+              </div>
+
+              <div id="newsSkeleton" class="tn-grid tn-skeleton hidden" aria-hidden="true"></div>
             </div>
           </div>
         </section>
@@ -371,6 +456,27 @@
           <span class="files-drop-note">или перетащите файлы с компьютера</span>
         </div>
         <div id="filesList" class="files-list"></div>
+        <!-- Прослушивание MP3 — внизу панели, а не отдельным окном: полоса
+             управления стоит последней в колонке, поэтому список файлов
+             прокручивается под ней, а она остаётся на месте. Ширину полоса не
+             задаёт: она в потоке панели, поэтому разделитель слева тянет и её.
+             Появляется, когда запись включили, и сворачивается крестиком. -->
+        <div id="filesAudio" class="files-audio hidden" aria-hidden="true" aria-label="Прослушивание">
+          <div class="files-audio-head">
+            <span class="files-audio-art" aria-hidden="true">
+              <svg viewBox="0 0 20 20"><path d="M12.6 3.4v8.9a2.6 2.6 0 11-1.5-2.36V5.6L6.5 6.7v6.6a2.6 2.6 0 11-1.5-2.36V4.5z" /></svg>
+            </span>
+            <span class="files-audio-meta">
+              <span id="filesAudioTitle" class="files-audio-title"></span>
+              <span id="filesAudioSub" class="files-audio-sub">MP3</span>
+            </span>
+            <span class="files-audio-wave" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
+            <button id="filesAudioClose" class="files-audio-close" type="button" title="Свернуть прослушивание" aria-label="Свернуть прослушивание">
+              <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M6.4 6.4l7.2 7.2M13.6 6.4l-7.2 7.2" /></svg>
+            </button>
+          </div>
+          <div id="filesAudioMount" class="files-audio-mount"></div>
+        </div>
         <div id="filesDropHint" class="files-drop-hint" aria-hidden="true">Отпустите, чтобы добавить в проект</div>
       </aside>
       <!-- Одноразовая подсказка про свайпы: две шторки выглядывают из краёв и

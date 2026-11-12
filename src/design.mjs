@@ -461,6 +461,9 @@ export function writeSpec(workspace, raw) {
    Вывод генератора забираем файлами, а не трубой: в узком окружении труба
    между процессами запрещена и запуск падает с EPERM — а чертёж нужен и там. */
 let scriptSeq = 0;
+/* Последняя сборка по проекту: панель после обрыва соединения может спросить
+   GET /design и увидеть не только файлы, но и причину, почему листа нет. */
+const LAST_BUILDS = new Map();
 
 function runScript(workspace, script, args, timeout) {
   const started = Date.now();
@@ -592,8 +595,16 @@ export async function buildArtifacts(workspace, { only = null, timeout = LIMITS.
       bytes,
       ms: run.ms,
       error: run.ok ? (bytes > 0 ? '' : 'генератор отчитался, но файл пустой') : run.error,
+      detail: run.ok ? '' : String(run.stderr || run.stdout || '').trim().slice(-500),
     });
   }
+  LAST_BUILDS.set(workspace, {
+    at: new Date().toISOString(),
+    only: wanted ? [...wanted] : null,
+    results,
+    ms: Date.now() - started,
+  });
+  if (LAST_BUILDS.size > 80) LAST_BUILDS.delete(LAST_BUILDS.keys().next().value);
   return results;
 }
 
@@ -634,6 +645,7 @@ export function designView(workspace) {
     fixes,
     error,
     artifacts,
+    lastBuild: LAST_BUILDS.get(path.resolve(workspace)) || null,
     /* «Комнаты» в ответе — жилые, а не все помещения: иначе 4-комнатная
        квартира с кухней-гостиной, коридором и санузлом называлась
        «7 комнат». Отдельно отдаём число помещений для подписи в панели. */

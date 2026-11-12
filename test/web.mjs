@@ -164,27 +164,27 @@ test('scrape_page работает через инструмент', async () =>
   assert.equal(JSON.parse(json.text.slice(json.text.indexOf('{'))).price, 'Объём рынка');
 });
 
-test('extractReadable: вложенные списки, mailto и абсолютные картинки', () => {
+test('extractReadable: вложенные списки, mailto и абсолютные картинки', async () => {
   const html = `<!doctype html><html lang="ru"><head><title>Контакты</title></head><body><main><article>
     <h1>Контакты</h1><p>${'Текст статьи. '.repeat(40)}</p>
     <ul><li>Отдел продаж<ul><li>Москва</li><li>Казань</li></ul></li></ul>
     <p>Почта: <a href="mailto:sales@example.com">sales@example.com</a></p>
     <img src="/logo.png" alt="Логотип">
   </article></main></body></html>`;
-  const out = extractReadable(html, 'https://example.com/contacts');
+  const out = await extractReadable(html, 'https://example.com/contacts');
   assert.match(out.markdown, /\n\s+- +Москва/);
   assert.match(out.markdown, /mailto:sales@example\.com/);
   assert.match(out.markdown, /!\[Логотип\]\(https:\/\/example\.com\/logo\.png\)/);
   assert.ok(out.links.some((link) => link.href === 'mailto:sales@example.com'));
 });
 
-test('extractReadable: <base href> и ленивые картинки', () => {
+test('extractReadable: <base href> и ленивые картинки', async () => {
   const html = `<!doctype html><html><head><base href="https://cdn.example/assets/"><title>База</title></head>
     <body><main><article><h1>База</h1><p>${'Текст статьи. '.repeat(40)}</p>
     <a href="page.html">Страница</a>
     <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==" data-src="lazy.jpg" alt="Ленивая">
     </article></main></body></html>`;
-  const out = extractReadable(html, 'https://site.example/news/1');
+  const out = await extractReadable(html, 'https://site.example/news/1');
   assert.ok(out.links.some((link) => link.href === 'https://cdn.example/assets/page.html'));
   assert.match(out.markdown, /!\[Ленивая\]\(https:\/\/cdn\.example\/assets\/lazy\.jpg\)/);
 });

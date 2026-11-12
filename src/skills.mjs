@@ -21,8 +21,14 @@ export const SKILLS_DIR = path.join(ROOT, 'skills');
  * Держим 24000 как запас, а при обрезке показываем размер, чтобы дефект был
  * виден. Результат use_skill в подсказке не сжимается (skipTools в trim.mjs),
  * поэтому длина тела — это стоимость вызова; платим только при открытии навыка.
+ *
+ * 34000 (10.11.2026): вместе с PM-навыками пришли длинные: humanizer 32453,
+ * company-intel 31143, intelligence-collection-disciplines 25482. Резать их на
+ * 24000 значило отрубить хвост с проверкой и сдачей, поэтому подняли потолок под
+ * самый длинный. Тест catalog.mjs держит max < потолка, чтобы рост снова не
+ * проскочил молча.
  */
-export const SKILL_BODY_CHARS = 24000;
+export const SKILL_BODY_CHARS = 34000;
 
 let cache = null;
 
@@ -160,7 +166,7 @@ export function skillsPromptText() {
   if (!all.length) return '';
   const lines = ['Доступные навыки (полную инструкцию открывает инструмент use_skill):', ...catalogLines()];
   lines.push(
-    'Перед ответственной работой по теме навыка (документ, таблица, презентация, PDF, сайт, анализ большого файла, аудит финансов, бизнес-план, ресёрч интернета) сначала вызови use_skill с его id и следуй инструкции.',
+    'Перед ответственной работой по теме навыка (документ, таблица, презентация, PDF, сайт, анализ большого файла, аудит финансов, бизнес-план, ресёрч интернета) сначала вызови use_skill с его id и следуй инструкции. Если инструкция называет файл рядом с навыком (template.md, examples/…), открой его тем же use_skill с полем file.',
     'Структуру ответа в диалоге (разбор, сравнение, план, инструкция, риски) открывай по answer-structure, наглядность (таблица, матрица, таймлайн, воронка, чек-лист) — по answer-visuals.',
   );
   return lines.join('\n');
@@ -180,4 +186,64 @@ export function skillBody(id) {
       ? `${skill.body.slice(0, SKILL_BODY_CHARS)}\n\n(инструкция обрезана: показано ${SKILL_BODY_CHARS} из ${skill.body.length} знаков, хвост с проверкой и сдачей не показан — недостающее уточни у пользователя или в файлах проекта)`
       : skill.body;
   return { ok: true, id: skill.id, name: skill.name, text: `Навык «${skill.id}» — ${skill.name}\n\n${body}` };
+}
+
+/** Сколько знаков файла рядом с навыком отдаём модели. */
+export const SKILL_FILE_CHARS = 20000;
+
+/**
+ * Файлы рядом с навыком: шаблоны, примеры, скрипты.
+ *
+ * Часть навыков ссылается на `template.md` и `examples/sample.md`, лежащие в их
+ * папке. В отличие от рабочей папки человека, эти файлы не видны обычному
+ * чтению проекта, поэтому их отдаёт тот же use_skill — иначе ссылка в
+ * инструкции обрывается, и модель придумывает структуру заново.
+ */
+export function skillFiles(id) {
+  const skill = getSkill(id);
+  if (!skill) return [];
+  const base = path.join(SKILLS_DIR, skill.id);
+  const out = [];
+  const walk = (dir, prefix) => {
+    let entries = [];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) walk(path.join(dir, entry.name), rel);
+      else if (rel !== 'SKILL.md') out.push(rel);
+    }
+  };
+  walk(base, '');
+  return out.sort();
+}
+
+/** Текстовый файл из папки навыка: только внутри неё и только чтение. */
+export function skillFile(id, relName) {
+  const skill = getSkill(id);
+  if (!skill) {
+    return { ok: false, text: `Навык «${id}» не найден. Доступны: ${skillIds().join(', ') || 'пока нет'}.` };
+  }
+  const wanted = String(relName || '').replace(/\\/g, '/').replace(/^\.\//, '').trim();
+  const files = skillFiles(skill.id);
+  if (!wanted) {
+    return { ok: false, text: `Укажи файл навыка «${skill.id}». Рядом лежат: ${files.join(', ') || 'файлов нет'}.` };
+  }
+  const base = path.join(SKILLS_DIR, skill.id);
+  const full = path.resolve(base, wanted);
+  if (full !== base && !full.startsWith(base + path.sep)) {
+    return { ok: false, text: `Файл берётся только из папки навыка «${skill.id}», а не «${wanted}».` };
+  }
+  if (!fs.existsSync(full) || !fs.statSync(full).isFile()) {
+    return { ok: false, text: `Файла «${wanted}» у навыка «${skill.id}» нет. Есть: ${files.join(', ') || 'файлов нет'}.` };
+  }
+  const raw = fs.readFileSync(full, 'utf8');
+  const text =
+    raw.length > SKILL_FILE_CHARS
+      ? `${raw.slice(0, SKILL_FILE_CHARS)}\n\n(файл обрезан: показано ${SKILL_FILE_CHARS} из ${raw.length} знаков)`
+      : raw;
+  return { ok: true, id: skill.id, file: wanted, text: `Файл ${wanted} навыка «${skill.id}»\n\n${text}` };
 }

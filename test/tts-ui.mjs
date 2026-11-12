@@ -470,7 +470,8 @@ try {
         })()`);
         wordName ? ok('рядом Word с текстом', wordName.slice(0, 60)) : fail('Word рядом с озвучкой', 'не найдено');
 
-        /* 6. Готовый звук открывается в окне просмотра и играет там. */
+        /* 6. Готовый звук слушается внизу панели файлов: нажатие по строке поднимает
+           полосу прослушивания, а не открывает отдельное окно. */
         await evaluate(`document.querySelector('#modalRoot .modal.tts-modal .modal-close').click()`);
         await waitFor(`!document.querySelector('#modalRoot .modal')`, 4000);
         /* Как именно открывается файл, зависит от ввода: на тач-экране — тап,
@@ -486,30 +487,39 @@ try {
             return true;
           })()`);
         await press('click');
-        let previewOpen = await waitFor(`!!document.querySelector('#modalRoot .modal.file-preview-modal')`, 5000);
-        if (!previewOpen) {
+        let barShown = await waitFor(`(() => {
+          const bar = document.getElementById('filesAudio');
+          return !!bar && !bar.classList.contains('hidden') && !!bar.querySelector('.audio-bar');
+        })()`, 5000);
+        if (!barShown) {
           await press('dblclick');
-          previewOpen = await waitFor(`!!document.querySelector('#modalRoot .modal.file-preview-modal')`, 8000);
+          barShown = await waitFor(`(() => {
+            const bar = document.getElementById('filesAudio');
+            return !!bar && !bar.classList.contains('hidden') && !!bar.querySelector('.audio-bar');
+          })()`, 8000);
         }
-        if (!previewOpen) fail('просмотр звука', 'окно не открылось');
+        if (!barShown) fail('прослушивание звука', 'полоса внизу панели не поднялась');
         else {
           await sleep(600);
           const audio = await evaluate(`(() => {
-            const modal = document.querySelector('#modalRoot .modal.file-preview-modal');
-            const player = modal.querySelector('audio.audio-preview');
-            const badge = modal.querySelector('.pv-badge');
+            const bar = document.getElementById('filesAudio');
+            const panel = document.getElementById('filesPanel');
+            const row = bar.querySelector('.audio-bar');
+            const dock = document.querySelector('body > audio');
+            const title = (document.getElementById('filesAudioTitle')?.textContent || '').trim();
             return {
-              kind: modal.className,
-              hasPlayer: Boolean(player),
-              controls: player ? player.controls : false,
-              src: player ? player.getAttribute('src') : '',
-              badge: badge ? badge.textContent.trim() : '',
-              w: Math.round(modal.getBoundingClientRect().width),
+              insidePanel: panel.contains(bar),
+              widthMatch: Math.abs(bar.getBoundingClientRect().width - panel.getBoundingClientRect().width) <= 1,
+              rowsFits: row.scrollWidth <= row.clientWidth + 1,
+              title,
+              mp3: dock ? /\\.mp3/.test(dock.getAttribute('src') || '') : false,
+              audios: document.querySelectorAll('audio').length,
+              modal: !!document.querySelector('#modalRoot .modal.file-preview-modal'),
             };
           })()`);
-          audio.hasPlayer && audio.controls && /pv-kind-audio/.test(audio.kind) && /\.mp3/.test(audio.src)
-            ? ok('звук открылся в своём плеере', `${audio.w}px, ${audio.badge}`)
-            : fail('просмотр звука', JSON.stringify(audio));
+          audio.insidePanel && audio.widthMatch && audio.title && audio.mp3 && audio.audios === 1 && !audio.modal
+            ? ok('звук слушается в полосе внизу панели файлов', audio.title.slice(0, 40))
+            : fail('прослушивание звука', JSON.stringify(audio));
           await shot('tts-390-preview.png');
         }
       }
@@ -526,7 +536,11 @@ try {
 } finally {
   chrome.kill();
   await sleep(400);
-  fs.rmSync(profileDir, { recursive: true, force: true });
+  /* Chrome на Windows иногда держит профиль ещё пару секунд: жёсткий rmSync
+     ронял прогон кодом 1 уже после всех проверок. */
+  try {
+    fs.rmSync(profileDir, { recursive: true, force: true, maxRetries: 20, retryDelay: 200 });
+  } catch { /* уборка не должна портить результат проверки */ }
 }
 
 const failed = results.filter((value) => !value).length;

@@ -5,6 +5,17 @@ data
 exports
 .tmp
 temp
+.preview-data*
+.preview-data2
+tmp
+.tts-probe
+.dsh-vision-router
+.tmp-relay
+backups
+.env
+.env.*
+*.pem
+*.key
 .git
 .gitignore
 .dockerignore

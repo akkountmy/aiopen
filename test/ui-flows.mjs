@@ -19,7 +19,10 @@ const PASS = process.env.DSHOW_PASS || 'Test-pass-2026';
 const STAMP = Date.now().toString().slice(-6);
 const NEW_USER = `flow_${STAMP}`;
 const NEW_PASS = 'Flow-pass-2026';
-const FILE_NAME = `flows-${STAMP}.txt`;
+/* Имя нарочно «человеческое»: service прячет из панели имена вида
+   flows-123456.txt — это следы автопроверок (см. TEST_ARTIFACT в src/tools.mjs),
+   и такой файл не появится в списке, даже если загрузка прошла. */
+const FILE_NAME = `проверка-${STAMP}.txt`;
 const DOCX_NAME = `office-${STAMP}.docx`;
 const XLSX_NAME = `sheet-${STAMP}.xlsx`;
 const HTML_NAME = `page-${STAMP}.html`;
@@ -139,6 +142,11 @@ try {
 
   let loaded = false;
   const consoleErrors = [];
+  /* Журнал загрузок: если файл не появился в панели, в отчёте видно, ушёл ли
+     запрос, с каким путём и что ответил сервер. */
+  const uploadLog = [];
+  /* Журнал запросов дерева: панель могла нарисовать ответ, где файла ещё нет. */
+  const filesLog = [];
   cdp.on((msg) => {
     if (msg.method === 'Page.loadEventFired') loaded = true;
     if (msg.method === 'Runtime.exceptionThrown') {
@@ -146,6 +154,15 @@ try {
     }
     if (msg.method === 'Runtime.consoleAPICalled' && msg.params.type === 'error') {
       consoleErrors.push(msg.params.args.map((a) => a.value ?? a.description ?? '').join(' '));
+    }
+    if (msg.method === 'Network.requestWillBeSent' && msg.params.request.url.includes('/upload')) {
+      uploadLog.push({ url: msg.params.request.url, chat: msg.params.request.headers['X-Chat-Id'] || '' });
+    }
+    if (msg.method === 'Network.responseReceived' && msg.params.response.url.includes('/upload')) {
+      uploadLog.push({ status: msg.params.response.status, url: msg.params.response.url });
+    }
+    if (msg.method === 'Network.responseReceived' && msg.params.response.url.includes('/files?')) {
+      filesLog.push({ requestId: msg.params.requestId, status: msg.params.response.status, url: msg.params.response.url });
     }
   });
 
@@ -540,8 +557,48 @@ try {
     await sleep(800);
 
     await setInputFile('#filesPanelInput', FILE_NAME, 'проверка файлов');
-    const uploaded = await waitFor(`[...document.querySelectorAll('.file-row .f-name')].some(n => n.textContent === ${JSON.stringify(FILE_NAME)})`, 10000);
-    uploaded ? ok('файл загружен в проект') : fail('загрузка файла', await text('#filesList'));
+    let uploaded = await waitFor(`[...document.querySelectorAll('.file-row .f-name')].some(n => n.textContent === ${JSON.stringify(FILE_NAME)})`, 10000);
+    if (!uploaded) {
+      /* Разбор: сервер уже знает файл, а панель его не показала — значит дело в
+         перерисовке. Жмём проект ещё раз (то есть просим панель заново) и
+         сверяем с ответом API. */
+      const projectId = ((uploadLog.find((entry) => entry.url && entry.url.includes('/upload')) || {}).url || '')
+        .replace(/^.*\/api\/projects\/([^/]+)\/upload.*$/, '$1');
+      const truth = await evaluate(`(async () => {
+        const res = await fetch('/api/projects/' + ${JSON.stringify(projectId)} + '/files?path=.&depth=6');
+        const data = await res.json();
+        return (data.items || []).map((item) => item.path);
+      })()`);
+      await evaluate(`(() => {
+        const mine = [...document.querySelectorAll('.project-row')].find((node) => node.textContent.includes(${JSON.stringify(`Проект ${STAMP} 2`)}));
+        if (mine) mine.click();
+        return true;
+      })()`);
+      await sleep(1500);
+      uploaded = await waitFor(`[...document.querySelectorAll('.file-row .f-name')].some(n => n.textContent === ${JSON.stringify(FILE_NAME)})`, 6000);
+      if (uploaded) console.log('  ..  файл появился только после повторного обновления панели');
+      else {
+        const lastFilesRequest = filesLog[filesLog.length - 1];
+        let panelBody = '';
+        if (lastFilesRequest) {
+          try {
+            panelBody = (await cdp.send('Network.getResponseBody', { requestId: lastFilesRequest.requestId })).body;
+          } catch (error) {
+            panelBody = `тело недоступно: ${error.message}`;
+          }
+        }
+        fail('загрузка файла', JSON.stringify({
+          list: await text('#filesList'),
+          rows: await count('#filesList .file-row'),
+          note: await text('#filesNote'),
+          serverFiles: truth,
+          panelRequest: lastFilesRequest ? lastFilesRequest.url.replace(/^.*\/api\//, '/api/') : '',
+          panelBody: panelBody.slice(0, 500),
+          uploads: uploadLog.slice(-4),
+        }));
+      }
+    }
+    if (uploaded) ok('файл загружен в проект');
     if (uploaded) {
       const eyeCount = await evaluate(`document.querySelectorAll('.file-preview-btn').length`);
       eyeCount === 0

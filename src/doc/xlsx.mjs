@@ -5,9 +5,26 @@
  * закреплённые шапки, автофильтр, условное форматирование, оформление таблиц,
  * настройки печати и настоящие объекты-диаграммы внутри книги.
  */
-import ExcelJS from 'exceljs';
 import { COLORS, toList } from './theme.mjs';
 import { injectCharts } from './xlsx-chart.mjs';
+
+/* ExcelJS тянет за собой десятки пакетов (jszip, archiver, fast-csv, es-abstract).
+   Статический импорт стоил 5–7 секунд холодного старта сервиса, хотя книга
+   нужна только когда её действительно собирают. */
+let excelPromise = null;
+
+function loadExcelJs() {
+  if (!excelPromise) {
+    excelPromise = import('exceljs')
+      .then((mod) => mod.default || mod)
+      .catch((error) => {
+        /* Один сбойный импорт не должен ломать процесс навсегда. */
+        excelPromise = null;
+        throw error;
+      });
+  }
+  return excelPromise;
+}
 
 const argb = (value) => `FF${String(value).replace(/^#/, '').toUpperCase()}`;
 const thin = { style: 'thin', color: { argb: argb(COLORS.hairline) } };
@@ -286,6 +303,7 @@ const quoteSheet = (name) => `'${String(name || 'Лист 1').replace(/'/g, "''"
 export async function buildXlsxPro(spec = {}) {
   const sheets = Array.isArray(spec.sheets) ? spec.sheets : [];
   if (!sheets.length) throw new Error('Нужен хотя бы один лист');
+  const ExcelJS = await loadExcelJs();
   const workbook = new ExcelJS.Workbook();
   workbook.creator = 'DSH Open Web';
   workbook.lastModifiedBy = 'DSH Open Web';

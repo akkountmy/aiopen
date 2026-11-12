@@ -56,6 +56,10 @@ const CONTINUE_HINT = 'Продолжай выполнение задачи';
    пока не наберёт toolBudget вызовов, затем отвечает текстом. */
 let toolBudget = Number.POSITIVE_INFINITY;
 let sawContinue = false;
+/* Сценарий ранней остановки: модель сначала обещает, потом создаёт Word. */
+let wordMode = false;
+let wordPromiseSent = false;
+let wordCreated = false;
 
 function sendText(res, words, usage) {
   res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' });
@@ -69,9 +73,8 @@ function sendText(res, words, usage) {
   res.end();
 }
 
-function sendToolCall(res, usage, id) {
+function sendToolCall(res, usage, id, name = 'list_files', args = { path: '.' }) {
   res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' });
-  const args = JSON.stringify({ path: '.' });
   res.write(
     `data: ${JSON.stringify({
       choices: [
@@ -79,7 +82,7 @@ function sendToolCall(res, usage, id) {
           index: 0,
           delta: {
             tool_calls: [
-              { index: 0, id, type: 'function', function: { name: 'list_files', arguments: args } },
+              { index: 0, id, type: 'function', function: { name, arguments: JSON.stringify(args) } },
             ],
           },
         },
@@ -125,6 +128,24 @@ const model = http.createServer((req, res) => {
     trace('модель: шаг', toolCalls, 'инструментов в запросе', Array.isArray(body.tools) ? body.tools.length : 0);
     /* Финальная просьба «подведи итог» приходит без инструментов. */
     const hasTools = Array.isArray(body.tools) && body.tools.length > 0;
+    if (hasTools && wordMode && !wordPromiseSent) {
+      wordPromiseSent = true;
+      sendText(res, ['Список лекций получен, ', 'теперь соберу выжимку.'], {
+        prompt_tokens: 400,
+        completion_tokens: 40,
+      });
+      return;
+    }
+    if (hasTools && wordMode && !wordCreated) {
+      wordCreated = true;
+      toolCalls += 1;
+      sendToolCall(res, { prompt_tokens: 400, completion_tokens: 40 }, `word_${toolCalls}`, 'create_word', {
+        path: 'Теория игр — выжимка.docx',
+        title: 'Теория игр — выжимка',
+        sections: [{ heading: 'Главное', paragraphs: ['Равновесие Нэша — центральное понятие курса.'] }],
+      });
+      return;
+    }
     if (hasTools && toolCalls < toolBudget) {
       toolCalls += 1;
       sendToolCall(res, { prompt_tokens: 400, completion_tokens: 40 }, `call_${toolCalls}`);
@@ -316,6 +337,29 @@ try {
   check(shortProgress.length === 1, 'одно продолжение вместо остановки', `событий ${shortProgress.length}`);
   const shortTools = new Set(shortRead.events.filter((e) => e.type === 'tool').map((e) => e.id));
   check(shortTools.size === 3, 'все запрошенные действия выполнены', `вызовов ${shortTools.size}`);
+
+  /* 3. Модель остановилась на «теперь соберу выжимку» при пустой папке.
+     Сервис обязан сам дать ещё шаг, получить Word и только потом закончить. */
+  wordMode = true;
+  wordPromiseSent = false;
+  wordCreated = false;
+  toolBudget = 1;
+  toolCalls = 0;
+  sawContinue = false;
+  const chatWord = await newChat(cookie, project.id, 'ранняя остановка');
+  const wordRun = await startRun(cookie, chatWord, 'Сделай выжимку книги в Word на 40 минут.');
+  const wordRead = await readRunStream(wordRun.response);
+  const wordText = wordRead.events.filter((e) => e.type === 'delta').map((e) => e.text).join('');
+  const wordDone = wordRead.events.find((e) => e.type === 'done');
+  const wordTools = wordRead.events.filter((e) => e.type === 'tool' && e.name === 'create_word');
+  check(wordRead.ended, 'ранняя остановка завершилась сама');
+  check(sawContinue, 'после обещания сервис продолжил работу без человека');
+  check(wordTools.some((e) => e.status === 'ok'), 'на досборке создан Word', wordTools.map((e) => e.status).join(','));
+  check(wordDone?.incomplete !== true, 'готовый Word не помечен как незавершённый');
+  check(/Готово/i.test(wordText), 'итог пришёл после создания файла', wordText.slice(-80));
+  const wordChat = (await api(`/api/chats/${chatWord}`, { cookie })).data.chat;
+  const wordAnswer = answerOf(wordChat);
+  check(!wordAnswer?.incomplete, 'в сохранённом ответе нет ложной пометки «не доведено»');
 } catch (error) {
   console.error('ошибка проверки:', error.stack || error.message);
   failures += 1;

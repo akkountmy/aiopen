@@ -294,7 +294,7 @@ export async function readPage(rawUrl, { maxChars = 32000, engine = 'auto', prox
     };
   }
   try {
-    const extracted = extractReadable(page.text, page.url);
+    const extracted = await extractReadable(page.text, page.url);
     if (extracted.text) {
       /* Сравниваем с итоговым адресом после редиректов, иначе http→https
          или переезд на другой домен ломает обход: все ссылки «чужие». */
@@ -533,7 +533,7 @@ export async function fetchUrl(
   let extracted = null;
   if (page.kind === 'html') {
     try {
-      extracted = extractReadable(page.text, page.url);
+      extracted = await extractReadable(page.text, page.url);
       text = (markdown ? extracted.markdown : extracted.text) || htmlToText(page.text);
       title = extracted.title || extractTitle(page.text);
     } catch {
@@ -668,10 +668,10 @@ export async function scrapePage(
   }
   const html = page.text || page.html || '';
   const challenge = looksLikeChallenge(html);
-  const extracted = extractReadable(html, page.url);
+  const extracted = await extractReadable(html, page.url);
   let fields = null;
   if (selectors && typeof selectors === 'object' && Object.keys(selectors).length) {
-    fields = extractFields(html, page.url, selectors);
+    fields = await extractFields(html, page.url, selectors);
   }
   const body = format === 'markdown' ? extracted.markdown || extracted.text : extracted.text;
   return {

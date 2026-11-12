@@ -37,6 +37,7 @@ export const TRIM_DEFAULTS = {
     'create_word',
     'create_excel',
     'create_pptx',
+    'create_deck',
     'create_pdf',
   ],
   keepDiffContextLines: 2,

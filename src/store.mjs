@@ -16,6 +16,7 @@ import {
 import {
   DASHBOARD_BLOCKS,
   DASHBOARD_LIMITS,
+  DASHBOARD_TZ,
   applyDashboardPatch,
   dashboardBlock,
   defaultDashboardTask,
@@ -23,9 +24,17 @@ import {
   withoutCompanySize,
 } from './dashboard.mjs';
 import { MEMORY_LIMITS, normalizeFact } from './memory.mjs';
+/* Личный слой: свои блоки и темы поверх неизменной основы. Предметная часть
+   (границы, валидация, журнал) живёт отдельным модулем — store только хранит. */
+import { PERSONAL_LIMITS, customBlockId, normalizeUndoList, undoById, undoLabel } from './personal.mjs';
 import { dropAttachText } from './attachtext.mjs';
 import { hashPassword, sessionKind, verifyPassword } from './security.mjs';
 import { atomicWrite, nowIso, readJson, uid, uniqueFileName } from './util.mjs';
+
+/* Поля задания, которые человек меняет сам. Только их журнал отмены считает
+   «своими»: статусы запусков и служебные отметки откатывать нельзя — иначе
+   кнопка «Вернуть как было» отменяла бы саму историю запусков. */
+const DASHBOARD_EDITABLE_FIELDS = ['enabled', 'cadence', 'dayOfMonth', 'dayOfWeek', 'hour', 'prompt', 'projectId', 'title'];
 
 /* Насколько перекрытие слов должно быть большим, чтобы новый факт считался
    уточнением старого (тогда старый заменяется, а не добавляется рядом). */
@@ -182,6 +191,13 @@ function emptyState() {
     support: [],
     /* Постоянные задания «Дашборда»: шесть блоков на каждый аккаунт. */
     dashboard: [],
+    /* «Top news»: у каждого аккаунта только тумблер. Сам выпуск один на дату
+       и лежит в data/topnews, поэтому здесь нет ни ленты, ни текстов. */
+    topNews: {},
+    /* Личный слой: свои темы выпуска и журнал отмены по аккаунту. Свои блоки
+       дашборда лежат в dashboard с флагом custom — там им место рядом с
+       расписанием и документами. */
+    personal: {},
     settings: {
       registrationOpen: false,
       visionEnabled: true,
@@ -739,10 +755,13 @@ class Store {
   dashboardTasks(userId) {
     const list = Array.isArray(this.state.dashboard) ? this.state.dashboard : [];
     const order = new Map(DASHBOARD_BLOCKS.map((block, index) => [block.id, index]));
+    /* Свои блоки идут после основы и в порядке создания: основа всегда на
+       своих местах, сколько бы своего ни добавил человек. */
+    const rank = (task) => (task.custom ? 100 : order.get(task.blockId) ?? 99);
     return list
       .filter((task) => task.ownerId === userId && !task.deletedAt)
       .map((task) => ({ ...task }))
-      .sort((a, b) => (order.get(a.blockId) ?? 99) - (order.get(b.blockId) ?? 99));
+      .sort((a, b) => rank(a) - rank(b) || String(a.createdAt || '').localeCompare(String(b.createdAt || '')));
   }
 
   /** Досоздаёт недостающие блоки (новый аккаунт, новый блок в релизе). */
@@ -789,12 +808,31 @@ class Store {
     const task = list.find((item) => item.id === id && item.ownerId === userId);
     if (!task) return null;
     if (!task.deletedAt) {
+      /* Снимок «до» нужен отмене: без него блок вернулся бы выключенным, и
+         человек решил бы, что вернул всё, — а расписание осталось сломанным. */
+      const before = { enabled: task.enabled === true };
       task.deletedAt = nowIso();
       task.enabled = false;
       task.nextRunAt = null;
       task.updatedAt = task.deletedAt;
+      this.journalUndo(userId, 'task-delete', { taskId: task.id, before }, this.dashboardTaskTitle(task));
       this.save();
     }
+    return { ...task };
+  }
+
+  /* Свой блок удаляется по-настоящему: он не часть основы, воскрешать его
+     нечем, а надгробие только путало бы счёт своих блоков. Вернуть его можно
+     журналом отмены — там лежит полный снимок записи. Документы блока при
+     удалении остаются на диске: отмена возвращает блок вместе с ними, а
+     настоящая уборка — это «как было» и удаление аккаунта. */
+  deleteCustomDashboardTask(id, userId) {
+    const list = Array.isArray(this.state.dashboard) ? this.state.dashboard : [];
+    const index = list.findIndex((item) => item.id === id && item.ownerId === userId && item.custom);
+    if (index < 0) return null;
+    const [task] = list.splice(index, 1);
+    this.journalUndo(userId, 'own-delete', { task }, task.title || 'Свой блок');
+    this.save();
     return { ...task };
   }
 
@@ -803,6 +841,7 @@ class Store {
   restoreDashboardTasks(userId) {
     const list = Array.isArray(this.state.dashboard) ? this.state.dashboard : [];
     let restored = 0;
+    const restoredIds = [];
     const at = nowIso();
     for (const task of list) {
       if (task.ownerId !== userId || !task.deletedAt) continue;
@@ -810,9 +849,13 @@ class Store {
       task.enabled = false;
       task.nextRunAt = null;
       task.updatedAt = at;
+      restoredIds.push(task.id);
       restored += 1;
     }
-    if (restored) this.save();
+    if (restored) {
+      this.journalUndo(userId, 'task-restore-all', { taskIds: restoredIds, count: restored }, '');
+      this.save();
+    }
     return restored;
   }
 
@@ -824,11 +867,15 @@ class Store {
   /* Правка настроек. Время следующего запуска пересчитывается, если изменилось
      само расписание или если оно уже в прошлом: иначе задание «зависло» бы на
      старой дате после включения. Выключенное задание даты не держит. */
-  updateDashboardTask(id, userId, patch) {
+  updateDashboardTask(id, userId, patch, { journal = true } = {}) {
     const list = Array.isArray(this.state.dashboard) ? this.state.dashboard : [];
     const task = list.find((item) => item.id === id && item.ownerId === userId);
     if (!task || task.deletedAt) return null;
     const before = { enabled: task.enabled, cadence: task.cadence, dayOfMonth: task.dayOfMonth, dayOfWeek: task.dayOfWeek, hour: task.hour };
+    /* Снимок «как было» до правки: журнал хранит только те поля, которые
+       человек действительно изменил, — откат не должен отменять лишнее. */
+    const snapshot = {};
+    for (const key of DASHBOARD_EDITABLE_FIELDS) snapshot[key] = task[key] ?? null;
     const changed = applyDashboardPatch(task, patch);
     const scheduleChanged = ['enabled', 'cadence', 'dayOfMonth', 'dayOfWeek', 'hour'].some((key) => before[key] !== task[key]);
     if (!task.enabled) {
@@ -837,6 +884,13 @@ class Store {
       task.nextRunAt = nextRunAt(task, Date.now());
     }
     if (changed.length) task.updatedAt = nowIso();
+    const touched = {};
+    for (const key of changed) if (key in snapshot) touched[key] = snapshot[key];
+    /* Откат сам зовёт эту функцию — ему журнал не нужен, иначе отмена
+       отмены затирала бы историю. */
+    if (journal && Object.keys(touched).length) {
+      this.journalUndo(userId, 'task-patch', { taskId: task.id, before: touched }, this.dashboardTaskTitle(task));
+    }
     this.save();
     return { ...task };
   }
@@ -865,6 +919,19 @@ class Store {
      должны остаться. В индекс попадают только метаданные. */
   dashboardFilesDir(taskId) {
     return path.join(DASHBOARD_FILES_DIR, String(taskId).replace(/[^a-z0-9_-]/gi, ''));
+  }
+
+  /** Убрать папку документов задания целиком. Нужна там, где блок исчезает
+      безвозвратно: отмена своего удаления документы сохраняет, а «как было» и
+      удаление аккаунта — уже нет, иначе файлы остались бы сиротами навсегда. */
+  dropDashboardFiles(taskId) {
+    const id = String(taskId || '').replace(/[^a-z0-9_-]/gi, '');
+    if (!id) return;
+    try {
+      fs.rmSync(this.dashboardFilesDir(id), { recursive: true, force: true });
+    } catch (error) {
+      console.error('[dashboard] уборка документов задания:', error?.message || error);
+    }
   }
 
   addDashboardFile(id, userId, file) {
@@ -960,12 +1027,313 @@ class Store {
     return { ...task };
   }
 
+  /* ---------------- «Top news»: тумблер на аккаунт ---------------- */
+
+  /* Выпуск один на всех, а тумблер свой. Нет записи — значит выключено:
+     так новый раздел не включается ни у кого из старых аккаунтов. */
+  topNewsSettings(userId) {
+    const all = this.state.topNews;
+    const entry = all && typeof all === 'object' && !Array.isArray(all) ? all[userId] : null;
+    return {
+      enabled: entry?.enabled === true,
+      updatedAt: entry?.updatedAt || null,
+    };
+  }
+
+  setTopNewsEnabled(userId, enabled) {
+    if (!this.state.topNews || typeof this.state.topNews !== 'object' || Array.isArray(this.state.topNews)) {
+      this.state.topNews = {};
+    }
+    this.state.topNews[userId] = {
+      enabled: enabled === true,
+      updatedAt: nowIso(),
+    };
+    this.save();
+    return this.topNewsSettings(userId);
+  }
+
+  /** Планировщику достаточно знать, есть ли хоть один включённый тумблер. */
+  topNewsEnabledCount() {
+    const all = this.state.topNews;
+    if (!all || typeof all !== 'object' || Array.isArray(all)) return 0;
+    return Object.values(all).filter((entry) => entry?.enabled === true).length;
+  }
+
+  /* ---------------- личный слой: своё поверх неизменной основы ----------------
+     Основа сервиса живёт в коде: шесть блоков дашборда, шесть тем выпуска,
+     их расписания и промпты. В аккаунте лежит только личное — свои блоки,
+     свои темы и журнал отмены. Поэтому «испортить основу» из интерфейса
+     нечем: там просто нет ручки, которая её меняет. */
+
+  /** Человеческое имя задания: у своего блока оно своё, у основы — из каталога. */
+  dashboardTaskTitle(task) {
+    if (!task) return '';
+    if (task.custom) return task.title || 'Свой блок';
+    return dashboardBlock(task.blockId)?.title || task.blockId || 'Задание';
+  }
+
+  /** Хранилище личного слоя аккаунта. Создаётся лениво: у старых аккаунтов
+      записи нет, и это нормально — значит, ничего своего не добавляли. */
+  personalStore(userId, create = false) {
+    const empty = { topics: [], undo: [] };
+    if (!this.state.personal || typeof this.state.personal !== 'object' || Array.isArray(this.state.personal)) {
+      if (!create) return empty;
+      this.state.personal = {};
+    }
+    const entry = this.state.personal[userId];
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      if (!create) return empty;
+      this.state.personal[userId] = { topics: [], undo: [] };
+    }
+    const bucket = this.state.personal[userId];
+    if (!Array.isArray(bucket.topics)) bucket.topics = [];
+    bucket.undo = normalizeUndoList(bucket.undo);
+    return bucket;
+  }
+
+  /** Запись «как было». Новые сверху, старые вытесняются: журнал не растёт
+      бесконечно, а последнее действие всегда под рукой. */
+  journalUndo(userId, kind, data = {}, title = '') {
+    const bucket = this.personalStore(userId, true);
+    const entry = {
+      id: uid(),
+      at: nowIso(),
+      kind,
+      label: undoLabel(kind, { ...data, title }),
+      data,
+    };
+    bucket.undo.unshift(entry);
+    if (bucket.undo.length > PERSONAL_LIMITS.undoKeep) bucket.undo.length = PERSONAL_LIMITS.undoKeep;
+    return entry;
+  }
+
+  personalUndoList(userId, limit = PERSONAL_LIMITS.undoKeep) {
+    const bucket = this.personalStore(userId);
+    return bucket.undo.slice(0, Math.max(1, Math.min(PERSONAL_LIMITS.undoKeep, Number(limit) || 10))).map((entry) => ({
+      id: entry.id,
+      at: entry.at,
+      kind: entry.kind,
+      label: entry.label,
+    }));
+  }
+
+  /** Сводка для кнопки «Вернуть как было»: что именно вернём. */
+  personalUndoSummary(userId) {
+    const bucket = this.personalStore(userId);
+    const last = bucket.undo[0];
+    return {
+      canUndo: Boolean(last),
+      label: last ? last.label : '',
+      count: bucket.undo.length,
+    };
+  }
+
+  /* ---- свои темы выпуска ----
+     Основа — шесть тем в коде. Своя тема не заменяет их, а добавляется после:
+     человек видит и то, что собрал сервис, и то, что интересно лично ему. */
+  personalTopics(userId) {
+    return this.personalStore(userId).topics.map((topic) => ({
+      ...topic,
+      extraQueries: Array.isArray(topic.extraQueries) ? topic.extraQueries.slice(0, PERSONAL_LIMITS.maxExtraQueries) : [],
+    }));
+  }
+
+  personalTopic(userId, id) {
+    return this.personalTopics(userId).find((topic) => topic.id === id) || null;
+  }
+
+  addPersonalTopic(userId, value) {
+    const bucket = this.personalStore(userId, true);
+    if (bucket.topics.length >= PERSONAL_LIMITS.topics) return null;
+    const topic = {
+      id: uid(),
+      title: value.title,
+      kicker: value.kicker,
+      query: value.query,
+      extraQueries: Array.isArray(value.extraQueries) ? value.extraQueries.slice(0, PERSONAL_LIMITS.maxExtraQueries) : [],
+      tone: value.tone,
+      createdAt: nowIso(),
+    };
+    bucket.topics.push(topic);
+    this.journalUndo(userId, 'topic-create', { topicId: topic.id }, topic.title);
+    this.save();
+    return { ...topic };
+  }
+
+  deletePersonalTopic(userId, id) {
+    const bucket = this.personalStore(userId, true);
+    const index = bucket.topics.findIndex((topic) => topic.id === id);
+    if (index < 0) return null;
+    const [topic] = bucket.topics.splice(index, 1);
+    this.journalUndo(userId, 'topic-delete', { topic }, topic.title);
+    this.save();
+    return { ...topic };
+  }
+
+  /* ---- свои блоки дашборда ----
+     Блок живёт записью в списке заданий, как и блоки основы: так расписание,
+     документы и запуск работают одинаково, без отдельной ветки кода. */
+  customDashboardCount(userId) {
+    const list = Array.isArray(this.state.dashboard) ? this.state.dashboard : [];
+    return list.filter((task) => task.ownerId === userId && task.custom && !task.deletedAt).length;
+  }
+
+  createCustomDashboardTask(userId, value) {
+    if (!Array.isArray(this.state.dashboard)) this.state.dashboard = [];
+    if (this.customDashboardCount(userId) >= PERSONAL_LIMITS.blocks) return null;
+    const at = nowIso();
+    const task = {
+      id: uid(),
+      ownerId: userId,
+      blockId: customBlockId(),
+      custom: true,
+      title: value.title,
+      short: value.short,
+      description: value.description,
+      icon: value.icon,
+      skill: '',
+      enabled: value.enabled !== false,
+      cadence: value.cadence,
+      dayOfMonth: value.dayOfMonth,
+      dayOfWeek: value.dayOfWeek,
+      hour: value.hour,
+      timeZone: DASHBOARD_TZ,
+      projectId: '',
+      prompt: value.prompt,
+      files: [],
+      createdAt: at,
+      updatedAt: at,
+      nextRunAt: null,
+      lastRunAt: null,
+      lastStatus: '',
+      lastChatId: '',
+      lastError: '',
+    };
+    task.nextRunAt = task.enabled ? nextRunAt(task, Date.now()) : null;
+    this.state.dashboard.push(task);
+    this.journalUndo(userId, 'own-create', { taskId: task.id }, task.title);
+    this.save();
+    return { ...task };
+  }
+
+  /* ---- откат ----
+     Одно действие — одна запись. Возвращаем ровно то, что было изменено, и
+     убираем запись из журнала: повторное нажатие отменяет уже предыдущее
+     действие, а не то же самое. */
+  applyUndo(userId, entryId = '') {
+    const bucket = this.personalStore(userId, true);
+    const found = entryId ? undoById(bucket.undo, String(entryId)) : null;
+    const entry = entryId ? found?.entry : bucket.undo[0];
+    if (!entry) return { ok: false, error: 'Отменять нечего' };
+    const data = entry.data && typeof entry.data === 'object' ? entry.data : {};
+    const label = entry.label || 'Действие отменено';
+    const drop = () => {
+      bucket.undo = entryId ? found?.rest || bucket.undo : bucket.undo.slice(1);
+    };
+    const clearedTopicId = [];
+
+    if (entry.kind === 'task-patch') {
+      const list = Array.isArray(this.state.dashboard) ? this.state.dashboard : [];
+      const task = list.find((item) => item.id === data.taskId && item.ownerId === userId);
+      if (!task) return { ok: false, error: 'Этот блок уже удалён — отменять нечего' };
+      const patch = {};
+      for (const key of DASHBOARD_EDITABLE_FIELDS) {
+        if (data.before && Object.prototype.hasOwnProperty.call(data.before, key)) patch[key] = data.before[key];
+      }
+      this.updateDashboardTask(task.id, userId, patch, { journal: false });
+    } else if (entry.kind === 'task-delete') {
+      const list = Array.isArray(this.state.dashboard) ? this.state.dashboard : [];
+      const task = list.find((item) => item.id === data.taskId && item.ownerId === userId);
+      if (!task) return { ok: false, error: 'Блок не найден — отменять нечего' };
+      delete task.deletedAt;
+      /* Возвращаем расписание в то состояние, в котором блок был до удаления:
+         если он шёл по расписанию — снова идёт, если был выключен — остаётся
+         выключенным. Иначе отмена врала бы о результате. */
+      task.enabled = data.before?.enabled === true;
+      task.nextRunAt = task.enabled ? nextRunAt(task, Date.now()) : null;
+      task.updatedAt = nowIso();
+      this.save();
+    } else if (entry.kind === 'task-restore-all') {
+      const ids = new Set(Array.isArray(data.taskIds) ? data.taskIds : []);
+      const list = Array.isArray(this.state.dashboard) ? this.state.dashboard : [];
+      const at = nowIso();
+      for (const task of list) {
+        if (task.ownerId !== userId || !ids.has(task.id) || task.deletedAt) continue;
+        task.deletedAt = at;
+        task.enabled = false;
+        task.nextRunAt = null;
+      }
+      this.save();
+    } else if (entry.kind === 'own-create') {
+      const list = Array.isArray(this.state.dashboard) ? this.state.dashboard : [];
+      const index = list.findIndex((item) => item.id === data.taskId && item.ownerId === userId);
+      if (index < 0) return { ok: false, error: 'Этот блок уже удалён — отменять нечего' };
+      list.splice(index, 1);
+      this.save();
+    } else if (entry.kind === 'own-delete') {
+      if (!data.task || !data.task.id) return { ok: false, error: 'Нечего возвращать' };
+      if (!Array.isArray(this.state.dashboard)) this.state.dashboard = [];
+      const exists = this.state.dashboard.some((item) => item.id === data.task.id);
+      if (!exists) {
+        const back = { ...data.task, ownerId: userId, custom: true };
+        /* Дата запуска могла уйти в прошлое, пока блок лежал в журнале, — тогда
+           считаем её заново, иначе планировщик побежал бы сразу. */
+        back.nextRunAt = back.enabled ? nextRunAt(back, Date.now()) : null;
+        this.state.dashboard.push(back);
+      }
+      this.save();
+    } else if (entry.kind === 'topic-create') {
+      const topics = bucket.topics;
+      const index = topics.findIndex((topic) => topic.id === data.topicId);
+      if (index >= 0) topics.splice(index, 1);
+      clearedTopicId.push(data.topicId);
+      this.save();
+    } else if (entry.kind === 'topic-delete') {
+      if (!data.topic || !data.topic.id) return { ok: false, error: 'Нечего возвращать' };
+      if (!bucket.topics.some((topic) => topic.id === data.topic.id)) bucket.topics.push({ ...data.topic });
+      clearedTopicId.push(data.topic.id);
+      this.save();
+    } else {
+      return { ok: false, error: 'Такое действие отменить нельзя' };
+    }
+
+    drop();
+    this.save();
+    return { ok: true, label, kind: entry.kind, clearedTopicIds: clearedTopicId.filter(Boolean) };
+  }
+
+  /** «Вернуть всё как было»: снять всё своё и вернуть удалённые блоки основы
+      (выключенными — чтобы восстановление не списало деньги само). */
+  resetPersonalLayer(userId) {
+    const all = Array.isArray(this.state.dashboard) ? this.state.dashboard : [];
+    const removedOwn = all.filter((task) => task.ownerId === userId && task.custom).map((task) => task.id);
+    const list = all.filter((task) => !(task.ownerId === userId && task.custom));
+    const removedBlocks = all.length - list.length;
+    this.state.dashboard = list;
+    const bucket = this.personalStore(userId, true);
+    const removedTopics = bucket.topics.length;
+    bucket.topics = [];
+    const restored = this.restoreDashboardTasks(userId);
+    /* Журнал убираем: после «как было» отменять нечего — состояние и есть
+       исходное, а старые записи ссылались бы на несуществующие объекты. */
+    bucket.undo = [];
+    this.save();
+    /* Документы снятых своих блоков возвращать уже некуда — убираем и их. */
+    for (const id of removedOwn) this.dropDashboardFiles(id);
+    return { removedBlocks, removedTopics, restored };
+  }
+
   deleteUser(id) {
     const user = this.getUser(id);
     if (!user) return false;
     this.dropUserSessions(id);
+    /* Документы заданий лежат вне index.json — их надо убрать руками, иначе
+       после удаления аккаунта на диске остались бы чужие файлы. */
+    const ownTasks = (this.state.dashboard || []).filter((task) => task.ownerId === id).map((task) => task.id);
     this.state.users = this.state.users.filter((u) => u.id !== id);
     this.state.dashboard = (this.state.dashboard || []).filter((task) => task.ownerId !== id);
+    if (this.state.topNews && typeof this.state.topNews === 'object') delete this.state.topNews[id];
+    if (this.state.personal && typeof this.state.personal === 'object') delete this.state.personal[id];
     for (const project of this.state.projects.filter((p) => p.ownerId === id)) {
       this.deleteProject(project.id);
     }
@@ -976,6 +1344,7 @@ class Store {
     }
     delete this.state.usage[id];
     this.save();
+    for (const taskId of ownTasks) this.dropDashboardFiles(taskId);
     return true;
   }
 

@@ -624,9 +624,10 @@ try {
   const lineIcons = headerIcons.filter((icon) => icon.id !== 'filesBtn');
   const lineStrokes = [...new Set(lineIcons.map((icon) => icon.stroke))];
   const lineScaling = [...new Set(lineIcons.map((icon) => icon.scaling))];
-  /* В шапке справа пять значков: профиль, поддержка, дашборд, тема и папка.
-     Папка залитая, поэтому толщину штриха сверяем по четырём контурным. */
-  headerIcons.length === 5 && iconSizes.length === 1 && lineIcons.length === 4 && lineStrokes.length === 1 &&
+  /* В шапке справа шесть значков: профиль, поддержка, дашборд, топ-новости,
+     тема и папка. Папка залитая, поэтому толщину штриха сверяем по пяти
+     контурным. */
+  headerIcons.length === 6 && iconSizes.length === 1 && lineIcons.length === 5 && lineStrokes.length === 1 &&
   lineStrokes[0] === '2px' && lineScaling.length === 1 && lineScaling[0] === 'non-scaling-stroke'
     ? ok('значки шапки одного размера, контурные — одной толщины', `${headerIcons.map((icon) => `${icon.id}:${icon.size}`).join(' / ')}, штрих ${lineStrokes[0]} без масштабирования`)
     : fail('значки шапки разной толщины', JSON.stringify(headerIcons));
@@ -882,7 +883,14 @@ try {
 } finally {
   chrome.kill();
   await sleep(400);
-  fs.rmSync(profileDir, { recursive: true, force: true });
+  /* Windows держит файлы профиля ещё пару секунд после kill: без maxRetries
+     rmSync падал с EPERM и тест завершался кодом 1 при всех зелёных
+     проверках. */
+  try {
+    fs.rmSync(profileDir, { recursive: true, force: true, maxRetries: 20, retryDelay: 200 });
+  } catch {
+    /* профиль останется в %TEMP% — это уборка, а не проверка */
+  }
 }
 
 const failed = results.filter((value) => !value).length;

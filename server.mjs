@@ -18,6 +18,7 @@ import {
   SESSION,
   SIGNUP,
   SUPPORT_DIR,
+  TASK_BRIEF_TOKEN,
   TRUST_PROXY,
   chargeUsd,
   ensureDirs,
@@ -40,13 +41,18 @@ import {
   MAX_TTS_CHARS,
   RATE_CHOICES,
   VOICE_CHOICES,
+  CHARS_PER_MINUTE,
   cancelJob,
   choosePartMinutes,
+  findActiveNarration,
   getJob,
   jobsFor,
   narrationParts,
+  narrationStatus,
   planParts,
   publicJob,
+  resumeNarrations,
+  setNarrationJournal,
   splitBlocks,
   startNarration,
   voiceCatalog,
@@ -108,18 +114,29 @@ import {
   sessionCookie,
   sessionKey,
   sessionKind,
+  timingSafeEqualString,
   usernameProblem,
 } from './src/security.mjs';
 import { store } from './src/store.mjs';
+import { coverageOf, normalizeBrief, validateBrief } from './src/taskbrief.mjs';
+import { briefDetail, listBriefs, writeBrief } from './src/taskbrief-store.mjs';
 import { listTree, resolveSafe } from './src/tools.mjs';
 import { listSkills } from './src/skills.mjs';
 import { pipeZip } from './src/zip.mjs';
 import { atomicWrite, formatBytes, nowIso, safeName, sha256, uid, uniqueFileName } from './src/util.mjs';
 import { describeImage } from './src/vision.mjs';
 import { webSearch, fetchUrl, assertPublicUrl, assertResolvesPublic } from './src/search.mjs';
+import { ensureBookCover } from './src/book-cover.mjs';
+import * as tg from './src/telegram.mjs';
+import * as topnews from './src/topnews.mjs';
+/* Личный слой: границы, валидация и подписи своих блоков и тем. Предметная
+   часть отдельным модулем — маршруты только раскладывают её по HTTP. */
+import * as personal from './src/personal.mjs';
+import { PERSONAL_LIMITS, normalizeBlockInput, normalizeTopicInput, publicTopic } from './src/personal.mjs';
 import { browserStatus } from './src/browser.mjs';
 import { ensureObscura, obscuraConfigured, obscuraInfo } from './src/obscura.mjs';
 import { describeTrim } from './src/trim.mjs';
+import { repairHistoryInPlace } from './src/history.mjs';
 import { squeezeStaleContext, startContextCompactor } from './src/contextkeep.mjs';
 import { describeProfile } from './src/model.mjs';
 import { describeReview } from './src/review.mjs';
@@ -145,6 +162,14 @@ const supportHits = new RateLimiter({ windowMs: 60 * 60 * 1000, max: 10 });
    выше живой работы (человек столько не пишет), но останавливает скрипт,
    который ставит в очередь сотни задач и занимает все места сервиса. */
 const messageHits = new RateLimiter({ windowMs: 10 * 60 * 1000, max: CAPACITY.messagesPerUser });
+/* Раздел «Телеграм»: сбор ходит на t.me, дайджест — в модель, проверка связи
+   дергается при открытии вкладки. Считаем по человеку, чтобы оставленная
+   открытой вкладка не превратилась в цикл запросов. */
+const tgProbeHits = new RateLimiter({ windowMs: 60 * 1000, max: 6 });
+const tgCollectHits = new RateLimiter({ windowMs: 60 * 1000, max: 6 });
+const tgDigestHits = new RateLimiter({ windowMs: 60 * 1000, max: 3 });
+/* Сырая страница — отладочный инструмент администратора, не рабочий путь. */
+const tgRawHits = new RateLimiter({ windowMs: 60 * 1000, max: 10 });
 /* Идущие ответы: ключ — «пользователь:диалог». Один и тот же диалог не может
    генерироваться дважды (иначе сообщения перепутаются), но разные диалоги
    считаются независимо — так ноутбук и телефон работают параллельно. Потолок
@@ -152,6 +177,14 @@ const messageHits = new RateLimiter({ windowMs: 10 * 60 * 1000, max: CAPACITY.me
 const runningChats = new Set();
 const runningByUser = new Map();
 const attachmentQueue = new Set();
+/* Сколько изображений распознаём одновременно. Раньше вложения шли строго по
+   одному: четыре скриншота в сообщении — это четыре ожидания подряд, хотя сами
+   запросы друг от друга не зависят. Два параллельных распознавания дают выигрыш
+   почти вдвое, а по памяти почти ничего не стоят: работа идёт в сети, не в
+   процессе. Документы по-прежнему разбираются по одному — там CPU. */
+const ATTACHMENT_IMAGE_PARALLEL = Math.max(1, Math.min(4, Number(process.env.DSHOW_ATTACH_PARALLEL || 2)));
+const attachmentImageWaiting = [];
+let attachmentImageActive = 0;
 
 /* ---------------- живые задачи ----------------
    Ответ агента больше не живёт внутри одного соединения с браузером. Пока идёт
@@ -765,36 +798,14 @@ function resumeTaskText(chat, originalText, userMessage) {
 /* Перезапуск мог застать инструмент в работе: в истории уже есть assistant с
    tool_calls, а результата ещё нет. Модель такой диалог отвергнет, поэтому
    закрываем прерванные вызовы честной пометкой. Если же результаты успели
-   записаться, ничего не трогаем. */
+   записаться, ничего не трогаем.
+   Проверка общая (src/history.mjs): диалог мог быть испорчен не только
+   перезапуском — срезом истории, повтором шага или старой версией службы. */
 function repairInterruptedHistory(chat) {
   const history = Array.isArray(chat?.history) ? chat.history : null;
   if (!history?.length) return 0;
-  let index = -1;
-  for (let i = history.length - 1; i >= 0; i -= 1) {
-    if (history[i]?.role === 'assistant') {
-      index = i;
-      break;
-    }
-  }
-  if (index < 0) return 0;
-  const calls = Array.isArray(history[index]?.tool_calls) ? history[index].tool_calls : [];
-  if (!calls.length) return 0;
-  const after = history.slice(index + 1);
-  if (after.some((item) => item?.role !== 'tool')) return 0;
-  const answered = new Set(
-    after.filter((item) => item?.role === 'tool').map((item) => item.tool_call_id),
-  );
-  const missing = calls.filter((call) => call?.id && !answered.has(call.id));
-  for (const call of missing) {
-    history.push({
-      role: 'tool',
-      tool_call_id: call.id,
-      content:
-        'Вызов прерван перезапуском сервиса, результат неизвестен. Проверь, что уже сделано ' +
-        'в рабочей папке, и при необходимости повтори вызов.',
-    });
-  }
-  return missing.length;
+  const healed = repairHistoryInPlace(history);
+  return healed.changed ? healed.removed + healed.filled : 0;
 }
 
 /* Давний контекст сворачивается в конспект перед продолжением — это и есть
@@ -1154,6 +1165,21 @@ function sendJson(res, status, data, extraHeaders = {}) {
 
 function sendError(res, status, message, extraHeaders = {}) {
   sendJson(res, status, { error: message }, extraHeaders);
+}
+
+/** Ответ простым текстом: markdown-экспорт открывают и сохраняют, а не
+ *  разбирают как JSON. Заголовки те же, что у sendJson. */
+function sendText(res, status, text, { type = 'text/plain; charset=utf-8', filename = '' } = {}) {
+  const body = Buffer.from(String(text ?? ''), 'utf8');
+  const headers = {
+    'Content-Type': type,
+    'Content-Length': body.length,
+    'Cache-Control': 'no-store',
+    ...SECURITY_HEADERS,
+  };
+  if (filename) headers['Content-Disposition'] = `attachment; filename="${asciiFileName(filename)}"`;
+  res.writeHead(status, headers);
+  res.end(body);
 }
 
 function readBody(req, limit) {
@@ -1692,6 +1718,330 @@ function chatMeta(chat) {
   };
 }
 
+/* ------------------- какие файлы принадлежат диалогу -------------------
+   Рабочая папка у проекта одна, поэтому «файлы диалога» — это не отдельный
+   каталог, а список путей, которые этот диалог создал, загрузил или к которым
+   обращался. Для старых диалогов список восстанавливаем по переписке и карточке
+   задачи; для новых дополнительно запоминаем изменённые за ход файлы и загрузки
+   из панели. Проектный вид по-прежнему показывает всю папку. */
+const FILE_ORIGINS_DIR = path.join(DATA_DIR, 'file-origins');
+
+/* Инструменты, у которых аргумент с путём — это готовый файл. Ключи совпадают
+   с WRITE_TARGETS в src/tools.mjs; храним копию здесь, чтобы разбор истории не
+   зависел от внутреннего устройства инструментов. */
+const CHAT_PATH_ARGS = {
+  write_file: ['path'],
+  narrate_document: ['path'],
+  append_file: ['path'],
+  edit_file: ['path'],
+  create_excel: ['path'],
+  create_word: ['path'],
+  create_pptx: ['path'],
+  create_pdf: ['path'],
+  create_drawing: ['path'],
+  check_page: ['screenshot'],
+  move_path: ['to', 'target'],
+};
+
+/* Старые сообщения не хранят имя инструмента, только человеческую подпись.
+   По ней и достаём путь из summary — он у этих инструментов равен аргументу. */
+const CHAT_WRITE_LABELS = new Set([
+  'Создание файла',
+  'Дозапись файла',
+  'Правка файла',
+  'Создание Excel',
+  'Создание Word',
+  'Создание презентации',
+  'Создание PDF',
+  'Чертёж',
+  'Озвучка документа',
+]);
+
+/* Старые сообщения не хранят путь инструмента, но подпись «Разбор документа»
+   и summary с путём остались. Это вход, а не файл диалога. */
+const CHAT_READ_LABELS = new Set([
+  'Разбор документа',
+  'Чтение файла',
+  'Просмотр файлов',
+]);
+
+function normalizeRelPath(value) {
+  let rel = String(value || '').trim().replace(/\\/g, '/');
+  if (!rel || rel.includes('\0')) return '';
+  rel = rel.replace(/^\.\/+/, '').replace(/\/+/g, '/');
+  const parts = [];
+  for (const part of rel.split('/')) {
+    if (!part || part === '.') continue;
+    if (part === '..') {
+      if (!parts.length) return '';
+      parts.pop();
+    } else {
+      parts.push(part);
+    }
+  }
+  return parts.join('/');
+}
+
+function existingProjectFile(workspace, value) {
+  const rel = normalizeRelPath(value);
+  if (!rel) return '';
+  try {
+    const stat = fs.statSync(resolveSafe(workspace, rel));
+    return stat.isFile() ? rel : '';
+  } catch {
+    return '';
+  }
+}
+
+function fileOriginsFile(projectId) {
+  return path.join(FILE_ORIGINS_DIR, `${String(projectId).replace(/[^\w.-]/g, '_')}.json`);
+}
+
+function readFileOrigins(projectId) {
+  try {
+    const data = JSON.parse(fs.readFileSync(fileOriginsFile(projectId), 'utf8'));
+    return data && typeof data === 'object' && data.chats && typeof data.chats === 'object' ? data : { chats: {} };
+  } catch {
+    return { chats: {} };
+  }
+}
+
+/* Запомнить пути за диалогом. Ошибка записи не должна ломать загрузку или ход:
+   в худшем случае файл не появится в диалоговом виде, но останется в проектном. */
+function rememberChatFiles(projectId, chatId, values) {
+  if (!projectId || !chatId) return;
+  const added = [];
+  for (const value of values || []) {
+    const rel = normalizeRelPath(value);
+    if (rel && !added.includes(rel)) added.push(rel);
+  }
+  if (!added.length) return;
+  try {
+    const data = readFileOrigins(projectId);
+    const current = Array.isArray(data.chats[chatId]) ? data.chats[chatId] : [];
+    const next = [...new Set([...current, ...added])].slice(-500);
+    if (next.length === current.length && next.every((rel, index) => rel === current[index])) return;
+    data.chats[chatId] = next;
+    atomicWrite(fileOriginsFile(projectId), JSON.stringify(data));
+  } catch (error) {
+    console.warn('[files] не удалось запомнить файлы диалога:', error?.message || error);
+  }
+}
+
+function designFilePaths(workspace) {
+  const out = [];
+  try {
+    if (fs.existsSync(resolveSafe(workspace, 'design.json'))) out.push('design.json');
+    out.push(...listTree(workspace, 'design', { depth: 4, maxEntries: 400 }).filter((item) => !item.dir).map((item) => item.path));
+  } catch {
+    /* Дизайна ещё нет или папка недоступна — это не ошибка списка файлов. */
+  }
+  return out;
+}
+
+/* Файлы за ход: инструмент мог создать их пачкой (распаковка, дизайн, скрипт),
+   поэтому кроме путей из outcome.tools сравниваем время изменения в рабочей
+   папке. Запас в полторы секунды гасит разницу округления времени файловой
+   системы, чтобы только что записанный файл не потерялся. */
+function workspaceFilesSince(workspace, since, limit = 300) {
+  const out = [];
+  const walk = (dir, rel, level) => {
+    if (out.length >= limit || level > 5) return;
+    let entries = [];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (out.length >= limit) return;
+      if (entry.name.startsWith('.') || entry.name === 'node_modules') continue;
+      const full = path.join(dir, entry.name);
+      const relName = rel ? `${rel}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        walk(full, relName, level + 1);
+        continue;
+      }
+      try {
+        if (fs.statSync(full).mtimeMs >= since) out.push(relName);
+      } catch {
+        /* файл исчез между readdir и stat — пропускаем */
+      }
+    }
+  };
+  walk(workspace, '', 0);
+  return out;
+}
+
+function chatFilePaths(projectId, chat, workspace) {
+  const paths = new Set();
+  /* Пути, которые диалог только читал. Они нужны инструменту, но не являются
+     файлами диалога: иначе разбор чужой книги приклеивает её к этому чату. */
+  const inputs = new Set();
+  const add = (value) => {
+    const rel = normalizeRelPath(value);
+    if (rel) paths.add(rel);
+  };
+  const addTree = (dir) => {
+    const rel = normalizeRelPath(dir);
+    if (!rel) return;
+    try {
+      for (const item of listTree(workspace, rel, { depth: 5, maxEntries: 500 })) {
+        if (!item.dir) paths.add(normalizeRelPath(item.path));
+      }
+    } catch {
+      /* папки уже нет — путь просто не попадёт в список */
+    }
+  };
+  const addToolArgs = (name, args) => {
+    if (!args || typeof args !== 'object') return;
+    const ownedKeys = CHAT_PATH_ARGS[name];
+    for (const key of ownedKeys || []) add(args[key]);
+    if (!ownedKeys && args.path) {
+      const rel = normalizeRelPath(args.path);
+      if (rel) inputs.add(rel);
+    }
+    if (name === 'build_design') for (const rel of designFilePaths(workspace)) add(rel);
+    if (name === 'extract_archive') addTree(args.to || args.dest || args.path);
+    if (name === 'legal_task') addTree(args.dir || args.outDir);
+  };
+  /* Озвучка рождается в фоне уже после ответа агента: path инструмента — это
+     исходный документ, а MP3 появляются позже. Поэтому к каждому документу
+     диалога добавляем его озвучку по имени: «Книга.docx» → «Книга.mp3»,
+     «Книга — часть 2 из 3.mp3». Так части не теряются ни в старых диалогах,
+     ни после перезапуска сервиса, когда очереди TTS уже нет. */
+  const addNarrationSiblings = (docRel) => {
+    if (!/\.(docx|doc|pdf|txt|md|rtf|epub|fb2)$/i.test(docRel)) return;
+    let full = '';
+    try {
+      full = resolveSafe(workspace, docRel);
+    } catch {
+      return;
+    }
+    /* Имя MP3 зависит от числа частей: длинный заголовок усекается по-разному
+       для «часть 1 из 2» и «часть 1 из 10». Поэтому сверяем планы для нескольких
+       вариантов, а не только точное имя рядом с DOCX. */
+    for (let total = 1; total <= 30; total += 1) {
+      for (const part of planNarrationFiles(full, total).parts) {
+        const rel = path.relative(workspace, part.path).replace(/\\/g, '/');
+        if (rel) add(rel);
+      }
+    }
+  };
+
+  /* Журнал файлов диалога разбираем ниже: к тому моменту уже известны
+     прочитанные пути, и запись «Разбор документа» не приклеит чужую книгу. */
+
+  /* Карточка длинной задачи: до 12 последних готовых файлов. Не добавляем их
+     сразу: в старых карточках остался и чужой документ, который диалог только
+     разбирал. Решение отложено до журнала и списка прочитанных путей. */
+  const taskFiles = new Set();
+  for (const file of chat.task?.files || []) {
+    const rel = typeof file === 'string' ? file : file?.path;
+    if (rel) taskFiles.add(rel);
+  }
+  if (chat.task?.dir) addTree(chat.task.dir);
+
+  for (const message of chat.messages || []) {
+    /* Вложения диалога лежат в общей папке проекта, но принадлежат ему. */
+    for (const att of message.attachments || []) add(att.relPath || att.path);
+    for (const tool of message.tools || []) {
+      /* Путь инструмента — это и вход, и выход. Добавляем его только у
+         инструментов, которые создают файл: иначе «Разбор документа» из
+         соседнего диалога приклеивал чужую книгу к этому чату. */
+      if (CHAT_PATH_ARGS[tool.name]) add(tool.path);
+      else if (tool.path) {
+        const rel = normalizeRelPath(tool.path);
+        if (rel) inputs.add(rel);
+      }
+      if (CHAT_WRITE_LABELS.has(tool.label) && tool.summary) add(tool.summary);
+      else if (CHAT_READ_LABELS.has(tool.label) && tool.summary) {
+        const rel = normalizeRelPath(tool.summary);
+        if (rel) inputs.add(rel);
+      }
+    }
+    /* Ссылки на файлы в ответе: /file?path=... или /api/projects/.../file?path=... */
+    const text = String(message.content || '');
+    const linkRe = /file\?path=([^)"'\s&]+)/g;
+    let match;
+    while ((match = linkRe.exec(text))) {
+      try {
+        add(decodeURIComponent(match[1]));
+      } catch {
+        add(match[1]);
+      }
+    }
+  }
+
+  /* История инструментов: точные имена и аргументы, даже если сообщения уже
+     сокращены. Это главный источник для старых диалогов. */
+  for (const entry of chat.history || []) {
+    for (const call of entry.tool_calls || []) {
+      const name = call.function?.name;
+      if (!name) continue;
+      let args = call.function?.arguments;
+      if (typeof args === 'string') {
+        try {
+          args = JSON.parse(args);
+        } catch {
+          args = null;
+        }
+      }
+      addToolArgs(name, args);
+    }
+  }
+  /* Сообщения нового формата хранят имя и путь инструмента напрямую. */
+  for (const message of chat.messages || []) {
+    for (const tool of message.tools || []) {
+      if (tool.name) addToolArgs(tool.name, { path: tool.path });
+    }
+  }
+
+  /* Журнал файлов диалога: записи прошлых ходов. Прочитанные пути уже
+     собраны в inputs, поэтому чужая книга из «Разбора документа» сюда не
+     попадёт; если путь ещё и записан этим диалогом (paths) — оставляем. */
+  for (const rel of readFileOrigins(projectId).chats[chat.id] || []) {
+    const norm = normalizeRelPath(rel);
+    if (norm && (!inputs.has(norm) || paths.has(norm))) add(norm);
+  }
+
+  /* Файлы из карточки задачи подчиняются тому же правилу: прочитанное, но не
+     созданное этим диалогом — чужой вход, а не его результат. */
+  for (const rel of taskFiles) {
+    const norm = normalizeRelPath(rel);
+    if (norm && (!inputs.has(norm) || paths.has(norm))) add(norm);
+  }
+
+  /* Озвучки могли появиться после последнего хода — подтягиваем их по имени
+     документа, прежде чем отбрасывать несуществующие пути. */
+  for (const rel of [...paths]) addNarrationSiblings(rel);
+
+  const existing = new Set();
+  for (const rel of paths) {
+    const file = existingProjectFile(workspace, rel);
+    if (file) existing.add(file);
+  }
+  return existing;
+}
+
+/* Оставить в дереве только файлы диалога и папки-родители: без родителей
+   фронтенд не покажет вложенные строки. */
+function filterTreeForChat(items, allowed) {
+  if (!allowed.size) return [];
+  const dirs = new Set();
+  for (const rel of allowed) {
+    let cut = rel.lastIndexOf('/');
+    while (cut > 0) {
+      dirs.add(rel.slice(0, cut));
+      cut = rel.lastIndexOf('/', cut - 1);
+    }
+  }
+  return items.filter((item) => {
+    const rel = normalizeRelPath(item.path);
+    return item.dir ? dirs.has(rel) : allowed.has(rel);
+  });
+}
+
 /* Внешний адрес сервиса. Нужен для ссылки, которую открывает Word/Excel:
    приложение качает файл само, поэтому адрес должен быть публичным. */
 const DEFAULT_PUBLIC_ORIGIN = 'https://dshopen-vladimir00177.msk1.amvera.tech';
@@ -2051,6 +2401,8 @@ async function handleUpload(req, res, user) {
     createdAt: nowIso(),
   });
   scheduleAttachment(attachment, store.workspaceDir(project.id));
+  /* Вложение из диалога — тоже файл этого диалога, хотя лежит в общей папке. */
+  if (chatId) rememberChatFiles(project.id, chatId, [relPath]);
   sendJson(res, 200, { attachment: serializeAttachment(attachment) });
 }
 
@@ -2142,10 +2494,30 @@ function handleDashboardFileDelete(res, user, task, fileId) {
 // Разбор файлов идёт по одному: пики памяти на больших документах не складываются.
 let attachmentChain = Promise.resolve();
 function scheduleAttachment(att, workspace) {
-  attachmentChain = attachmentChain
-    .then(() => processAttachment(att, workspace))
-    .catch((error) => console.error('[attachment]', error?.message || error));
+  const run = () => processAttachment(att, workspace).catch((error) => console.error('[attachment]', error?.message || error));
+  /* Изображения — сеть, их можно вести параллельно; документы — CPU, по одному. */
+  if (att.kind === 'image') return scheduleImageAttachment(run);
+  attachmentChain = attachmentChain.then(run);
   return attachmentChain;
+}
+
+function scheduleImageAttachment(run) {
+  return new Promise((resolve) => {
+    attachmentImageWaiting.push({ run, resolve });
+    pumpImageAttachments();
+  });
+}
+
+function pumpImageAttachments() {
+  while (attachmentImageActive < ATTACHMENT_IMAGE_PARALLEL && attachmentImageWaiting.length) {
+    const item = attachmentImageWaiting.shift();
+    attachmentImageActive += 1;
+    item.run().finally(() => {
+      attachmentImageActive -= 1;
+      item.resolve();
+      pumpImageAttachments();
+    });
+  }
 }
 
 async function processAttachment(att, workspace) {
@@ -2163,8 +2535,21 @@ async function processAttachment(att, workspace) {
     }
     const buffer = fs.readFileSync(full);
     if (att.kind === 'image') {
-      const result = await describeImage({ buffer, mime: att.mime, name: att.name });
-      store.updateAttachment(att.id, { status: 'ready', ...storeAttachText(att.id, result.text), warnings: [] });
+      /* Распознавание — подсказка, а не условие: если все внешние модели сейчас
+         недоступны, картинка всё равно уходит ассистенту, и он видит её сам.
+         Поэтому неудача распознавания не переводит вложение в «ошибку» — это
+         только предупреждение, а сообщение отправляется дальше без задержки. */
+      try {
+        const result = await describeImage({ buffer, mime: att.mime, name: att.name });
+        store.updateAttachment(att.id, { status: 'ready', ...storeAttachText(att.id, result.text), warnings: [] });
+      } catch (error) {
+        console.error('[attachment:vision]', String(error?.message || error).slice(0, 200));
+        store.updateAttachment(att.id, {
+          status: 'ready',
+          text: '',
+          warnings: ['Текст с картинки сейчас не распознан — ассистент посмотрит изображение сам.'],
+        });
+      }
       return;
     }
     const parsed = extractDocumentText(buffer, att.name, att.mime, { maxChars: LIMITS.maxFileTextChars });
@@ -2213,6 +2598,11 @@ async function waitForAttachments(ids, user, chat, emit) {
   return result;
 }
 
+/* Отправлять ли саму картинку модели вместе с распознанным текстом:
+   auto — только если текста мало (обычный случай), always — всегда,
+   never — только текст (самый быстрый и дешёвый режим). */
+const ATTACH_IMAGE_MODE = String(process.env.DSHOW_ATTACH_IMAGES || 'auto').toLowerCase();
+
 function attachmentContext(attachments) {
   const blocks = [];
   const images = [];
@@ -2224,7 +2614,12 @@ function attachmentContext(attachments) {
     const full = attachText(att, LIMITS.maxFileTextChars);
     if (att.kind === 'image') {
       body = `[Изображение «${att.name}», путь: ${att.relPath} — распознавание]\n${full || '(не удалось распознать)'}`;
-      if (att.size <= 8 * 1024 * 1024 && images.length < 4) {
+      /* Картинку отправляем модели только тогда, когда распознанный текст скупой.
+         Обычный скриншот даёт тысячу знаков — по ним модель читает всё, что нужно,
+         а повторная отправка тех же пикселей стоит токенов и времени на передачу.
+         Если распознавание не удалось, картинка остаётся единственным источником. */
+      const worthImage = !full || full.length < 300 || ATTACH_IMAGE_MODE === 'always';
+      if (worthImage && ATTACH_IMAGE_MODE !== 'never' && att.size <= 8 * 1024 * 1024 && images.length < 4) {
         const filePath = resolveSafe(store.workspaceDir(att.projectId), att.relPath);
         try {
           const buf = fs.readFileSync(filePath);
@@ -2557,6 +2952,9 @@ async function executeRun(run, job) {
       console.error('[context]', error?.message || error);
     }
 
+    /* Отметка начала хода: после него добавим к диалогу все файлы, которые
+       появились или обновились, даже если инструмент не вернул путь. */
+    const turnStartedAt = Date.now() - 1500;
     const outcome = await runTurn({
       workspace: store.workspaceDir(project.id),
       /* Передаём сам объект чата: runTurn дописывает историю и обновляет
@@ -2583,6 +2981,13 @@ async function executeRun(run, job) {
          сообщение, remember пишет новые прямо в index.json. */
       facts: store.memoryFacts(user.id),
       remember: (fact) => store.addMemoryFact(user.id, fact),
+      /* «Создай проект и диалог»: человек просит словами — сервис заводит
+         проект, диалог и запускает задание. Права остаются его собственными. */
+      createProjectChat: (args) => createProjectChatFor(user, args),
+      /* «Добавь мне свой блок / свою тему»: то же, что кнопки на дашборде и в
+         Top news, но словами. Пишется только личный слой этого человека. */
+      createPersonalBlock: (args) => createPersonalBlockFor(user, args),
+      createNewsTopic: (args) => createNewsTopicFor(user, args),
       /* Кнопки «Рассуждения» и «Поиск» действуют на этот ход: первая сразу
          поднимает профиль модели, вторая добавляет в системную подсказку
          требование искать источники. */
@@ -2591,6 +2996,20 @@ async function executeRun(run, job) {
     });
 
     assistantText = outcome.text || '';
+
+    /* Файлы этого хода: явные пути из инструментов плюс всё, что записалось в
+       рабочую папку за время работы (дизайн, распаковка, скрипты). */
+    try {
+      const workspaceDir = store.workspaceDir(project.id);
+      rememberChatFiles(project.id, chat.id, [
+        ...(outcome.tools || [])
+          .filter((tool) => CHAT_PATH_ARGS[tool.name] || CHAT_WRITE_LABELS.has(tool.label))
+          .map((tool) => tool.path),
+        ...workspaceFilesSince(workspaceDir, turnStartedAt),
+      ]);
+    } catch (error) {
+      console.warn('[files] не удалось записать файлы хода:', error?.message || error);
+    }
 
     /* Что дала обрезка контекста в этом ходе: одна строка в лог, без записи
        отдельного файла — цифры нужны для понимания расходов, не для отчёта. */
@@ -2666,7 +3085,16 @@ async function executeRun(run, job) {
     chat.messages.push({
       role: 'assistant',
       content: assistantText || 'Готово.',
-      tools: outcome.tools.map((tool) => ({ id: tool.id, label: tool.label, summary: tool.summary, status: tool.status })),
+      /* Имя и путь инструмента нужны панели файлов, чтобы после перезагрузки
+         показать в диалоге именно созданные им файлы, а не всю папку проекта. */
+      tools: outcome.tools.map((tool) => ({
+        id: tool.id,
+        name: tool.name,
+        label: tool.label,
+        summary: tool.summary,
+        status: tool.status,
+        ...(tool.path ? { path: tool.path } : {}),
+      })),
       at: nowIso(),
       ...(budgetInfo ? { budget: budgetInfo } : {}),
       /* Пометку режима пишем только для «Рассуждений»: это выбор человека.
@@ -2674,6 +3102,9 @@ async function executeRun(run, job) {
          ответе был бы шумом. */
       ...(modes.thinking ? { modes: { thinking: true } } : {}),
       ...(outcome.reasoning ? { reasoning: outcome.reasoning } : {}),
+      ...(outcome.incomplete
+        ? { incomplete: true, incompleteNote: outcome.incompleteNote || 'Работа не доведена до результата.' }
+        : {}),
     });
     saveRunChat(chat);
 
@@ -2691,7 +3122,7 @@ async function executeRun(run, job) {
     if (isFirstMessage && isUntitledChat(chat)) {
       assignChatTitle(chat, titleFromText(assistantText) || 'Диалог', stream);
     }
-    stream.emit({ type: 'done', usage: outcome.usage, tools: outcome.tools.length, balanceUsd });
+    stream.emit({ type: 'done', usage: outcome.usage, tools: outcome.tools.length, balanceUsd, incomplete: Boolean(outcome.incomplete), incompleteNote: outcome.incompleteNote || '' });
     finishRun(run, 'done');
     startNextQueuedRun(run, 'done');
     /* Работа закончилась, а приложение может быть закрыто или свёрнуто —
@@ -2708,6 +3139,18 @@ async function executeRun(run, job) {
         ? 'Остановлено'
         : describeFailure(error);
     if (!aborted && !timedOut) console.error('[agent]', error?.message || error);
+    /* Сбой мог оборвать шаг между объявлением вызова и его результатом. Такой
+       файл диалога нельзя сохранять как есть: следующий ход упадёт на проверке
+       сообщений, и человек будет получать отказ при каждом повторе. */
+    if (Array.isArray(chat.history)) {
+      const healed = repairHistoryInPlace(chat.history);
+      if (healed.changed) {
+        console.warn(
+          `[history] диалог ${chat.id}: перед сохранением починил разметку вызовов — ` +
+            `убрал ${healed.removed}, закрыл ${healed.filled}`,
+        );
+      }
+    }
     if (assistantText) {
       chat.messages.push({ role: 'assistant', content: assistantText, interrupted: true, at: nowIso() });
     } else {
@@ -2824,9 +3267,10 @@ function copyDashboardDocs(project, task, docs) {
 }
 
 function dashboardTaskText(task, docs = []) {
-  const block = dashboardBlock(task.blockId);
-  const title = block ? block.title : 'Постоянное задание';
-  const base = `Постоянное задание «${title}»\n\n${task.prompt || (block && block.prompt) || ''}`;
+  /* Название берём у самого задания: у своего блока оно своё, у основы — из
+     каталога. Модель должна видеть то же название, что и человек на карточке. */
+  const title = store.dashboardTaskTitle(task);
+  const base = `Постоянное задание «${title}»\n\n${task.prompt || dashboardBlock(task.blockId)?.prompt || ''}`;
   const notice = dashboardDocsBlock(docs.map((doc) => ({ name: doc.name })));
   const usable = docs.filter((doc) => String(doc.text || '').trim());
   const body = usable.length
@@ -2860,7 +3304,8 @@ function beginDashboardRun(task, { manual = false } = {}) {
   if (dashboardRunsFor(user.id) >= DASHBOARD_RUNS_PER_USER) {
     return { ok: false, reason: 'агент занят другим заданием', retryMinutes: 15 };
   }
-  const block = dashboardBlock(task.blockId);
+  /* У своего блока названия в каталоге нет — берём имя из самого задания. */
+  const taskTitle = store.dashboardTaskTitle(task);
   const label = new Date().toLocaleDateString('ru-RU', {
     timeZone: DASHBOARD_TZ,
     day: '2-digit',
@@ -2870,7 +3315,7 @@ function beginDashboardRun(task, { manual = false } = {}) {
   const chatMeta = store.createChat({
     projectId: project.id,
     ownerId: user.id,
-    title: `${block ? block.title : 'Дашборд'} — ${label}`,
+    title: `${taskTitle} — ${label}`,
   });
   const chat = store.getChat(chatMeta.id, user.id) || chatMeta;
   /* Постоянное задание тоже занимает место в общем потолке: иначе планировщик
@@ -2899,6 +3344,109 @@ function beginDashboardRun(task, { manual = false } = {}) {
         .then(() => store.markDashboardFinished(task.id, run.status))
         .catch(() => store.markDashboardFinished(task.id, 'error'));
     },
+  };
+}
+
+/* ---- «создай проект и диалог» словами ----
+   Инструмент агента делает ровно то, что человек сделал бы руками: заводит
+   проект, диалог и запускает в нём задание. Прав это не прибавляет: всё
+   пишется в аккаунт того, кто попросил, и по его балансу. */
+function createProjectChatFor(user, args = {}) {
+  const name = String(args?.name || '').replace(/\s+/g, ' ').trim().slice(0, 80);
+  const task = String(args?.task || '').trim().slice(0, 2000);
+  if (!name) return { ok: false, error: 'Нужно название проекта — до 80 знаков' };
+  let project = null;
+  const wanted = String(args?.projectId || '').trim();
+  if (wanted) {
+    project = store.getProject(wanted, user.id);
+    if (!project) return { ok: false, error: 'Проект не найден — возможно, его удалили' };
+  }
+  if (!project) project = store.createProject({ ownerId: user.id, name });
+  const firstLine = task.split('\n').map((line) => line.trim()).find(Boolean) || name;
+  const chatMeta = store.createChat({
+    projectId: project.id,
+    ownerId: user.id,
+    title: firstLine.length > 80 ? `${firstLine.slice(0, 77)}…` : firstLine,
+  });
+  const chat = store.getChat(chatMeta.id, user.id) || chatMeta;
+  const base = { ok: true, projectName: project.name, chatId: chat.id };
+  /* Задание не началось — это не ошибка: проект и диалог уже есть, человек
+     допишет сам. Инструменту нечего скрывать, поэтому причина приходит
+     текстом, который агент передаст человеку. */
+  if (!task) return { ...base, started: false, note: 'Проект и диалог созданы. Задание пока пустое — напишите его в диалоге.' };
+  if (user.role !== 'admin') {
+    if (store.pendingApprovalFor(project.id)) {
+      return { ...base, started: false, note: 'Диалог создан, но предыдущая тяжёлая задача ждёт подтверждения администратора.' };
+    }
+    if (!(store.publicUser(user.id).balanceUsd > 0)) {
+      return { ...base, started: false, note: 'Диалог создан, но на балансе нет средств — запуск не начат.' };
+    }
+  }
+  const busy = runningByUser.get(user.id) || 0;
+  if (LIMITS.agentConcurrencyPerUser > 0 && busy >= LIMITS.agentConcurrencyPerUser) {
+    return { ...base, started: false, note: `Диалог создан, но сейчас идёт ${busy} ответа — запустите задание там, когда освободится.` };
+  }
+  const slot = CAPACITY.maxRuns > 0 ? runGate.reserve() : null;
+  if (CAPACITY.maxRuns > 0 && !slot) {
+    return { ...base, started: false, note: 'Диалог создан, но сервис сейчас занят — запустите задание в диалоге чуть позже.' };
+  }
+  const run = createRun({ user, project, chat, release: slot });
+  /* Запуск отдельный от текущего хода: он живёт своей жизнью и не держит
+     ответ, из которого его попросили. */
+  void executeRun(run, { text: task, attachmentIds: [], isFirstMessage: true }).catch((error) =>
+    console.error('[create-project] запуск задания:', error?.message || error),
+  );
+  return { ...base, started: true };
+}
+
+/* ---- «добавь свой блок» и «добавь свою тему» словами ----
+   Тот же личный слой, что и кнопки в интерфейсе, только по просьбе в чате:
+   агент пишет в аккаунт того, кто попросил. Основу сервиса это не трогает —
+   createCustomDashboardTask и addPersonalTopic физически не умеют писать в
+   блоки основы (`law`, `taxes`, …) и в шесть тем выпуска. Лимиты те же, что и
+   у кнопок, поэтому словами нельзя получить больше, чем руками. */
+function createPersonalBlockFor(user, args = {}) {
+  const parsed = normalizeBlockInput(args || {});
+  if (!parsed.ok) {
+    return { ok: false, error: parsed.errors[0] || 'Свой блок не добавлен', errors: parsed.errors };
+  }
+  const created = store.createCustomDashboardTask(user.id, parsed.value);
+  if (!created) {
+    return {
+      ok: false,
+      error: `Своих блоков уже ${PERSONAL_LIMITS.blocks} — больше нельзя. Удалите один на дашборде, и место освободится.`,
+    };
+  }
+  return {
+    ok: true,
+    taskId: created.id,
+    title: created.title,
+    schedule: scheduleText(created),
+    customCount: store.customDashboardCount(user.id),
+    limit: PERSONAL_LIMITS.blocks,
+  };
+}
+
+function createNewsTopicFor(user, args = {}) {
+  const parsed = normalizeTopicInput(args || {});
+  if (!parsed.ok) {
+    return { ok: false, error: parsed.errors[0] || 'Своя тема не добавлена', errors: parsed.errors };
+  }
+  const created = store.addPersonalTopic(user.id, parsed.value);
+  if (!created) {
+    return {
+      ok: false,
+      error: `Своих тем уже ${PERSONAL_LIMITS.topics} — больше нельзя. Удалите одну в Top news, и место освободится.`,
+    };
+  }
+  /* Кеш этой темы мог остаться от прошлой жизни: новой теме нужен свежий блок. */
+  clearPersonalTopicCache(user.id, created.id);
+  return {
+    ok: true,
+    topicId: created.id,
+    title: created.title,
+    used: store.personalTopics(user.id).length,
+    limit: PERSONAL_LIMITS.topics,
   };
 }
 
@@ -2943,6 +3491,77 @@ function startDashboardScheduler() {
   timer.unref?.();
 }
 
+/* ---- личный слой: свои темы выпуска ----
+   Темы собираются отдельным модулем и кешируются на сутки. Загружаем его
+   лениво: если файла нет (урезанная сборка, проверки), выпуск обязан работать
+   как раньше, а не падать целиком из-за необязательного расширения. */
+let personalNewsModuleCache;
+async function personalNewsModule() {
+  if (personalNewsModuleCache !== undefined) return personalNewsModuleCache;
+  try {
+    personalNewsModuleCache = await import('./src/topnews-personal.mjs');
+  } catch (error) {
+    console.error('[topnews] свои темы недоступны:', error?.message || error);
+    personalNewsModuleCache = null;
+  }
+  return personalNewsModuleCache;
+}
+
+/** Кеш темы недействителен после отмены или удаления: пустой topicId — вся
+    папка пользователя, так дешевле, чем искать по одному файлу. */
+function clearPersonalTopicCache(userId, topicId = '') {
+  void personalNewsModule()
+    .then((module) => module?.clearPersonalCache(userId, topicId))
+    .catch((error) => console.error('[topnews] кеш своих тем:', error?.message || error));
+}
+
+function personalTopicBlocks(topics, status) {
+  return topics.map((topic) => ({
+    topicId: topic.id,
+    title: topic.title,
+    kicker: topic.kicker,
+    tone: topic.tone,
+    status,
+    items: [],
+  }));
+}
+
+/** Свои темы глазами браузера: список тем плюс готовые блоки выпуска.
+    Сборка запускается фоном и не держит запрос: экран и так опрашивает
+    состояние, поэтому «собираем» превратится в готовый блок сам. */
+async function personalNewsState(user, enabled) {
+  const topics = store.personalTopics(user.id);
+  const summary = {
+    topics: topics.map(publicTopic),
+    limit: PERSONAL_LIMITS.topics,
+    used: topics.length,
+  };
+  if (!topics.length) return { ...summary, blocks: [] };
+  if (!enabled) return { ...summary, blocks: personalTopicBlocks(topics, 'off') };
+  const module = await personalNewsModule();
+  if (!module) return { ...summary, blocks: personalTopicBlocks(topics, 'building') };
+  const now = new Date();
+  let cached = [];
+  try {
+    cached = module.readPersonalBlocks(user.id, module.dateKeyNow(now)) || [];
+  } catch (error) {
+    console.error('[topnews] чтение своих тем:', error?.message || error);
+  }
+  const ready = new Map(cached.map((block) => [block.topicId, block]));
+  const missing = topics.filter((topic) => !ready.has(topic.id));
+  if (missing.length && !module.isBuilding(user.id)) {
+    void module
+      .buildPersonalBlocks(user.id, topics, { now })
+      .catch((error) => console.error('[topnews] сборка своих тем:', error?.message || error));
+  }
+  return {
+    ...summary,
+    blocks: topics.map(
+      (topic) => ready.get(topic.id) || { topicId: topic.id, title: topic.title, kicker: topic.kicker, tone: topic.tone, status: 'building', items: [] },
+    ),
+  };
+}
+
 /* Задание глазами браузера: настройки, подписи, расписание и состояние.
    Внутрь (ownerId, служебные поля) наружу ничего не отдаём. */
 /* Документы задания: отдаём только имя, размер и подсказку — содержимое
@@ -2958,15 +3577,19 @@ function publicDashboardFile(file) {
 
 function publicDashboardTask(task, user) {
   const block = dashboardBlock(task.blockId) || {};
+  /* Свой блок описывает себя сам: записи в каталоге основы у него нет, и брать
+     подписи оттуда нельзя — человек увидел бы чужое название. */
+  const own = Boolean(task.custom);
   const project = task.projectId ? store.getProject(task.projectId, user.id) : null;
   return {
     id: task.id,
     blockId: task.blockId,
-    title: block.title || task.blockId,
-    short: block.short || '',
-    description: block.description || '',
-    icon: block.icon || 'calendar',
-    skill: block.skill || '',
+    custom: own,
+    title: (own ? task.title : block.title) || task.blockId,
+    short: own ? task.short || '' : block.short || '',
+    description: own ? task.description || '' : block.description || '',
+    icon: (own ? task.icon : block.icon) || 'calendar',
+    skill: own ? '' : block.skill || '',
     enabled: Boolean(task.enabled),
     cadence: task.cadence,
     dayOfMonth: task.dayOfMonth,
@@ -2984,13 +3607,24 @@ function publicDashboardTask(task, user) {
     lastChatId: task.lastChatId || '',
     lastError: task.lastError || '',
     files: (Array.isArray(task.files) ? task.files : []).map(publicDashboardFile),
-    defaults: {
-      cadence: block.cadence || 'monthly',
-      dayOfMonth: block.dayOfMonth || 1,
-      dayOfWeek: block.dayOfWeek || 1,
-      hour: block.hour || 9,
-      prompt: block.prompt || '',
-    },
+    /* Заводские настройки есть только у основы: у своего блока заводских нет —
+       то, что человек написал при создании, и есть его собственный текст. */
+    canReset: !own,
+    defaults: own
+      ? {
+          cadence: task.cadence,
+          dayOfMonth: task.dayOfMonth,
+          dayOfWeek: task.dayOfWeek,
+          hour: task.hour,
+          prompt: task.prompt || '',
+        }
+      : {
+          cadence: block.cadence || 'monthly',
+          dayOfMonth: block.dayOfMonth || 1,
+          dayOfWeek: block.dayOfWeek || 1,
+          hour: block.hour || 9,
+          prompt: block.prompt || '',
+        },
   };
 }
 
@@ -3009,6 +3643,16 @@ function dashboardPayload(user) {
     balanceUsd,
     /* Автозапуск тратит баланс — интерфейс обязан сказать это до включения. */
     canAutoRun: user.role === 'admin' || balanceUsd > 0,
+    /* Личный слой: сколько своего уже добавлено и можно ли добавить ещё.
+       Основа при этом не меняется — она вообще не в этом ответе. */
+    personal: {
+      customCount: store.customDashboardCount(user.id),
+      customLimit: PERSONAL_LIMITS.blocks,
+      canAddCustom: store.customDashboardCount(user.id) < PERSONAL_LIMITS.blocks,
+      icons: personal.BLOCK_ICONS,
+    },
+    /* Сводка отмены: по ней кнопка «Вернуть как было» знает, что вернёт. */
+    undo: store.personalUndoSummary(user.id),
   };
 }
 
@@ -3332,6 +3976,71 @@ function startPushScheduler() {
   timer.unref?.();
 }
 
+/* --- реестры задания (dsh-task-brief) ---
+   Харнесс разбирает многосоставную постановку в реестр (пункты P1..Pn с
+   критериями приёмки, переменные, вопросы) и присылает его сюда — человеку
+   видно на доске, что не потеряно, а что открыто.
+
+   Приём (POST) закрыт токеном DSHOW_TASKS_TOKEN: доска не должна становиться
+   местом, куда пишет кто угодно. Без переменной приём выключен целиком —
+   молча, потому что отсутствие настройки не ошибка для харнесса: реестр
+   остаётся локальным, и работа идёт дальше. Чтение — только администратору:
+   это рабочий журнал оператора, а не общая лента.
+
+   Реестр не исполняется и не оценивается: сервер только нормализует его и
+   считает вердикт тем же движком, что и харнесс (src/taskbrief.mjs — копия
+   ядра, сверяется тестом). Секретов в реестре нет: это формулировки человека,
+   статусы и пути к файлам. */
+function taskBriefTokenOk(given) {
+  if (!TASK_BRIEF_TOKEN) return false;
+  const value = String(given || '').trim();
+  if (!value) return false;
+  /* Сравниваем хеши, а не строки: длина токена не должна утекать по времени
+     ответа, а sha256 приводит оба значения к одной длине. */
+  return timingSafeEqualString(sha256(value), sha256(TASK_BRIEF_TOKEN));
+}
+
+async function handleTaskBriefs(req, res, pathname, method, user) {
+  const rest = pathname.replace(/^\/api\/tasks\/briefs\/?/, '');
+  const id = rest.split('/')[0] || '';
+  const isAdmin = user?.role === 'admin';
+
+  if (method === 'POST' && !id) {
+    const byToken = taskBriefTokenOk(req.headers['x-task-brief-token']);
+    if (!byToken && !isAdmin) return sendError(res, 401, 'Нужен токен приёма реестров');
+    const body = await readJsonBody(req, LIMITS.jsonBody);
+    const raw = body?.brief && typeof body.brief === 'object' ? body.brief : body;
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return sendError(res, 400, 'Пустой реестр');
+    if (!String(raw.title || '').trim() && !Array.isArray(raw.points)) {
+      return sendError(res, 400, 'В реестре нет ни названия, ни пунктов');
+    }
+    /* Идентификатор приходит извне — он же имя файла. Пустой или подозрительный
+       заменяем на новый, а не пишем рядом с чужим реестром. */
+    const brief = normalizeBrief(
+      { ...raw, id: /^tb-[A-Za-z0-9-]+$/.test(String(raw.id || '')) ? raw.id : '' },
+      { now: new Date() },
+    );
+    const saved = writeBrief(brief, { source: byToken ? 'harness' : 'site', ownerId: user?.id || '' });
+    const report = validateBrief(saved);
+    return sendJson(res, 201, {
+      ok: true,
+      id: saved.id,
+      verdict: report.verdict,
+      coverage: coverageOf(saved),
+    });
+  }
+
+  if (!isAdmin) return sendError(res, 403, 'Раздел реестров доступен администратору');
+
+  if (method === 'GET' && !id) return sendJson(res, 200, { briefs: listBriefs() });
+  if (method === 'GET' && id) {
+    const detail = briefDetail(id);
+    if (!detail) return sendError(res, 404, 'Реестр не найден');
+    return sendJson(res, 200, detail);
+  }
+  return sendError(res, 405, 'Метод не разрешён');
+}
+
 async function route(req, res) {
   const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
   const pathname = tryDecode(url.pathname);
@@ -3403,6 +4112,14 @@ async function route(req, res) {
         skills: listSkills().length,
         browser: await browserStatus({ probe }),
         stealth: obscuraInfo(),
+        /* Состояние утренней сборки Top news: без него «Не удалось собрать
+           выпуск» на экране приходится разбирать только по журналу. Тем и
+           адресов здесь нет — только счётчики и короткая причина. */
+        topnews: topnews.buildStatus(),
+        /* Озвучка: облако перезапускается на каждом развёртывании, и раньше
+           это молча убивало синтез. Эти числа показывают, что журнал жив и
+           сколько заданий после перезапуска продолжили работу. */
+        narration: narrationStatus(),
         /* Нагрузка: по этим числам видно, когда пора поднимать тариф. Открыто,
            как и остальное в /api/health: имён, текстов и адресов здесь нет. */
         load: {
@@ -3431,6 +4148,12 @@ async function route(req, res) {
           },
         },
       });
+    }
+
+    /* Реестры задания: POST принимает токен харнесса, чтение — администратору.
+       Стоит до requireUser, потому что харнесс ходит без cookie браузера. */
+    if (pathname === '/api/tasks/briefs' || pathname.startsWith('/api/tasks/briefs/')) {
+      return await handleTaskBriefs(req, res, pathname, method, currentUser(req, null));
     }
 
     // --- требуется вход ---
@@ -3762,11 +4485,51 @@ async function route(req, res) {
       if (parts[3] === 'files' && method === 'GET') {
         const rel = url.searchParams.get('path') || '.';
         const depth = Number(url.searchParams.get('depth') || 4);
+        const wantedChatId = String(url.searchParams.get('chatId') || '');
+        let wantedChat = null;
+        if (wantedChatId) {
+          /* Чужой или несуществующий диалог не должен сужать список: проверяем
+             владельца и проект так же, как у остальных запросов к диалогу. */
+          wantedChat = store.getChat(wantedChatId, user.id);
+          if (!wantedChat || wantedChat.projectId !== project.id) {
+            return sendError(res, 404, 'Диалог не найден');
+          }
+        }
         try {
-          const items = listTree(workspace, rel, { depth });
-          return sendJson(res, 200, { path: rel, items });
+          let items = listTree(workspace, rel, { depth });
+          if (wantedChat) items = filterTreeForChat(items, chatFilePaths(project.id, wantedChat, workspace));
+          return sendJson(res, 200, {
+            path: rel,
+            items,
+            scope: wantedChat ? 'chat' : 'project',
+            chatId: wantedChat?.id || null,
+          });
         } catch (error) {
           return sendError(res, 400, error.message);
+        }
+      }
+      /* Обложка книги: плеер просит её, когда рядом с записью картинки нет.
+         Поиск идёт по названию, поэтому у всех частей одной книги обложка
+         общая. Ответ всегда 200: не нашли — плеер просто оставит нотку. */
+      if (parts[3] === 'book-cover' && parts.length === 4 && method === 'POST') {
+        const body = await readJsonBody(req);
+        const rel = String(body.path || '').trim();
+        let full = '';
+        try {
+          full = rel ? resolveSafe(workspace, rel) : '';
+        } catch {
+          return sendJson(res, 200, { ok: false });
+        }
+        if (!full || !fs.existsSync(full) || !fs.statSync(full).isFile()) {
+          return sendJson(res, 200, { ok: false });
+        }
+        try {
+          const found = await ensureBookCover({ dir: path.dirname(full), title: path.basename(full) });
+          if (!found?.file) return sendJson(res, 200, { ok: false });
+          const saved = path.relative(workspace, found.file).split(path.sep).join('/');
+          return sendJson(res, 200, { ok: true, path: saved, source: found.source || '' });
+        } catch {
+          return sendJson(res, 200, { ok: false });
         }
       }
       /* Дизайн-проект: спек и листы. Раньше на просьбу «сделай дизайн» агент
@@ -4046,7 +4809,7 @@ async function route(req, res) {
         /* Книга отдаётся частями по ~30 минут звука плюс один Word с текстом:
            слушать пять часов одним файлом неудобно, а искать нужное место в
            нём — тем более. Части получают имена «… — часть 2 из 12.mp3».
-           Короткая выжимка (до 45 минут) — исключение: она выходит одним MP3,
+           Короткая выжимка (до 50 минут) — исключение: она выходит одним MP3,
            потому что делить получасовую запись на «части» бессмысленно.
            Длину части человек не выбирает: её задаёт структура самой книги
            (choosePartMinutes — короткие главы собираются, длинные режутся),
@@ -4061,7 +4824,32 @@ async function route(req, res) {
            месте (PDF-выгрузка режется по 30 минут, глав там нет). */
         const chapters = splitBlocks(text).length;
         const files = claimNarrationFiles(full, chapterParts.length, { root: workspace });
-        const word = writeNarrationWord(files.word, path.basename(full, path.extname(full)), text);
+        /* Ту же озвучку не запускаем второй раз: два задания на один MP3 пишут
+           в один файл и портят звук, а оба ответа обещают «готово». Отдаём то,
+           что уже работает. */
+        const active = findActiveNarration(user.id, files.parts.map((part) => part.path));
+        if (active) {
+          return sendJson(res, 200, {
+            job: publicJob(active),
+            already: true,
+            plan: {
+              parts: active.parts?.length || chapterParts.length,
+              minutes: Math.round((text.length / CHARS_PER_MINUTE) * 10) / 10,
+              partMinutes,
+              chapters,
+              word: {
+                name: path.basename(files.word),
+                size: fs.existsSync(files.word) ? fs.statSync(files.word).size : 0,
+              },
+            },
+          });
+        }
+        /* Готовый Word не перезаписываем упрощённой копией: иначе озвучка
+           стирает заголовки, оглавление и оформление исходного документа. */
+        const word =
+          path.resolve(files.word) === path.resolve(full)
+            ? { name: path.basename(full), size: fs.statSync(full).size }
+            : writeNarrationWord(files.word, path.basename(full, path.extname(full)), text);
         const job = startNarration({
           ownerId: user.id,
           title: name,
@@ -4078,11 +4866,14 @@ async function route(req, res) {
           wordPath: files.word,
           cacheDir: path.join(DATA_DIR, 'tts-cache'),
         });
+        /* Обложку ищем сразу, пока синтез идёт: к моменту, когда человек
+           откроет запись, картинка уже лежит рядом с MP3. */
+        ensureBookCover({ dir: path.dirname(full), title: name }).catch(() => {});
         return sendJson(res, 200, {
           job: publicJob(job),
           plan: {
             parts: chapterParts.length,
-            minutes: Math.round((text.length / 750) * 10) / 10,
+            minutes: Math.round((text.length / CHARS_PER_MINUTE) * 10) / 10,
             partMinutes,
             chapters,
             word: { name: word.name, size: word.size },
@@ -4121,7 +4912,7 @@ async function route(req, res) {
         return sendJson(res, 200, {
           ok: true,
           chars: text.length,
-          minutes: Math.round((text.length / 750) * 10) / 10,
+          minutes: Math.round((text.length / CHARS_PER_MINUTE) * 10) / 10,
           partMinutes: planMinutes,
           single: plan.length === 1,
           chapters: splitBlocks(text).length,
@@ -4245,6 +5036,14 @@ async function route(req, res) {
         if (isDesignFilePath(target)) {
           return sendError(res, 403, 'Дизайн-проект нельзя заменить загрузкой: спек и листы собирает ассистент. Попросите его изменить дизайн — «Пересобрать» обновит листы.');
         }
+        /* Загрузка из панели при открытом диалоге принадлежит этому диалогу:
+           иначе файл появился бы только в проектном виде. */
+        const uploadChatId = String(req.headers['x-chat-id'] || '');
+        let uploadChat = null;
+        if (uploadChatId) {
+          uploadChat = store.getChat(uploadChatId, user.id);
+          if (!uploadChat || uploadChat.projectId !== project.id) uploadChat = null;
+        }
         const full = resolveSafe(workspace, target);
         if (!(await ensureDiskRoom(res, Number(req.headers['content-length'] || 0)))) return;
         const size = await receiveToFile(req, LIMITS.maxAttachmentBytes, full);
@@ -4252,6 +5051,7 @@ async function route(req, res) {
           await fs.promises.rm(full, { force: true }).catch(() => {});
           return sendError(res, 400, 'Пустой файл');
         }
+        if (uploadChat) rememberChatFiles(project.id, uploadChat.id, [target]);
         return sendJson(res, 200, { path: target.replace(/\\/g, '/'), size });
       }
       if (parts[3] === 'download') {
@@ -4400,6 +5200,19 @@ async function route(req, res) {
        (dashboardTick), а «Запустить сейчас» — эта же ручка, но по кнопке. */
     if (parts[1] === 'dashboard') {
       if (parts.length === 2 && method === 'GET') return sendJson(res, 200, dashboardPayload(user));
+      /* Свой блок: единственное расширение дашборда, доступное человеку.
+         Основа — шесть блоков в коде — этой ручкой не меняется никак. */
+      if (parts[2] === 'tasks' && parts.length === 3 && method === 'POST') {
+        const body = await readJsonBody(req);
+        const parsed = normalizeBlockInput(body);
+        if (!parsed.ok) return sendJson(res, 400, { error: parsed.errors[0] || 'Не удалось создать блок', errors: parsed.errors });
+        const created = store.createCustomDashboardTask(user.id, parsed.value);
+        if (!created) {
+          const limit = PERSONAL_LIMITS.blocks;
+          return sendError(res, 409, `Своих блоков уже ${limit}. Удалите один — и добавьте новый.`);
+        }
+        return sendJson(res, 201, { task: publicDashboardTask(created, user), ...dashboardPayload(user) });
+      }
       if (parts[2] === 'restore' && parts.length === 3 && method === 'POST') {
         const restored = store.restoreDashboardTasks(user.id);
         return sendJson(res, 200, { restored, ...dashboardPayload(user) });
@@ -4408,8 +5221,11 @@ async function route(req, res) {
         const task = store.getDashboardTask(parts[3], user.id);
         if (!task || task.deletedAt) return sendError(res, 404, 'Задание не найдено');
         if (parts.length === 4 && method === 'DELETE') {
-          store.deleteDashboardTask(task.id, user.id);
-          return sendJson(res, 200, { ok: true, deleted: store.dashboardDeletedCount(user.id) });
+          /* Свой блок удаляется насовсем (он не часть основы), блок основы —
+             мягко: запись остаётся, чтобы «Вернуть удалённые» её нашло. */
+          if (task.custom) store.deleteCustomDashboardTask(task.id, user.id);
+          else store.deleteDashboardTask(task.id, user.id);
+          return sendJson(res, 200, { ok: true, ...dashboardPayload(user) });
         }
         if (parts.length === 4 && method === 'PATCH') {
           const body = await readJsonBody(req);
@@ -4429,7 +5245,12 @@ async function route(req, res) {
           /* Крючок для проверок: расписание срабатывает раз в месяц, а
              планировщик надо увидеть сейчас. Включается только окружением. */
           if (process.env.DSHOW_DASHBOARD_TEST === '1' && body.forceDue) store.forceDashboardDue(task.id);
-          return sendJson(res, 200, { task: publicDashboardTask(store.getDashboardTask(task.id, user.id), user) });
+          /* undo — чтобы кнопка «Отменить» появлялась сразу после правки, не
+             дожидаясь нового опроса экрана. */
+          return sendJson(res, 200, {
+            task: publicDashboardTask(store.getDashboardTask(task.id, user.id), user),
+            undo: store.personalUndoSummary(user.id),
+          });
         }
         if (parts[4] === 'run' && method === 'POST') {
           const started = beginDashboardRun(task, { manual: true });
@@ -4466,6 +5287,43 @@ async function route(req, res) {
           return sendError(res, 404, 'Не найдено');
         }
         return sendError(res, 404, 'Не найдено');
+      }
+      return sendError(res, 404, 'Не найдено');
+    }
+
+    /* ---- личный слой: журнал отмены и «вернуть всё как было» ----
+       Отмена возвращает предыдущее состояние ровно одного действия: в журнале
+       лежит снимок «как было», а не вся история. Основу сервиса это не
+       касается — её меняет только код. */
+    if (parts[1] === 'personal') {
+      if (parts[2] === 'journal' && parts.length === 3 && method === 'GET') {
+        const limit = Number(url.searchParams.get('limit') || 10);
+        return sendJson(res, 200, {
+          entries: store.personalUndoList(user.id, limit),
+          ...store.personalUndoSummary(user.id),
+          topics: store.personalTopics(user.id).map(publicTopic),
+        });
+      }
+      if (parts[2] === 'undo' && parts.length === 3 && method === 'POST') {
+        const body = await readJsonBody(req, LIMITS.jsonBody).catch(() => ({}));
+        const outcome = store.applyUndo(user.id, body?.entryId ? String(body.entryId) : '');
+        if (!outcome.ok) return sendError(res, 409, outcome.error || 'Отменять нечего');
+        /* Кеш темы держал бы старые новости: после отмены он недействителен. */
+        for (const topicId of outcome.clearedTopicIds || []) clearPersonalTopicCache(user.id, topicId);
+        return sendJson(res, 200, {
+          undone: { label: outcome.label, kind: outcome.kind },
+          ...dashboardPayload(user),
+          topics: store.personalTopics(user.id).map(publicTopic),
+        });
+      }
+      if (parts[2] === 'reset' && parts.length === 3 && method === 'POST') {
+        const outcome = store.resetPersonalLayer(user.id);
+        clearPersonalTopicCache(user.id, '');
+        return sendJson(res, 200, {
+          reset: outcome,
+          ...dashboardPayload(user),
+          topics: store.personalTopics(user.id).map(publicTopic),
+        });
       }
       return sendError(res, 404, 'Не найдено');
     }
@@ -4637,6 +5495,210 @@ async function route(req, res) {
       store.clearMemory(user.id);
       return sendJson(res, 200, { ok: true, facts: [] });
     }
+
+    /* --- раздел «Top news» ---
+       Один выпуск на дату, шесть тем, по две новости. Тумблер — свой у
+       каждого аккаунта, по умолчанию выключен: записи нет, значит false.
+       Сам выпуск собирает планировщик в 07:00 по Минску, поэтому GET только
+       читает готовое и никогда не держит запрос на время сборки. */
+    if (pathname === '/api/topnews' && method === 'GET') {
+      const enabled = store.topNewsSettings(user.id).enabled;
+      const state = await topnews.userState({ enabled });
+      /* Свои темы — добавка к шести базовым: основа выпуска не пересобирается
+         и не заменяется, поэтому её поля остаются как были. */
+      const own = await personalNewsState(user, enabled);
+      return sendJson(res, 200, { ...state, personal: own }, { 'Cache-Control': 'no-store' });
+    }
+    if (parts[1] === 'topnews' && parts[2] === 'topics') {
+      if (parts.length === 3 && method === 'POST') {
+        const body = await readJsonBody(req, LIMITS.jsonBody).catch(() => ({}));
+        const parsed = normalizeTopicInput(body);
+        if (!parsed.ok) return sendJson(res, 400, { error: parsed.errors[0] || 'Не удалось добавить тему', errors: parsed.errors });
+        const created = store.addPersonalTopic(user.id, parsed.value);
+        if (!created) {
+          return sendError(res, 409, `Своих тем уже ${PERSONAL_LIMITS.topics}. Удалите одну — и добавьте новую.`);
+        }
+        clearPersonalTopicCache(user.id, created.id);
+        /* Своё состояние выпуска, а не дашборда: у этих ответов своя ветка
+           личного слоя, и подменять её счётчиками блоков нельзя. */
+        return sendJson(res, 201, {
+          topic: publicTopic(created),
+          personal: await personalNewsState(user, store.topNewsSettings(user.id).enabled),
+          undo: store.personalUndoSummary(user.id),
+        });
+      }
+      if (parts.length === 4 && method === 'DELETE') {
+        const removed = store.deletePersonalTopic(user.id, parts[3]);
+        if (!removed) return sendError(res, 404, 'Тема не найдена');
+        clearPersonalTopicCache(user.id, removed.id);
+        return sendJson(res, 200, {
+          personal: await personalNewsState(user, store.topNewsSettings(user.id).enabled),
+          undo: store.personalUndoSummary(user.id),
+        });
+      }
+      return sendError(res, 404, 'Не найдено');
+    }
+    if (pathname === '/api/topnews/toggle' && method === 'POST') {
+      const body = await readJsonBody(req, LIMITS.jsonBody).catch(() => ({}));
+      if (typeof body?.enabled !== 'boolean') {
+        return sendJson(res, 400, { error: 'Поле enabled должно быть true или false' });
+      }
+      const enabled = body.enabled;
+      store.setTopNewsEnabled(user.id, enabled);
+      /* Первое включение не должно показывать пустоту до завтра: если сегодня
+         будний день и выпуска ещё нет, сбор стартует сразу. Ответ отдаётся
+         тотчас, экран сам спросит готовность через несколько секунд. */
+      const state = await topnews.userState({ enabled, bootstrap: enabled });
+      return sendJson(res, 200, state, { 'Cache-Control': 'no-store' });
+    }
+
+    /* --- раздел «Телеграм» ---
+       Каналы, сбор публичных превью t.me, лента, статистика, дайджест и
+       markdown-экспорт. Свои файлы в <data>/telegram (src/telegram.mjs), индекс
+       проекта не трогают. Ошибки домена приходят со `status` на Error, поэтому
+       ниже они отдаются человеку своим текстом, а не общим «500»: «t.me
+       недоступен» — это ответ, по которому видно, что делать. */
+    if (parts[0] === 'api' && parts[1] === 'tg') {
+      try {
+        /* Здоровье раздела: без сети и без ожидания — только состояние
+           автосбора и предохранителя транспортов. По нему интерфейс пишет
+           строку «обновлено 3 минуты назад», а дежурный видит причину тишины. */
+        if (parts[2] === 'health' && parts.length === 3 && method === 'GET') {
+          const fresh = tg.freshness();
+          return sendJson(res, 200, {
+            ok: true,
+            ...tgScheduleInfo(),
+            updatedAt: fresh.updatedAt,
+            collected: fresh.collected,
+            channelErrors: fresh.active,
+            transport: tg.transportStatus(),
+            at: nowIso(),
+          });
+        }
+
+        if (parts[2] === 'probe' && parts.length === 3 && method === 'GET') {
+          const gate = tgProbeHits.check(user.id);
+          if (!gate.ok) {
+            const seconds = Math.max(1, Math.ceil(gate.retryAfterMs / 1000));
+            return sendError(res, 429, `Слишком много проверок связи. Повторите через ${seconds} с.`, {
+              'Retry-After': String(seconds),
+            });
+          }
+          tgProbeHits.hit(user.id);
+          return sendJson(res, 200, await tg.probe());
+        }
+
+        if (parts[2] === 'channels' && parts.length === 3) {
+          if (method === 'GET') return sendJson(res, 200, await tg.listChannels());
+          if (method === 'POST') return sendJson(res, 200, await tg.addChannel(await readJsonBody(req)));
+          if (method === 'DELETE') {
+            return sendJson(res, 200, await tg.removeChannel(url.searchParams.get('username') || ''));
+          }
+        }
+        if (parts[2] === 'channels' && parts[3] === 'toggle' && parts.length === 4 && method === 'POST') {
+          return sendJson(res, 200, await tg.toggleChannel(await readJsonBody(req)));
+        }
+
+        if (parts[2] === 'collect' && parts.length === 3 && method === 'POST') {
+          const body = await readJsonBody(req);
+          /* Вход проверяем до счётчика: неверный limit — ошибка клиента, и она
+             не должна съедать попытку сбора. */
+          const limit = body.limit === undefined || body.limit === null || body.limit === ''
+            ? 40
+            : Number(body.limit);
+          if (!Number.isFinite(limit) || limit < 1 || limit > 200) {
+            return sendError(res, 400, 'limit: сколько постов собирать — от 1 до 200');
+          }
+          if (Array.isArray(body.usernames) && body.usernames.length > 50) {
+            return sendError(res, 400, 'Слишком много каналов в одном запросе: до 50');
+          }
+          const gate = tgCollectHits.check(user.id);
+          if (!gate.ok) {
+            const seconds = Math.max(1, Math.ceil(gate.retryAfterMs / 1000));
+            return sendError(res, 429, `Слишком много сборов. Повторите через ${seconds} с.`, {
+              'Retry-After': String(seconds),
+            });
+          }
+          tgCollectHits.hit(user.id);
+          /* prefer — служебный выбор транспорта для проверки на стенде
+             (t.me или мост); без него порядок обычный, t.me первым. */
+          const prefer = body.prefer === 'bridge' ? 'bridge' : body.prefer === 'tme' ? 'tme' : undefined;
+          return sendJson(res, 200, await tg.collect({ usernames: body.usernames, limit, prefer }));
+        }
+
+        if (parts[2] === 'feed' && parts.length === 3 && method === 'GET') {
+          return sendJson(res, 200, await tg.feed(Object.fromEntries(url.searchParams)));
+        }
+        if (parts[2] === 'stats' && parts.length === 3 && method === 'GET') {
+          return sendJson(res, 200, await tg.stats(Object.fromEntries(url.searchParams)));
+        }
+        if (parts[2] === 'digests' && parts.length === 3 && method === 'GET') {
+          return sendJson(res, 200, await tg.listDigests(Object.fromEntries(url.searchParams)));
+        }
+
+        if (parts[2] === 'digest' && parts.length === 3 && method === 'POST') {
+          const body = await readJsonBody(req);
+          const hours = body.hours === undefined || body.hours === null || body.hours === ''
+            ? 24
+            : Number(body.hours);
+          if (!Number.isFinite(hours) || hours <= 0 || hours > 24 * 90) {
+            return sendError(res, 400, 'Период дайджеста: от 1 часа до 90 суток');
+          }
+          if (String(body.focus || '').length > 2000) {
+            return sendError(res, 400, 'Фокус дайджеста: до 2000 символов');
+          }
+          const gate = tgDigestHits.check(user.id);
+          if (!gate.ok) {
+            const seconds = Math.max(1, Math.ceil(gate.retryAfterMs / 1000));
+            return sendError(res, 429, `Слишком много дайджестов. Повторите через ${seconds} с.`, {
+              'Retry-After': String(seconds),
+            });
+          }
+          tgDigestHits.hit(user.id);
+          return sendJson(res, 200, await tg.digest({ hours, channels: body.channels, focus: body.focus }));
+        }
+
+        if (parts[2] === 'export' && parts.length === 3 && method === 'GET') {
+          const query = Object.fromEntries(url.searchParams);
+          const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+          const markdown = await tg.exportMarkdown(query);
+          return sendText(res, 200, markdown, {
+            type: 'text/markdown; charset=utf-8',
+            filename: `telegram-${stamp}.md`,
+          });
+        }
+
+        /* Сырое превью для отладки парсера на живом t.me: отдаёт администратору
+           начало HTML-страницы, чтобы видеть реальную разметку облака. */
+        if (parts[2] === 'raw' && parts.length === 3 && method === 'GET') {
+          const admin = requireAdmin(req, res);
+          if (!admin) return;
+          const query = Object.fromEntries(url.searchParams);
+          if (!String(query.username || '').trim()) return sendError(res, 400, 'Не указано имя канала');
+          const limit = query.limit === undefined || query.limit === '' ? 4000 : Number(query.limit);
+          if (!Number.isFinite(limit) || limit < 200 || limit > 200000) {
+            return sendError(res, 400, 'limit: от 200 до 200000 знаков страницы');
+          }
+          const gate = tgRawHits.check(user.id);
+          if (!gate.ok) {
+            const seconds = Math.max(1, Math.ceil(gate.retryAfterMs / 1000));
+            return sendError(res, 429, `Слишком много загрузок страниц. Повторите через ${seconds} с.`, {
+              'Retry-After': String(seconds),
+            });
+          }
+          tgRawHits.hit(user.id);
+          return sendJson(res, 200, await tg.rawPage({ username: query.username, limit }));
+        }
+
+        return sendError(res, 404, 'Не найдено');
+      } catch (error) {
+        /* Настоящая поломка (без статуса) уходит в общий catch с журналом. */
+        if (!error?.status) throw error;
+        if (error.status >= 500) console.warn('[tg]', error.message);
+        return sendError(res, error.status, error.message);
+      }
+    }
+
     if (pathname === '/api/admin/stats' && method === 'GET') {
       const admin = requireAdmin(req, res);
       if (!admin) return;
@@ -4960,6 +6022,12 @@ server.listen(PORT, HOST, () => {
   console.log('  Рабочее пространство запущено');
   console.log(`  Адрес:  ${address}`);
   console.log(`  Данные: ${DATA_DIR}`);
+  /* Озвучка: незакрытые задания возвращаем в очередь до первого запроса.
+     Развёртывание в облаке поднимает контейнер заново, память очищается — без
+     этого человек, которому агент уже пообещал MP3, не получил бы ничего. */
+  setNarrationJournal(path.join(DATA_DIR, 'tts-jobs'));
+  const resumed = resumeNarrations();
+  if (resumed.resumed) console.log(`  Озвучка: продолжил ${resumed.resumed} заданий после перезапуска`);
   console.log(`  Режим:  ${TRUST_PROXY ? 'за прокси (облако)' : 'локальный'}`);
   console.log(`  Дашборд: ${process.env.DSHOW_DASHBOARD === '0' ? 'выключен' : 'постоянные задания включены'}`);
   console.log(`  Автопродолжение: ${CAPACITY.autoResume ? 'включено' : 'выключено (DSHOW_AUTO_RESUME=0)'}`);
@@ -4995,6 +6063,103 @@ server.listen(PORT, HOST, () => {
   }
 });
 
+/* --- автосбор «Телеграма» ---
+   Раньше свежесть ленты зависела от того, нажал ли человек «Собрать сейчас»:
+   он ждал десятки секунд и иногда получал ошибку донора. Теперь сбор идёт сам
+   по расписанию, а экран показывает только «когда обновляли» — ожидания и
+   ошибок транспорта в обычной работе больше нет. Состояние держим в памяти:
+   после перезапуска первый тик всё равно сделает сбор, а история не нужна. */
+const TG_SCHEDULE = {
+  enabled: false,
+  intervalMin: 0,
+  startedAt: null,
+  lastRunAt: null,
+  lastRunMs: null,
+  lastAdded: null,
+  lastErrors: null,
+  lastError: null,
+  running: false,
+};
+
+function tgScheduleInfo() {
+  const started = TG_SCHEDULE.startedAt ? Date.parse(TG_SCHEDULE.startedAt) : NaN;
+  const nextAt = TG_SCHEDULE.enabled && Number.isFinite(started)
+    ? new Date((TG_SCHEDULE.lastRunAt ? Date.parse(TG_SCHEDULE.lastRunAt) : started) + TG_SCHEDULE.intervalMin * 60000).toISOString()
+    : null;
+  return {
+    enabled: TG_SCHEDULE.enabled,
+    intervalMin: TG_SCHEDULE.intervalMin,
+    /* running — и наш тик, и ручной сбор: интерфейсу важен сам факт «идёт». */
+    running: TG_SCHEDULE.running || tg.collecting(),
+    startedAt: TG_SCHEDULE.startedAt,
+    lastRunAt: TG_SCHEDULE.lastRunAt,
+    lastRunMs: TG_SCHEDULE.lastRunMs,
+    lastAdded: TG_SCHEDULE.lastAdded,
+    lastErrors: TG_SCHEDULE.lastErrors,
+    lastError: TG_SCHEDULE.lastError,
+    nextAt,
+  };
+}
+
+async function telegramAutoCollect() {
+  if (TG_SCHEDULE.running) return;
+  if (!TG_SCHEDULE.enabled) return;
+  TG_SCHEDULE.running = true;
+  const startedAt = Date.now();
+  try {
+    const result = await tg.collect({});
+    const collected = result && typeof result.collected === 'object' ? result.collected : {};
+    const added = Object.values(collected).reduce((sum, value) => sum + (Number(value) || 0), 0);
+    const errors = Array.isArray(result?.errors) ? result.errors : [];
+    TG_SCHEDULE.lastRunAt = new Date().toISOString();
+    TG_SCHEDULE.lastRunMs = Date.now() - startedAt;
+    TG_SCHEDULE.lastAdded = added;
+    TG_SCHEDULE.lastErrors = errors.length;
+    TG_SCHEDULE.lastError = errors.length ? String(errors[0]?.error || '').slice(0, 200) : null;
+    console.log(
+      `[tg] автосбор: +${added} постов за ${Math.round(TG_SCHEDULE.lastRunMs / 1000)} с` +
+        (errors.length ? `, каналов с ошибкой ${errors.length}` : ''),
+    );
+  } catch (error) {
+    TG_SCHEDULE.lastRunAt = new Date().toISOString();
+    TG_SCHEDULE.lastRunMs = Date.now() - startedAt;
+    TG_SCHEDULE.lastAdded = 0;
+    TG_SCHEDULE.lastError = String(error?.message || error).slice(0, 200);
+    /* Пустой список каналов — не поломка: молчим, пока каналы не добавят. */
+    if (error?.status !== 400) console.warn('[tg] автосбор не удался:', TG_SCHEDULE.lastError);
+  } finally {
+    TG_SCHEDULE.running = false;
+  }
+}
+
+function startTelegramScheduler() {
+  const raw = Number(process.env.DSHOW_TG_INTERVAL_MIN ?? 15);
+  const minutes = Number.isFinite(raw) && raw > 0 ? Math.max(5, Math.min(Math.trunc(raw), 24 * 60)) : 0;
+  TG_SCHEDULE.intervalMin = minutes;
+  TG_SCHEDULE.enabled = minutes > 0;
+  if (!TG_SCHEDULE.enabled) {
+    console.log('  Телеграм: автосбор выключен (DSHOW_TG_INTERVAL_MIN=0)');
+    return;
+  }
+  TG_SCHEDULE.startedAt = new Date().toISOString();
+  /* Первый тик с задержкой: при старте сервис поднимает ключи и хранилище, и
+     незачем ходить в сеть раньше, чем он готов отвечать. */
+  const firstDelay = Math.max(0, Number(process.env.DSHOW_TG_START_MS ?? 45000) || 0);
+  const first = setTimeout(telegramAutoCollect, firstDelay);
+  first.unref?.();
+  const every = setInterval(telegramAutoCollect, minutes * 60000);
+  every.unref?.();
+  console.log(`  Телеграм: автосбор каждые ${minutes} мин, первый через ${Math.round(firstDelay / 1000)} с`);
+}
+
+/* «Top news»: один выпуск в будний день в 07:00 по Минску. Планировщик
+   просыпается раз в минуту, но собирает только если тумблер включён хотя бы
+   у одного человека и сегодняшнего выпуска ещё нет. В выходные не делает
+   ничего. DSHOW_TOPNEWS_SCHEDULE=0 выключает тик для проверок. */
+if (process.env.DSHOW_TOPNEWS_SCHEDULE !== '0') {
+  topnews.startTopNewsScheduler({ hasEnabled: () => store.topNewsEnabledCount() > 0 });
+}
+
 /* Планировщик «Дашборда» поднимается вместе с сервисом. Выключается
    переменной окружения: это нужно проверкам, которым не нужен фоновой тик. */
 if (process.env.DSHOW_DASHBOARD !== '0') startDashboardScheduler();
@@ -5012,6 +6177,14 @@ if (process.env.DSHOW_CONTEXT_COMPACT !== '0') startContextCompactor();
 /* Отложенные рассылки уведомлений: раз в полминуты проверяем, не пора ли
    отправлять. Выключается DSHOW_PUSH_SCHEDULE=0 — это нужно проверкам. */
 if (process.env.DSHOW_PUSH_SCHEDULE !== '0') startPushScheduler();
+
+/* Автосбор «Телеграма»: раздел перестаёт быть «соберу, когда захочу». Раз в
+   пятнадцать минут сервис сам обходит активные каналы, поэтому человек видит
+   свежую ленту без ожидания и без ошибок транспорта на экране. Предохранитель
+   в src/telegram.mjs снимает нагрузку с донора, когда тот упирается. Период —
+   DSHOW_TG_INTERVAL_MIN (минуты, не меньше пяти), выключение —
+   DSHOW_TG_SCHEDULE=0 или DSHOW_TG_INTERVAL_MIN=0 (так ходят проверки). */
+if (process.env.DSHOW_TG_SCHEDULE !== '0') startTelegramScheduler();
 
 /* Stealth-браузер obscura: первый запрос не должен ждать скачивания 75 МБ.
    Ставим заранее и молча — если сети нет, инструменты просто останутся на HTTP.

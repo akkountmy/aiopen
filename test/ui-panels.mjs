@@ -207,13 +207,19 @@ try {
        if (!project) project = (await (await fetch('/api/projects', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({name:'Проверка панелей'})})).json()).project;
        const chats = project.chats || [];
        if (!chats.length) await fetch('/api/projects/' + project.id + '/chats', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({title:'Проверка панелей'})});
+       /* Панель при открытом диалоге показывает файлы этого диалога, поэтому
+          загрузка помечается тем же chatId — иначе файл есть в проекте, но в
+          панели его не видно, и проверка падает не по вине интерфейса. */
+       const bootAfter = await (await fetch('/api/bootstrap')).json();
+       const freshProject = (bootAfter.projects || []).find((p) => p.id === project.id) || project;
+       const chatId = ((freshProject.chats || [])[0] || chats[0] || {}).id || '';
        const up = await fetch('/api/projects/' + project.id + '/upload?path=' + encodeURIComponent(${JSON.stringify(FILE_NAME)}), {
          method: 'POST',
-         headers: { 'x-filename': encodeURIComponent(${JSON.stringify(FILE_NAME)}) },
+         headers: { 'x-filename': encodeURIComponent(${JSON.stringify(FILE_NAME)}), ...(chatId ? { 'x-chat-id': chatId } : {}) },
          body: 'проверка',
        });
        if (up.status !== 200) throw new Error('upload ' + up.status);
-       return { id: project.id, name: project.name };
+       return { id: project.id, name: project.name, chatId };
      })()`,
   );
   testProjectId = testProject.id;
@@ -855,7 +861,11 @@ try {
   await deleteTestFile(BASE, USER, PASS, pickerProjectId, pickerFile).catch(() => {});
   chrome.kill();
   await sleep(400);
-  fs.rmSync(profileDir, { recursive: true, force: true });
+  /* Профиль браузера удаляем мягко: Chrome на Windows иногда держит файл ещё
+     несколько секунд, и жёсткий rmSync валил зелёный прогон кодом 1. */
+  try {
+    fs.rmSync(profileDir, { recursive: true, force: true, maxRetries: 20, retryDelay: 200 });
+  } catch { /* уборка не должна портить результат проверки */ }
 }
 
 const failed = results.filter((value) => !value).length;

@@ -5,18 +5,32 @@ import { CAPACITY, DATA_DIR, LIMITS, MODEL } from './config.mjs';
 import { withHeavySlot } from './capacity.mjs';
 import { checkDocument, formatCheckReport } from './doccheck.mjs';
 import { memoryToolReply } from './memory.mjs';
-import { skillBody, skillIds } from './skills.mjs';
+import { skillBody, skillFile, skillFiles, skillIds } from './skills.mjs';
 import { detectKind, extractDocumentText } from './docparse.mjs';
-import { DEFAULT_RATE, DEFAULT_VOICE, MAX_TTS_CHARS, narrationParts, startNarration } from './tts.mjs';
+import {
+  CHARS_PER_MINUTE,
+  DEFAULT_RATE,
+  DEFAULT_VOICE,
+  MAX_TTS_CHARS,
+  findActiveNarration,
+  getJob,
+  jobsFor,
+  narrationParts,
+  publicJob,
+  startNarration,
+} from './tts.mjs';
 import { claimNarrationFiles } from './narration-plan.mjs';
 import { writeNarrationWord } from './narration-word.mjs';
-import { analyzeData, formatAnalysis } from './analysis.mjs';
+import { analyzeData, formatAnalysis, readTable } from './analysis.mjs';
+import { buildScorecard, formatCompanyRating, formatScorecard, rateCompany } from './scoring.mjs';
 import { createDocumentPdf, createPresentationPdf } from './pdf.mjs';
 import { createDrawing } from './drawing.mjs';
 import { docEngines, docIssues, makePdf, makePresentation, makeWord, makeWorkbook } from './doc/index.mjs';
+import { deckHtml, makeDeckPdf, normalizeDeck } from './doc/deck.mjs';
 import { imageInfo } from './doc/image-info.mjs';
 import { describeImage } from './vision.mjs';
 import { fetchUrl, webSearch, readPage, fetchMany, crawlSite, searchMany, scrapePage } from './search.mjs';
+import { ensureBookCover } from './book-cover.mjs';
 import { runJavascript } from './jsruntime.mjs';
 import { checkPage, describePage } from './browser.mjs';
 import { obscuraInfo } from './obscura.mjs';
@@ -38,6 +52,48 @@ import {
   prepareTask,
   gradeRun,
 } from './legalbench.mjs';
+
+/** Человеческий отчёт о фоновой озвучке: прогресс, файлы или ошибка. */
+function ttsJobText(job) {
+  if (!job) return '';
+  const title = job.title ? `«${job.title}»` : 'озвучка';
+  const progress = job.percent ? `, ${job.percent}%` : '';
+  const stage = job.stage ? ` (${job.stage})` : '';
+  if (job.status === 'failed') {
+    return `Озвучка ${title} — ошибка${progress}${stage}.\n${job.error || 'Причина не записана.'}\nMP3 не создан.`;
+  }
+  const files = [...new Set([
+    ...(job.parts || []).filter((part) => part.status === 'done' && part.name).map((part) => part.name),
+    ...(job.files || []).map((file) => file.name).filter(Boolean),
+    job.file?.name,
+    job.word?.name,
+  ].filter(Boolean))];
+  const lines = [`Озвучка ${title} — ${job.status}${progress}${stage}.`];
+  if (job.status === 'done') {
+    lines.push(files.length ? `Готовые файлы: ${files.join(', ')}.` : 'Задание завершено, но файлы не найдены.');
+  } else if (job.status === 'cancelled') {
+    lines.push('Задание остановлено. Готовые части остались в «Файлах проекта».');
+  } else {
+    if (job.chunks) lines.push(`Синтезировано ${job.doneChunks || 0} из ${job.chunks} фрагментов.`);
+    if (job.etaSeconds) lines.push(`Осталось примерно ${Math.max(1, Math.round(job.etaSeconds / 60))} мин.`);
+    /* Часть пишется на диск по ходу синтеза: файл уже в папке, но конец
+       допишется позже. Врать «готово» про такой файл нельзя, а молчать о нём
+       тоже незачем — человек может начать слушать с начала. */
+    const growing = (job.parts || []).filter((part) => part.status === 'running' && (part.writtenChunks || 0) > 0);
+    if (growing.length) {
+      lines.push(
+        `Уже пишется в папку: ${growing
+          .map((part) => `${part.name} (${part.writtenChunks} из ${part.totalChunks || part.writtenChunks} фрагментов)`)
+          .join(', ')} — слушать можно с начала, конец допишется.`,
+      );
+    }
+    const ready = files.filter((name) => !growing.some((part) => part.name === name));
+    if (ready.length) lines.push(`Уже готовы: ${ready.join(', ')}.`);
+    if (job.resumed) lines.push(`Синтез продолжался после перезапуска приложения (${job.resumed} раз) — файл не потерялся.`);
+    lines.push('Синтез продолжается в фоне, файл в «Файлах проекта» растёт.');
+  }
+  return lines.join('\n');
+}
 
 /** Дата и авторитет источника — одной строкой, если DeepSeek их отдал. */
 function searchBadge(result) {
@@ -855,7 +911,7 @@ export const TOOL_DEFS = [
     function: {
       name: 'narrate_document',
       description:
-        'Озвучить документ проекта нейроголосом: короткая выжимка (до 45 минут звука) становится одним MP3, большая книга — несколькими MP3-частями по ~30 минут, плюс один Word с текстом; файлы появляются в разделе «Файлы проекта». Синтез идёт в фоне минутами, инструмент возвращает номер задания сразу. Используй, когда просят «озвучь», «сделай аудиокнигу», «синтезируй речь», «пусть можно послушать».',
+        'Озвучить документ проекта нейроголосом: короткая выжимка (до 50 минут звука) становится одним MP3, большая книга — несколькими MP3-частями по ~30 минут, плюс один Word с текстом; файлы появляются в разделе «Файлы проекта». Синтез идёт в фоне минутами, инструмент возвращает номер задания сразу. Используй, когда просят «озвучь», «сделай аудиокнигу», «синтезируй речь», «пусть можно послушать».',
       parameters: {
         type: 'object',
         properties: {
@@ -868,10 +924,24 @@ export const TOOL_DEFS = [
           minutes: {
             type: 'number',
             description:
-              'Необязательно: длина одной части в минутах (5..90). Если не указывать, короткая выжимка (до 45 минут звука) озвучивается одним файлом, а длина частей большой книги выводится из её глав. Указывать только когда человек прямо просит резать по столько-то минут.',
+              'Необязательно: длина ОДНОЙ части в минутах (5..45), не общий хронометраж книги. Если не указывать, короткая выжимка (до 50 минут звука) озвучивается одним файлом, а длина частей большой книги выводится из её глав. Указывать только когда человек прямо просит резать по столько-то минут; «книга на 60–65 минут» — это общий объём, minutes сюда передавать не нужно.',
           },
         },
         required: ['path'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'tts_status',
+      description:
+        'Проверить фоновую озвучку: статус, прогресс, готовые MP3 и Word или причину ошибки. Без id вернёт последние задания. Вызывай после narrate_document, прежде чем сказать «готово».',
+      parameters: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'Номер задания из narrate_document. Необязательно.' },
+        },
       },
     },
   },
@@ -1151,6 +1221,49 @@ export const TOOL_DEFS = [
       description:
         'Готовый каркас страницы (hero, 2–4 числа, карточки, таблица, финал, подвал, адаптив, видимая плашка ошибок): скопируй в проект и замени содержимое, а не собирай вёрстку с нуля. Возвращает один самодостаточный HTML-файл без внешних запросов.',
       parameters: { type: 'object', properties: {} },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'score_credit',
+      description:
+        'Скоринг в расчёте, а не на словах. mode=scorecard — по истории заявок (.csv/.xlsx: колонка исхода 1 = дефолт, 0 = нет, остальные колонки — признаки) строит карту баллов: корзины, WOE/IV, логистическая регрессия, шкала «баллы при шансах», AUC/Gini/KS, калибровка по группам риска, PSI, полосы рейтинга и отсечка по деньгам (margin на хорошего клиента и lgd на плохого). mode=company — внутренний рейтинг юрлица AAA…D по коэффициентам отчётности и ориентир лимита. Числа идут в документ модели и в create_excel, а решение о признаках и порогах остаётся за риск-комитетом.',
+      parameters: {
+        type: 'object',
+        properties: {
+          mode: { type: 'string', enum: ['scorecard', 'company'], description: 'scorecard — модель по истории заявок; company — юрлицо по отчётности. По умолчанию scorecard.' },
+          path: { type: 'string', description: 'Для scorecard: путь к .csv или .xlsx в проекте.' },
+          sheet: { type: 'string', description: 'Для .xlsx: имя или номер листа.' },
+          target: { type: 'string', description: 'Для scorecard: имя колонки исхода. По умолчанию target.' },
+          exclude: { type: 'array', description: 'Колонки, которых не должно быть в модели: id, даты, ФИО, номер заявки.', items: { type: 'string' } },
+          holdoutShare: { type: 'number', description: 'Доля отложенной выборки, 0,1–0,5. По умолчанию 0,3.' },
+          bins: { type: 'integer', description: 'Сколько корзин резать числовой признак, 3–20. По умолчанию 5.' },
+          minIv: { type: 'number', description: 'Порог IV для отбора признаков. По умолчанию 0,02.' },
+          margin: { type: 'number', description: 'Сколько зарабатываем на одобренном хорошем клиенте, в любых деньгах. По умолчанию 1.' },
+          lgd: { type: 'number', description: 'Сколько теряем на одобренном плохом, в тех же деньгах. По умолчанию 4.' },
+          baseScore: { type: 'number', description: 'Балл на опорных шансах. По умолчанию 600.' },
+          baseOdds: { type: 'number', description: 'Опорные шансы «хорошие : плохие». По умолчанию 50.' },
+          pdo: { type: 'number', description: 'Сколько баллов добавляет удвоение шансов. По умолчанию 20.' },
+          save: { type: 'boolean', description: 'Сохранить карту баллов и отсечки в CSV проекта. По умолчанию да.' },
+          revenue: { type: 'number', description: 'company: выручка за период.' },
+          priorRevenue: { type: 'number', description: 'company: выручка прошлого периода (для роста).' },
+          ebitda: { type: 'number', description: 'company: EBITDA.' },
+          assets: { type: 'number', description: 'company: активы.' },
+          equity: { type: 'number', description: 'company: собственный капитал.' },
+          currentAssets: { type: 'number', description: 'company: оборотные активы.' },
+          inventory: { type: 'number', description: 'company: запасы.' },
+          receivables: { type: 'number', description: 'company: дебиторская задолженность.' },
+          cash: { type: 'number', description: 'company: денежные средства.' },
+          currentLiabilities: { type: 'number', description: 'company: краткосрочные обязательства.' },
+          totalDebt: { type: 'number', description: 'company: долг (кредиты и займы).' },
+          interestExpense: { type: 'number', description: 'company: проценты к уплате.' },
+          netIncome: { type: 'number', description: 'company: чистая прибыль.' },
+          cfo: { type: 'number', description: 'company: операционный денежный поток.' },
+          industry: { type: 'string', description: 'company: отрасль словами — попадёт в отчёт, на шкалу не влияет.' },
+        },
+        required: ['mode'],
+      },
     },
   },
   {
@@ -1524,6 +1637,87 @@ export const TOOL_DEFS = [
   {
     type: 'function',
     function: {
+      name: 'create_deck',
+      description:
+        'Создать дизайнерский дек 16:9 (.pdf) на типографике и палитре харнесса: обложка на акцентном поле с «клином» и образцом шрифта (Aa), тезис + таблица-реестр, план на акцентном поле, список тезисов, KPI-строка, цитата, разделитель, финал. Используй, когда нужна презентация «красиво, как дизайнер», для показа людям. Для правок в PowerPoint рядом есть create_pptx — это отдельный файл, а не копия деки.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Имя файла, например «Презентация.pdf».' },
+          theme: { type: 'string', enum: ['gold', 'graphite', 'cobalt'], description: 'Палитра: gold (по умолчанию), graphite, cobalt.' },
+          title: { type: 'string', description: 'Заголовок документа; на обложке берётся из слайда.' },
+          subtitle: { type: 'string', description: 'Подзаголовок обложки, если у слайда-обложки своего нет.' },
+          kicker: { type: 'string', description: 'Надзаголовок обложки, 2–4 слова.' },
+          footerText: { type: 'string', description: 'Подпись внизу слайдов.' },
+          pageNumbers: { type: 'boolean', description: 'Нумеровать слайды, по умолчанию да.' },
+          slides: {
+            type: 'array',
+            description: 'Слайды по порядку, 3–12 штук.',
+            items: {
+              type: 'object',
+              properties: {
+                layout: { type: 'string', enum: ['cover', 'rows', 'steps', 'list', 'kpi', 'quote', 'section', 'closing'], description: 'cover — обложка, rows — тезис и таблица-реестр, steps — план на акцентном поле, list — утверждение и тезисы, kpi — цифры, quote — цитата, section — разделитель, closing — финал.' },
+                kicker: { type: 'string', description: 'Надзаголовок слайда, 2–4 слова.' },
+                title: { type: 'string', description: 'Заголовок-утверждение; перевод строки — перенос, **слово** выделяется акцентом.' },
+                lead: { type: 'string', description: 'Пояснение в 2–3 строки.' },
+                subtitle: { type: 'string', description: 'То же, что lead.' },
+                action: { type: 'string', description: 'Кнопка на обложке и финале, 2–3 слова.' },
+                tag: { type: 'string', description: 'Подпись у образца шрифта на обложке.' },
+                num: { type: 'string', description: 'Номер части для layout section.' },
+                items: { type: 'array', description: 'Плашки на обложке: {label, caption}.' },
+                badge: { type: 'object', description: 'Одна цифра-якорь с расшифровкой: {value, label}.' },
+                rows: {
+                  type: 'array',
+                  description: 'Строки таблицы-реестра, 3–4.',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      n: { type: 'string' },
+                      name: { type: 'string' },
+                      text: { type: 'string' },
+                      meta: { type: 'string', description: 'Короткая метка справа, до 3 слов.' },
+                    },
+                  },
+                },
+                steps: {
+                  type: 'array',
+                  description: 'Шаги плана, 3–4.',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      num: { type: 'string' },
+                      title: { type: 'string' },
+                      text: { type: 'string' },
+                      meta: { type: 'string', description: 'Срок или ответственный.' },
+                    },
+                  },
+                },
+                bullets: {
+                  type: 'array',
+                  description: 'Тезисы списка, до 5.',
+                  items: {
+                    type: 'object',
+                    properties: { title: { type: 'string' }, text: { type: 'string' } },
+                  },
+                },
+                kpi: {
+                  type: 'array',
+                  description: 'Цифры, 2–4.',
+                  items: { type: 'object', properties: { value: { type: 'string' }, label: { type: 'string' } } },
+                },
+                quote: { type: 'string', description: 'Текст цитаты.' },
+                author: { type: 'string', description: 'Атрибуция цитаты.' },
+                footnote: { type: 'string', description: 'Сноска внизу слайда.' },
+              },
+            },
+          },
+        },
+        required: ['path', 'slides'],
+      },
+    },
+  },  {
+    type: 'function',
+    function: {
       name: 'create_drawing',
       description:
         'Напечатать в PDF/PNG уже готовый SVG или HTML, который написан вручную: схема процесса, простая диаграмма, плакат. Для планов квартиры, расстановки мебели, плана потолка, развёртки и аксонометрии этот инструмент НЕ используется — там нужен build_design: он сам считает геометрию, масштаб, размеры, рамку и штамп, а нарисованный вручную план выходит неточным. Берите create_drawing только когда SVG уже есть целиком.',
@@ -1595,11 +1789,15 @@ export const TOOL_DEFS = [
     function: {
       name: 'use_skill',
       description:
-        'Открыть полную инструкцию навыка по его id. Список навыков с описаниями есть в системном сообщении. Вызывай до начала работы над документом, таблицей, презентацией, PDF, сайтом или сбором данных со страниц.',
+        'Открыть полную инструкцию навыка по его id. Список навыков с описаниями есть в системном сообщении. Вызывай до начала работы над документом, таблицей, презентацией, PDF, сайтом или сбором данных со страниц. Если в инструкции назван файл рядом с навыком (template.md, examples/…, scripts/…), открой его этим же инструментом: id навыка плюс file.',
       parameters: {
         type: 'object',
         properties: {
           id: { type: 'string', description: 'Идентификатор навыка, например office-xlsx.' },
+          file: {
+            type: 'string',
+            description: 'Необязательно: файл внутри папки навыка, например template.md или examples/sample.md.',
+          },
         },
         required: ['id'],
       },
@@ -1704,6 +1902,230 @@ export const TOOL_DEFS = [
       },
     },
   },
+  /* ------------------------------ Телеграм ------------------------------
+     Шесть инструментов одного раздела: каналы, сбор, лента, статистика и
+     дайджест. Данные собирает сам сервис (t.me/s, без MTProto и без токена
+     бота), поэтому инструменты читают его хранилище, а в сеть ходит только
+     tg_collect. Сам раздел живёт в src/telegram.mjs и подгружается в момент
+     вызова: если модуля в сборке ещё нет, инструмент честно отвечает «раздел
+     недоступен», а не роняет сервер статическим импортом. */
+  {
+    type: 'function',
+    function: {
+      name: 'tg_channels',
+      description:
+        'Показать Telegram-каналы, которые уже добавлены в сервис: имя, название, сколько постов собрано, средние и максимальные просмотры, когда был последний пост, включён ли сбор. Начинай с него на вопрос «что нового в моих телеграм-каналах»: сразу видно, есть ли что читать и по каким каналам. В сеть не ходит — отдаёт только уже собранное.',
+      parameters: { type: 'object', properties: {} },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'tg_add_channel',
+      description:
+        'Добавить публичный Telegram-канал в сбор: username без @, 4–32 символа — латиница, цифры и подчёркивание (durov, rbc_news). Сервис проверяет, что у канала есть открытое веб-представление t.me/s, и дальше собирает его посты. Приватные каналы, закрытые чаты и группы так не читаются — не обещай пользователю того, чего сервис не умеет. Посты появятся после tg_collect.',
+      parameters: {
+        type: 'object',
+        properties: {
+          username: { type: 'string', description: 'Имя канала без @, например durov.' },
+        },
+        required: ['username'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'tg_collect',
+      description:
+        'Собрать свежие посты из Telegram-каналов прямо сейчас: загрузка t.me/s, дедупликация по id, запись в хранилище сервиса. Идёт 10–60 секунд — скажи пользователю, что сбор уже пошёл, и дождись ответа. Без channels собирает все активные каналы. Возвращает число новых постов по каждому каналу и ошибки там, где t.me не ответил.',
+      parameters: {
+        type: 'object',
+        properties: {
+          channels: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Имена каналов без @; пусто — все активные каналы из списка.',
+          },
+          limit: { type: 'number', description: 'Сколько последних постов брать с канала, по умолчанию 40.' },
+        },
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'tg_feed',
+      description:
+        'Лента уже собранных постов Telegram с поиском и фильтрами: q — слова (несколько слов должны встретиться все, точную фразу бери в кавычки), hours — за сколько последних часов, channels — только эти каналы, limit — сколько постов (максимум 30). Отдаёт по строке на пост: дата, канал, начало текста (до 300 знаков) и ссылка. Это чтение хранилища, в сеть не ходит: пусто — сначала вызови tg_collect.',
+      parameters: {
+        type: 'object',
+        properties: {
+          q: { type: 'string', description: 'Поиск по тексту постов: все слова должны встретиться, "точная фраза" — в кавычках.' },
+          channels: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Имена каналов без @; пусто — все каналы.',
+          },
+          hours: { type: 'number', description: 'Окно в часах: 24 — за сутки, 168 — за неделю. Без него — всё время.' },
+          limit: { type: 'integer', description: 'Сколько постов вернуть, 1–30. По умолчанию 30.' },
+        },
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'tg_stats',
+      description:
+        'Статистика собранных постов за период: по каждому каналу — сколько постов, средние и максимальные просмотры, дата последнего поста; самые частые слова и ссылки; повторы — одна новость в нескольких каналах. Отвечает на «что обсуждают», «какие темы чаще», «кто написал первым». Считается по уже собранному, без запросов в t.me.',
+      parameters: {
+        type: 'object',
+        properties: {
+          hours: { type: 'number', description: 'За сколько последних часов считать. По умолчанию 24.' },
+        },
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'tg_digest',
+      description:
+        'Дайджест за период, собранный моделью: темы, главное первым, ссылки на посты, без выдуманных чисел и событий. Это отдельный вызов модели, идёт до минуты — предупреди пользователя, что дайджест собирается. Возвращает готовый markdown: передай его пользователю целиком, а не пересказ своими словами. Если за период постов нет, честно вернёт, что собирать нечего.',
+      parameters: {
+        type: 'object',
+        properties: {
+          hours: { type: 'number', description: 'За сколько последних часов. По умолчанию 24.' },
+          channels: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Только эти каналы (без @); пусто — все активные.',
+          },
+          focus: { type: 'string', description: 'На чём сделать акцент, например «только экономика и курсы» или «реакция на релиз».' },
+        },
+      },
+    },
+  },
+  /* Единственный инструмент, который меняет не файлы проекта, а сам аккаунт:
+     заводит проект и диалог в нём. Поэтому у него нет ни пути, ни рабочей
+     папки — только имя, задание и (по желанию) проект, куда добавить диалог. */
+  {
+    type: 'function',
+    function: {
+      name: 'create_project',
+      description:
+        'Создать проект и диалог с заданием. Вызывай, когда человек просит: «создай проект», «создай диалог, в котором нужно сделать вот это», «заведи папку под задачу». Проект появляется в списке проектов, в нём открывается диалог с заданием, и работа начинается сама — человеку не нужно ничего нажимать. Если человек назвал существующий проект («добавь диалог в проект Отчётность»), передай его projectId, а не создавай новый проект. Не вызывай для задачи, которую можно сделать здесь же: инструмент нужен только когда человек хочет отдельный проект или отдельный диалог. За один ход создаётся один проект.',
+      parameters: {
+        type: 'object',
+        properties: {
+          name: {
+            type: 'string',
+            description: 'Название проекта словами человека, до 80 знаков: «Отчёт по складу», «Сайт клиники». Если создаёшь диалог в существующем проекте — название диалога.',
+          },
+          task: {
+            type: 'string',
+            description:
+              'Задание для диалога, до 2000 знаков: что именно нужно сделать. Передай просьбу человека подробно, а не пересказ в одну строку. Пусто — откроется пустой диалог, и задание человек напишет сам.',
+          },
+          projectId: {
+            type: 'string',
+            description: 'id существующего проекта, если диалог нужно открыть внутри него. Пусто — создаётся новый проект.',
+          },
+        },
+        required: ['name'],
+      },
+    },
+  },
+  /* «Добавь мне свой блок на дашборд»: личный слой поверх основы. Инструмент
+     ничего не переписывает в базовых блоках — он добавляет строку в личный
+     слой человека, поэтому блок всегда можно отменить одной кнопкой. */
+  {
+    type: 'function',
+    function: {
+      name: 'add_personal_block',
+      description:
+        'Добавить человеку свой блок на дашборд. Вызывай, когда просят: «добавь мне блок на дашборд», «хочу видеть отчёт по складу на главной», «сделай свой блок с напоминанием о платежах». Блок личный: он принадлежит этому человеку и не меняет шесть базовых блоков дашборда. У блока есть название, короткая подпись, описание, значок и задание — что агент делает, когда блок срабатывает по расписанию. За один ход можно добавить один свой блок; всего своих блоков не больше шести.',
+      parameters: {
+        type: 'object',
+        properties: {
+          title: {
+            type: 'string',
+            description: 'Название блока словами человека, до 60 знаков: «Отчёт по складу».',
+          },
+          task: {
+            type: 'string',
+            description:
+              'Задание блока, до 2000 знаков: что агент должен сделать, когда блок сработает. Передай просьбу человека, а не пересказ в одну строку.',
+          },
+          short: {
+            type: 'string',
+            description: 'Короткая подпись под названием, до 120 знаков. Необязательно.',
+          },
+          description: {
+            type: 'string',
+            description: 'Что блок показывает, до 240 знаков: одна-две фразы для человека. Необязательно.',
+          },
+          icon: {
+            type: 'string',
+            enum: ['chart', 'calendar', 'receipt', 'scale', 'globe', 'sliders', 'file', 'users'],
+            description: 'Значок блока. Необязательно: если не уверен — не передавай, сервер поставит свой.',
+          },
+          cadence: {
+            type: 'string',
+            enum: ['weekly', 'monthly', 'quarterly'],
+            description: 'Как часто срабатывает: weekly — каждую неделю, monthly — каждый месяц, quarterly — раз в квартал. По умолчанию monthly.',
+          },
+          dayOfMonth: {
+            type: 'integer',
+            minimum: 1,
+            maximum: 28,
+            description: 'День месяца, 1–28. По умолчанию 1.',
+          },
+          hour: {
+            type: 'integer',
+            minimum: 0,
+            maximum: 23,
+            description: 'Час запуска по местному времени, 0–23. По умолчанию 9.',
+          },
+        },
+        required: ['title', 'task'],
+      },
+    },
+  },
+  /* «Добавь мне свою тему в Top news»: та же логика — личная строка поверх
+     шести базовых тем выпуска. База не меняется, своё отменяется кнопкой. */
+  {
+    type: 'function',
+    function: {
+      name: 'add_news_topic',
+      description:
+        'Добавить человеку свою тему в Top news. Вызывай, когда просят: «добавь мне тему про логистику», «хочу видеть новости по моей отрасли на экране Top news», «следи за рынком лизинга». Тема личная: она собирается в фоне и не меняет шесть базовых тем выпуска. Нужны заголовок и поисковый запрос, по которому собираются новости. За один ход можно добавить одну свою тему; всего своих тем не больше трёх.',
+      parameters: {
+        type: 'object',
+        properties: {
+          title: {
+            type: 'string',
+            description: 'Заголовок темы словами человека, до 40 знаков: «Логистика».',
+          },
+          query: {
+            type: 'string',
+            description: 'Поисковый запрос, до 120 знаков: по нему собираются новости, например «логистика Беларусь».',
+          },
+          kicker: {
+            type: 'string',
+            description: 'Подпись над заголовком темы, до 60 знаков. Необязательно.',
+          },
+          extraQueries: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Дополнительные поисковые запросы (до 3 по 120 знаков), чтобы тема собиралась шире. Необязательно.',
+          },
+        },
+        required: ['title', 'query'],
+      },
+    },
+  },
 ];
 
 export const TOOL_LABELS = {
@@ -1718,7 +2140,9 @@ export const TOOL_LABELS = {
   find_in_files: 'Поиск по файлам',
   read_document: 'Разбор документа',
   narrate_document: 'Озвучка документа',
+  tts_status: 'Статус озвучки',
   analyze_data: 'Анализ данных',
+  score_credit: 'Скоринг заявок',
   analyze_image: 'Распознавание изображения',
   web_search: 'Поиск в интернете',
   fetch_url: 'Загрузка страницы',
@@ -1734,6 +2158,7 @@ export const TOOL_LABELS = {
   create_excel: 'Создание Excel',
   create_word: 'Создание Word',
   create_pptx: 'Создание презентации',
+  create_deck: 'Дизайн-дека',
   create_pdf: 'Создание PDF',
   create_drawing: 'Чертёж',
   build_design: 'Дизайн-проект',
@@ -1744,6 +2169,15 @@ export const TOOL_LABELS = {
   check_links: 'Проверка ссылок',
   compare_documents: 'Сравнение документов',
   legal_task: 'Юридический полигон',
+  tg_channels: 'Каналы Telegram',
+  tg_add_channel: 'Добавление канала',
+  tg_collect: 'Сбор из Telegram',
+  tg_feed: 'Лента Telegram',
+  tg_stats: 'Статистика Telegram',
+  tg_digest: 'Дайджест Telegram',
+  create_project: 'Создание проекта',
+  add_personal_block: 'Свой блок',
+  add_news_topic: 'Своя тема',
 };
 
 /** Русское склонение по числу: 1 ссылка, 2 ссылки, 5 ссылок. */
@@ -1767,10 +2201,13 @@ export function toolSummary(name, args) {
     case 'analyze_image':
     case 'delete_path':
       return args.path || '';
+    case 'tts_status':
+      return args.id ? String(args.id) : 'последние';
     case 'write_file':
     case 'create_excel':
     case 'create_word':
     case 'create_pptx':
+    case 'create_deck':
     case 'create_pdf':
     case 'create_drawing':
       return args.path || '';
@@ -1846,9 +2283,106 @@ export function toolSummary(name, args) {
       return String(args.expression || '').slice(0, 80);
     case 'list_files':
       return args.path || '.';
+    /* Шаги «Телеграма» в ленте: человека интересует, за какой период и по
+       каким каналам спросили, а не имя инструмента. */
+    case 'tg_channels':
+      return 'все каналы';
+    case 'tg_add_channel': {
+      const username = String(args.username || '').trim().replace(/^@+/, '');
+      return username ? `@${username}` : '';
+    }
+    case 'tg_collect': {
+      const list = Array.isArray(args.channels) ? args.channels.filter(Boolean) : [];
+      const limit = Math.max(1, Math.min(200, Number(args.limit) || 40));
+      return `${list.length ? list.map((name) => `@${String(name).replace(/^@+/, '')}`).join(', ') : 'все активные'} · до ${limit} постов`;
+    }
+    case 'tg_feed': {
+      const bits = [];
+      if (args.q) bits.push(`«${String(args.q).slice(0, 60)}»`);
+      const channels = Array.isArray(args.channels) ? args.channels.filter(Boolean).length : 0;
+      if (channels) bits.push(`${channels} ${plural(channels, 'канал', 'канала', 'каналов')}`);
+      const hours = Number(args.hours);
+      if (Number.isFinite(hours) && hours > 0) bits.push(`за ${hours} ч`);
+      return bits.join(' · ') || 'свежие посты';
+    }
+    case 'tg_stats': {
+      const hours = Number(args.hours);
+      return Number.isFinite(hours) && hours > 0 ? `за ${hours} ч` : 'за сутки';
+    }
+    case 'tg_digest': {
+      const hours = Number(args.hours);
+      const bits = [`за ${Number.isFinite(hours) && hours > 0 ? hours : 24} ч`];
+      const channels = Array.isArray(args.channels) ? args.channels.filter(Boolean).length : 0;
+      if (channels) bits.push(`${channels} ${plural(channels, 'канал', 'канала', 'каналов')}`);
+      if (args.focus) bits.push(`фокус: ${String(args.focus).slice(0, 40)}`);
+      return bits.join(' · ');
+    }
+    /* Карточка в ленте читается как «Создание проекта · «Отчёт по складу»»:
+       само действие берётся из TOOL_LABELS, а здесь только имя проекта. */
+    case 'create_project': {
+      const name = String(args.name || '').replace(/\s+/g, ' ').trim();
+      return name ? `«${name.slice(0, 80)}»` : '';
+    }
+    /* Карточка читается как «Свой блок · «Отчёт по складу»» и «Своя тема ·
+       «Логистика»»: действие — из метки, здесь только название. */
+    case 'add_personal_block': {
+      const title = String(args.title || '').replace(/\s+/g, ' ').trim();
+      return title ? `«${title.slice(0, 60)}»` : '';
+    }
+    case 'add_news_topic': {
+      const title = String(args.title || '').replace(/\s+/g, ' ').trim();
+      return title ? `«${title.slice(0, 40)}»` : '';
+    }
     default:
       return '';
   }
+}
+
+/** Число из аргумента модели с запасным значением: пусто и мусор не ломают расчёт. */
+function finiteOr(value, fallback) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : fallback;
+}
+
+/** Десятичная запятая и «;» — чтобы CSV открывался в русском Excel двойным щелчком. */
+function csvCell(value) {
+  if (value === null || value === undefined) return '';
+  const text = typeof value === 'number' ? String(value).replace('.', ',') : String(value);
+  return /[";\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
+function writeCsv(file, header, rows) {
+  const body = rows.map((row) => row.map(csvCell).join(';')).join('\r\n');
+  fs.writeFileSync(file, `\uFEFF${header.map(csvCell).join(';')}\r\n${body}\r\n`, 'utf8');
+}
+
+/**
+ * Карта баллов и отсечки рядом с выгрузкой: это рабочий документ риск-аналитика,
+ * его открывают в Excel и прикладывают к модели. Поэтому пишем сразу, а не
+ * просим модель перепечатывать числа в create_excel.
+ */
+function saveScorecardFiles(sourceFile, result) {
+  const dir = path.dirname(sourceFile);
+  const base = path.basename(sourceFile, path.extname(sourceFile));
+  const cardPath = path.join(dir, `${base}-карта-баллов.csv`);
+  const rows = [];
+  for (const feature of result.scorecard) {
+    for (const bin of feature.bins) {
+      rows.push([feature.feature, bin.label, bin.count, bin.share, bin.badRate, bin.woe, bin.points]);
+    }
+  }
+  writeCsv(
+    cardPath,
+    ['Признак', 'Корзина', 'Заявок', 'Доля', 'Доля плохих', 'WOE', 'Баллы'],
+    rows,
+  );
+  const cutPath = path.join(dir, `${base}-отсечки.csv`);
+  writeCsv(
+    cutPath,
+    ['Доля одобрения', 'PD-порог', 'Балл', 'Плохих среди одобренных', 'Прибыль', 'Прибыль на заявку'],
+    result.cutoffs.map((row) => [row.share, row.cutoffPd, row.cutoffScore, row.badRate, row.profit, row.profitPerApplication]),
+  );
+  return [path.basename(cardPath), path.basename(cutPath)];
 }
 
 function assertInside(root, full) {
@@ -1870,6 +2404,7 @@ const WRITE_TARGETS = {
   create_excel: ['path'],
   create_word: ['path'],
   create_pptx: ['path'],
+  create_deck: ['path'],
   create_pdf: ['path'],
   create_drawing: ['path'],
   narrate_document: ['path'],
@@ -1956,6 +2491,76 @@ export async function availableToolDefs() {
   let defs = TOOL_DEFS;
   if (!withPython) defs = defs.filter((tool) => tool.function.name !== 'run_python');
   return defs;
+}
+
+/* ------------------------- создание проекта и диалога ---------------------- */
+
+/* Пределы повторяют то, что принимает окно «Проекты»: длинное имя всё равно
+   обрежется в интерфейсе, а задание на 20 000 знаков — это уже не задание. */
+const CREATE_PROJECT_LIMITS = { nameChars: 80, taskChars: 2000 };
+
+/** Отказ инструмента словами: модель читает text, машина — reason. */
+function toolRefusal(text, reason = '') {
+  return { text, meta: { ok: false }, error: reason || text };
+}
+
+/* Флаг «в этом ходу проект уже создан».
+ *
+ * Зачем отдельный объект: executeTool вызывает ветку с копией контекста
+ * (`{ ...ctx, signal }`), поэтому присваивание ctx.createdProject = true
+ * терялось бы между шагами, и агент создал бы второй проект за тот же ход.
+ * Объект копируется по ссылке — флаг виден следующему вызову. */
+function projectTurnGuard(ctx) {
+  if (ctx && typeof ctx === 'object' && ctx.projectGuard && typeof ctx.projectGuard === 'object') {
+    return ctx.projectGuard;
+  }
+  return ctx && typeof ctx === 'object' ? ctx : {};
+}
+
+/* ------------------------- свои блоки и свои темы -------------------------- */
+
+/* Пределы повторяют то, что принимает личный слой: длинное название всё равно
+   обрежется на экране, а задание на 20 000 знаков — это уже не задание. */
+const PERSONAL_TOOL_LIMITS = {
+  title: 60,
+  task: 2000,
+  short: 120,
+  description: 240,
+  topicTitle: 40,
+  query: 120,
+  kicker: 60,
+  extraQueriesMax: 3,
+  extraQueryChars: 120,
+};
+
+/* Значения из закрытых списков сервера. Если модель прислала своё, лучше не
+   передавать вовсе: сервер поставит значение по умолчанию и блок откроется,
+   а не откажет человеку из-за одного слова в значке. */
+const PERSONAL_ICONS = ['chart', 'calendar', 'receipt', 'scale', 'globe', 'sliders', 'file', 'users'];
+const PERSONAL_CADENCES = ['weekly', 'monthly', 'quarterly'];
+
+/* Флаг «в этом ходу своё уже добавили».
+ *
+ * Зачем отдельный объект: executeTool вызывает ветку с копией контекста
+ * (`{ ...ctx, signal }`), поэтому присваивание на копии терялось бы между
+ * шагами, и одна просьба человека давала бы два блока или две темы. Объект
+ * копируется по ссылке — флаг виден следующему вызову. Блок и тема считаются
+ * отдельно: это разные экраны и разные лимиты. */
+function personalTurnGuard(ctx) {
+  if (ctx && typeof ctx === 'object' && ctx.personalGuard && typeof ctx.personalGuard === 'object') {
+    return ctx.personalGuard;
+  }
+  return ctx && typeof ctx === 'object' ? ctx : {};
+}
+
+/** Отказ личного слоя: сервер уже сформулировал причину для человека. */
+function personalRefusal(lead, outcome) {
+  const error = String(outcome?.error || '').trim() || 'сервер не объяснил причину';
+  const details = Array.isArray(outcome?.errors)
+    ? outcome.errors.map((item) => String(item || '').trim()).filter(Boolean)
+    : [];
+  const text = `${lead}: ${error}${details.length ? `\nЧто поправить: ${details.join('; ')}` : ''}`;
+  return toolRefusal(text, error);
 }
 
 /* Сам разбор инструментов. Обёртка с общим дедлайном — ниже, в executeTool:
@@ -2072,6 +2677,88 @@ export async function applyReference(root, spec, args, ctx) {
   }
   spec.style = merged;
   return { used: true, extracted: Boolean(extracted), name: ref.name, warning };
+}
+
+/* ------------------------------ Телеграм --------------------------------
+   Шесть tg_* работают через src/telegram.mjs — модуль раздела, который живёт
+   отдельно. Грузим его в момент вызова, а не в шапке файла: статический
+   import уронил бы весь сервер, пока модуля нет или он недописан, причём на
+   старте, а не в одном разговоре. Отсюда telegramApi(): либо готовый модуль,
+   либо понятная ошибка пользователю. */
+
+async function telegramApi(...methods) {
+  let module = null;
+  try {
+    module = await import('./telegram.mjs');
+  } catch (error) {
+    const code = String(error?.code || '');
+    const detail = String(error?.message || error || 'неизвестная ошибка').slice(0, 200);
+    /* Две разные беды: модуля нет вовсе (ветка ещё не влита) и модуль есть,
+       но не загрузился — например, не хватает экспорта в config.mjs. Второе
+       тоже не должно ронять сервер, но причину надо показать как есть. */
+    const reason =
+      code === 'ERR_MODULE_NOT_FOUND' && /telegram\.mjs/.test(detail)
+        ? 'модуль сбора src/telegram.mjs ещё не установлен в этой сборке'
+        : `модуль src/telegram.mjs не загрузился (${detail})`;
+    throw new Error(`Раздел «Телеграм» недоступен: ${reason}`);
+  }
+  const missing = methods.filter((name) => typeof module[name] !== 'function');
+  if (missing.length) {
+    throw new Error(`Раздел «Телеграм» недоступен: src/telegram.mjs не отдаёт ${missing.join(', ')}`);
+  }
+  return module;
+}
+
+/** Имена каналов из аргументов модели: без @, строчными, без повторов. */
+function tgChannelList(raw) {
+  const out = [];
+  for (const item of Array.isArray(raw) ? raw : []) {
+    const name = String(item ?? '').trim().replace(/^@+/, '').toLowerCase();
+    if (name && !out.includes(name)) out.push(name);
+  }
+  return out;
+}
+
+/** Часы из аргументов: положительное целое, иначе значение по умолчанию. */
+function tgHours(raw, fallback) {
+  const hours = Number(raw);
+  if (!Number.isFinite(hours) || hours <= 0) return fallback;
+  return Math.min(24 * 365, Math.round(hours));
+}
+
+/** ISO-дата поста коротко: «2026-11-08 19:31» (UTC, как и в хранилище). */
+function tgWhen(value) {
+  const iso = String(value || '');
+  if (!/^\d{4}-\d{2}-\d{2}T/.test(iso)) return '';
+  return `${iso.slice(0, 10)} ${iso.slice(11, 16)}`;
+}
+
+/** Просмотры без ложной точности: «45 000», а не «45000». */
+function tgViews(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number) || number <= 0) return '';
+  return Math.round(number).toLocaleString('ru-RU');
+}
+
+/** Строка канала: годится и для списка каналов, и для строки статистики —
+ *  в списке счётчики лежат внутри stats, в статистике на верхнем уровне. */
+function tgChannelLine(channel) {
+  const data = channel && typeof channel === 'object' ? channel : {};
+  const stats = data.stats && typeof data.stats === 'object' ? data.stats : {};
+  const pick = (key) => (stats[key] !== undefined && stats[key] !== null ? stats[key] : data[key]);
+  const username = String(data.username || '').replace(/^@/, '') || 'без имени';
+  const bits = [];
+  if (data.title) bits.push(String(data.title).slice(0, 80));
+  const posts = Number(pick('posts'));
+  if (Number.isFinite(posts)) bits.push(`${posts} ${plural(posts, 'пост', 'поста', 'постов')}`);
+  const avg = tgViews(pick('viewsAvg'));
+  if (avg) bits.push(`сред. ${avg}`);
+  const max = tgViews(pick('viewsMax'));
+  if (max) bits.push(`макс. ${max}`);
+  const last = tgWhen(pick('lastPostAt'));
+  if (last) bits.push(`последний ${last}`);
+  if (data.active === false) bits.push('сбор выключен');
+  return `@${username} — ${bits.length ? bits.join(' · ') : 'данных пока нет'}`;
 }
 
 async function executeToolInner(name, args, ctx) {
@@ -2218,6 +2905,24 @@ async function executeToolInner(name, args, ctx) {
       walk(base);
       return { text: results.length ? results.join('\n') : 'Ничего не найдено.', meta: { count: results.length } };
     }
+    case 'tts_status': {
+      const wanted = String(args.id || '').trim();
+      if (wanted) {
+        const job = publicJob(getJob(wanted, ctx?.ownerId || null));
+        if (!job) {
+          return {
+            text:
+              `Задание «${wanted}» не найдено в памяти — скорее всего оно уже закончилось и было убрано, либо номер устарел. ` +
+              'Озвучка больше не теряется при перезапуске: проверь «Файлы проекта» — MP3 с этим названием, возможно, уже там.',
+            meta: { jobId: wanted },
+          };
+        }
+        return { text: ttsJobText(job), meta: { job } };
+      }
+      const recent = jobsFor(ctx?.ownerId || null).slice(-5).reverse();
+      if (!recent.length) return { text: 'Фоновых озвучек нет.', meta: { jobs: [] } };
+      return { text: recent.map(ttsJobText).join('\n\n'), meta: { jobs: recent } };
+    }
     case 'narrate_document': {
       /* Озвучка идёт минутами, а ход агента ограничен: инструмент только
          готовит файлы и ставит задание в очередь, синтез продолжается сам. */
@@ -2241,12 +2946,35 @@ async function executeToolInner(name, args, ctx) {
         );
       }
       /* Сколько файлов — решает narrationParts, а не сам вызов: короткую
-         выжимку (до 45 минут звука) отдаём одним MP3, даже если в ней есть
+         выжимку (до 50 минут звука) отдаём одним MP3, даже если в ней есть
          главы; длинную книгу режем по её структуре. Явный minutes из чата
-         считается заказом модели и уважается как есть. */
+         задаёт длину одной части, но narrationParts ограничивает её 45
+         минутами: часовой файл теряется целиком при перезапуске. */
       const chapters = narrationParts(text, { minutes: args.minutes });
       const files = claimNarrationFiles(full, chapters.length, { root });
-      const word = writeNarrationWord(files.word, path.basename(full, path.extname(full)), text);
+      /* Повторная просьба об озвучке того же документа не должна запускать
+         второе задание: два писателя в один MP3 перемешивают звук. Возвращаем
+         уже работающее задание и честно говорим, что оно идёт. */
+      const active = findActiveNarration(ctx?.ownerId || null, files.parts.map((part) => part.path));
+      if (active) {
+        const running = publicJob(active);
+        return {
+          text: [
+            'Эта озвучка уже идёт — второе задание на тот же файл испортило бы звук, поэтому продолжим текущее.',
+            `«${path.basename(full)}»: ${running.doneChunks} из ${running.chunks} фраз, ${running.percent}%.`,
+            `MP3 в «Файлах проекта»: ${(running.parts || []).map((part) => part.name).join(', ')}.`,
+            `Номер задания: ${running.id}. Проверь tts_status с этим id — по статусу done и говори «готово».`,
+          ].join('\n'),
+          meta: { path: args.path, jobId: running.id, parts: (running.parts || []).length, already: true },
+        };
+      }
+      /* Если озвучиваем готовый Word, не перезаписываем его упрощённой
+         копией: так терялись заголовки, оглавление и всё оформление. Word
+         нужен только как спутник PDF/текста, у которого своего Word нет. */
+      const word =
+        path.resolve(files.word) === path.resolve(full)
+          ? { name: path.basename(full), size: stat.size, paragraphs: 0 }
+          : writeNarrationWord(files.word, path.basename(full, path.extname(full)), text);
       const job = startNarration({
         ownerId: ctx?.ownerId || null,
         title: path.basename(full),
@@ -2262,14 +2990,18 @@ async function executeToolInner(name, args, ctx) {
         wordPath: files.word,
         cacheDir: path.join(DATA_DIR, 'tts-cache'),
       });
-      const total = Math.round((text.length / 750) * 10) / 10;
+      /* Обложка не должна ждать конца синтеза: кладём её рядом с файлами
+         сразу, иначе в плеере оставалась бы синяя нотка. */
+      ensureBookCover({ dir: path.dirname(full), title: path.basename(full) }).catch(() => {});
+      const total = Math.round((text.length / CHARS_PER_MINUTE) * 10) / 10;
       const lines = [
         `Озвучка запущена в фоне: «${path.basename(full)}», ${text.length.toLocaleString('ru-RU')} знаков ≈ ${Math.round(total)} мин звука.`,
         chapters.length > 1
           ? `Получится ${chapters.length} частей по ~${Math.round(total / chapters.length)} мин и Word с текстом.`
           : `Получится один MP3 на ~${Math.round(total)} мин и Word с текстом.`,
         `Файлы появятся в разделе «Файлы проекта»: ${files.parts.map((part) => path.basename(part.path)).join(', ')}, ${word.name}.`,
-        'Проверить готовность: tts_status (или список файлов проекта).',
+        'MP3 создаётся сразу и растёт по ходу синтеза: через минуту файл уже можно начинать слушать, а конец допишется. Перезапуск приложения озвучку больше не теряет — она продолжается сама.',
+        `Номер задания: ${job.id}. Это ещё не готовый файл — проверь tts_status с этим id, прежде чем сказать «готово».`,
       ];
       return {
         text: lines.join('\n'),
@@ -2331,6 +3063,59 @@ async function executeToolInner(name, args, ctx) {
           mode: result.mode,
           rows: result.scanned ?? result.rows?.length ?? 0,
           matched: result.matched ?? null,
+        },
+      };
+    }
+    case 'score_credit': {
+      const mode = args.mode === 'company' ? 'company' : 'scorecard';
+      if (mode === 'company') {
+        const result = rateCompany(args);
+        return {
+          text: truncate(formatCompanyRating(result), 20000),
+          meta: { mode, grade: result.grade, score: result.score, pd: result.pd, limit: result.recommendedLimit },
+        };
+      }
+      if (!args.path) throw new Error('Укажите path: файл .csv или .xlsx с историей заявок в проекте.');
+      const full = assertInside(root, resolveSafe(root, args.path));
+      const stat = fs.statSync(full);
+      if (!stat.isFile()) throw new Error('Это не файл');
+      if (stat.size > LIMITS.maxParseBytes) {
+        throw new Error(`Файл ${formatBytes(stat.size)} больше предела ${formatBytes(LIMITS.maxParseBytes)}: возьмите выгрузку за период поуже.`);
+      }
+      const table = await readTable(full, { sheet: args.sheet, headerRow: args.headerRow });
+      if (!table.rows.length) throw new Error('В таблице нет строк данных: проверьте шапку и лист.');
+      const result = buildScorecard({
+        rows: table.rows,
+        target: args.target || 'target',
+        options: {
+          holdoutShare: finiteOr(args.holdoutShare, 0.3),
+          bins: finiteOr(args.bins, 5),
+          minIv: finiteOr(args.minIv, 0.02),
+          margin: finiteOr(args.margin, 1),
+          lgd: finiteOr(args.lgd, 4),
+          baseScore: finiteOr(args.baseScore, 600),
+          baseOdds: finiteOr(args.baseOdds, 50),
+          pdo: finiteOr(args.pdo, 20),
+          exclude: Array.isArray(args.exclude) ? args.exclude : [],
+        },
+      });
+      const notes = [];
+      if (table.truncated) notes.push('В таблице больше 200 000 строк: взяты первые 200 000.');
+      const saved = args.save === false ? [] : saveScorecardFiles(full, result);
+      if (saved.length) notes.push(`Сохранено рядом с выгрузкой: ${saved.join(', ')}.`);
+      const text = [formatScorecard(result), ...notes].join('\n');
+      return {
+        text: truncate(text, 20000),
+        meta: {
+          mode,
+          rows: result.rows,
+          features: result.features.length,
+          auc: result.metrics.aucValid,
+          gini: result.metrics.giniValid,
+          ks: result.metrics.ksValid,
+          psi: result.metrics.psi,
+          cutoffScore: result.bestCutoff.cutoffScore,
+          saved,
         },
       };
     }
@@ -2653,6 +3438,74 @@ async function executeToolInner(name, args, ctx) {
         meta: { path: rel, created: true, engine, slides: total, check: { ok: check.ok, errors: check.errors, warnings: check.warnings } },
       };
     }
+    case 'create_deck': {
+      const rel = String(args.path || 'Презентация.pdf');
+      if (!rel.toLowerCase().endsWith('.pdf')) throw new Error('Имя файла должно заканчиваться на .pdf');
+      ensureFreeSpace(LIMITS.minFreeBytes);
+      const spec = {
+        theme: args.theme,
+        title: args.title,
+        subtitle: args.subtitle,
+        kicker: args.kicker,
+        footerText: args.footerText,
+        pageNumbers: args.pageNumbers,
+        slides: Array.isArray(args.slides) ? args.slides : [],
+      };
+      const slides = normalizeDeck(spec).slides.length;
+      if (!slides) throw new Error('Нужен хотя бы один слайд');
+      const full = assertInside(root, resolveSafe(root, rel));
+      ensureDirFor(full);
+      let out;
+      try {
+        out = await makeDeckPdf(spec, { pdfPath: full });
+      } catch (error) {
+        /* Без браузера дека всё равно полезна: отдаём HTML и честную причину. */
+        const message = String(error?.message || error);
+        const htmlRel = rel.replace(/\.pdf$/i, '.html');
+        const htmlFull = assertInside(root, resolveSafe(root, htmlRel));
+        ensureDirFor(htmlFull);
+        fs.writeFileSync(htmlFull, deckHtml(spec), 'utf8');
+        return {
+          text: `PDF не напечатан: ${message}. Деку собрал как HTML — ${htmlRel}, слайдов: ${slides}. Открой в браузере и напечатай в PDF (Ctrl+P, поля 0, фон включить, размер 1600×900 px).`,
+          meta: { path: htmlRel, created: true, engine: 'html', slides, theme: spec.theme || 'gold', fallback: true },
+        };
+      }
+      const check = await checkDocument(full);
+      const theme = normalizeDeck(spec).theme;
+      const overflow = Array.isArray(out.warnings) ? out.warnings : [];
+      const layout = out.layout || { ok: null, issues: [], missingFonts: [], note: '' };
+      /* Замер раскладки — главный сторож деки: переполнение видно до печати,
+         поэтому замечание идёт сразу после заголовка, а не в конце отчёта. */
+      const layoutBad = layout.issues.length
+        ? `Раскладка: ${layout.issues.length} замечани${layout.issues.length === 1 ? 'е' : 'я'} — ${layout.issues.slice(0, 4).join('; ')}${layout.issues.length > 4 ? `; ещё ${layout.issues.length - 4}` : ''}. Поправьте текст на этих слайдах и соберите заново.`
+        : '';
+      const layoutFont = !layoutBad && layout.missingFonts.length
+        ? `Раскладка: шрифт не подгрузился — ${layout.missingFonts.join(', ')}. Проверьте assets/deck/fonts.`
+        : '';
+      const layoutGood = !layoutBad && !layoutFont && layout.ok === true
+        ? 'Раскладка: чисто (текст в поле, блоки не наложились).'
+        : '';
+      const textLines = [
+        `Дека создана: ${rel} (слайдов: ${slides}, палитра ${theme}, ${Math.max(1, Math.round(out.buffer.length / 1024))} КБ)`,
+        layoutBad || layoutFont,
+        formatCheckReport(check),
+        overflow.length ? `Не вошло: ${overflow.join('; ')}` : '',
+        layoutGood,
+      ].filter(Boolean);
+      return {
+        text: textLines.join('\n'),
+        meta: {
+          path: rel,
+          created: true,
+          engine: out.engine,
+          slides,
+          theme,
+          warnings: overflow,
+          layout,
+          check: { ok: check.ok, errors: check.errors, warnings: check.warnings },
+        },
+      };
+    }
     case 'create_pdf': {
       const rel = String(args.path || 'document.pdf');
       if (!rel.toLowerCase().endsWith('.pdf')) throw new Error('Имя файла должно заканчиваться на .pdf');
@@ -2767,13 +3620,250 @@ async function executeToolInner(name, args, ctx) {
         meta: { stored: Boolean(outcome.added), total: outcome.total },
       };
     }
+    /* Проект и диалог заводятся в аккаунте человека, а не в папке проекта.
+       Поэтому отказы возвращаются текстом, а не исключением: «недоступно в
+       этом окружении» — обычное состояние сервиса, а не поломка инструмента. */
+    case 'create_project': {
+      if (typeof ctx.createProjectChat !== 'function') {
+        return toolRefusal(
+          'Создание проектов в этом окружении недоступно: человек заводит проект и диалог сам, в окне «Проекты».',
+          'Создание проектов в этом окружении недоступно',
+        );
+      }
+      /* Субагент работает внутри уже открытого проекта: он не меняет
+         структуру аккаунта и не должен появляться в списке проектов. */
+      if (Number(ctx.depth) > 0) {
+        return toolRefusal(
+          'Вложенный агент не создаёт проекты: об этом просит основной агент.',
+          'Вложенный агент не создаёт проекты',
+        );
+      }
+      const turn = projectTurnGuard(ctx);
+      if (turn.createdProject) {
+        return toolRefusal(
+          'За один ход можно создать один проект. Второй — отдельным сообщением или вручную в окне «Проекты».',
+          'За один ход можно создать один проект',
+        );
+      }
+      const name = String(args.name ?? '')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, CREATE_PROJECT_LIMITS.nameChars);
+      if (!name) {
+        throw new Error('Нужно название проекта: до 80 знаков, например «Отчёт по складу».');
+      }
+      const task = String(args.task ?? '')
+        .replace(/\r\n?/g, '\n')
+        .trim()
+        .slice(0, CREATE_PROJECT_LIMITS.taskChars);
+      const projectId = String(args.projectId ?? '').trim();
+      /* Флаг ставим до вызова сервера: если он упадёт на середине, второй
+         проект за этот же ход всё равно не появится — иначе одна просьба
+         человека давала бы две папки. */
+      turn.createdProject = true;
+      if (turn !== ctx && ctx && typeof ctx === 'object') ctx.createdProject = true;
+
+      let outcome = null;
+      try {
+        outcome = await ctx.createProjectChat({ name, task, projectId });
+      } catch (error) {
+        if (error?.name === 'AbortError') throw error;
+        return toolRefusal(`Создать проект не удалось: ${String(error?.message || error)}`);
+      }
+      if (!outcome || outcome.ok !== true) {
+        const reason = String(outcome?.error || '').trim();
+        return toolRefusal(`Проект «${name}» не создан${reason ? `: ${reason}` : ''}.`);
+      }
+
+      const projectName = String(outcome.projectName || name).trim() || name;
+      const chatId = outcome.chatId == null ? '' : String(outcome.chatId);
+      const started = outcome.started === true;
+      const note = String(outcome.note || '').trim();
+      /* Три честных ответа: диалог пустой, задание пошло, задание не пошло.
+         Обещать «всё запущено», когда запуск не удался, нельзя: человек будет
+         ждать ответа, которого не будет. */
+      const text = !task
+        ? `Проект «${projectName}» создан, диалог открыт. Задание не задано — человек напишет его в диалоге.`
+        : started
+          ? `Проект «${projectName}» создан, диалог открыт и задание запущено.${note ? ` ${note}` : ''}`
+          : `Проект «${projectName}» создан, диалог открыт, но запустить задание не удалось${note ? `: ${note}` : ''}. Задание можно отправить из диалога вручную.`;
+      return { text, meta: { projectName, chatId, started, note } };
+    }
+    /* Личный слой — обещание, что основа остаётся: инструмент не переписывает
+       базовые блоки и базовые темы, а добавляет строку в личный слой человека.
+       Поэтому «основа не изменилась» здесь не утешение, а свойство операции. */
+    case 'add_personal_block': {
+      if (typeof ctx.createPersonalBlock !== 'function') {
+        return toolRefusal(
+          'Свои блоки в этом окружении недоступны: их добавляют кнопкой на дашборде.',
+          'Свои блоки в этом окружении недоступны',
+        );
+      }
+      /* Субагент работает внутри задачи человека и не меняет то, что человек
+         видит на своём экране. */
+      if (Number(ctx.depth) > 0) {
+        return toolRefusal(
+          'Вложенный агент не меняет личные блоки: об этом просит основной агент.',
+          'Вложенный агент не меняет личные блоки',
+        );
+      }
+      const turn = personalTurnGuard(ctx);
+      if (turn.block) {
+        return toolRefusal(
+          'За один ход можно добавить один свой блок. Второй — отдельным сообщением.',
+          'За один ход можно добавить один свой блок',
+        );
+      }
+      const title = String(args.title ?? '')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, PERSONAL_TOOL_LIMITS.title);
+      if (!title) throw new Error('Нужно название блока: до 60 знаков, например «Отчёт по складу».');
+      const task = String(args.task ?? '')
+        .replace(/\r\n?/g, '\n')
+        .trim()
+        .slice(0, PERSONAL_TOOL_LIMITS.task);
+      if (!task) throw new Error('Нужно задание: что блок должен делать, когда сработает.');
+      const payload = { title, task };
+      const short = String(args.short ?? '')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, PERSONAL_TOOL_LIMITS.short);
+      if (short) payload.short = short;
+      const description = String(args.description ?? '')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, PERSONAL_TOOL_LIMITS.description);
+      if (description) payload.description = description;
+      const icon = String(args.icon ?? '').trim();
+      if (PERSONAL_ICONS.includes(icon)) payload.icon = icon;
+      const cadence = String(args.cadence ?? '').trim();
+      if (PERSONAL_CADENCES.includes(cadence)) payload.cadence = cadence;
+      const day = Number(args.dayOfMonth);
+      if (Number.isInteger(day) && day >= 1 && day <= 28) payload.dayOfMonth = day;
+      const hour = Number(args.hour);
+      if (Number.isInteger(hour) && hour >= 0 && hour <= 23) payload.hour = hour;
+      /* Флаг ставим до вызова сервера: сбой на середине не должен превращать
+         одну просьбу человека в два блока. */
+      turn.block = true;
+
+      let outcome = null;
+      try {
+        outcome = await ctx.createPersonalBlock(payload);
+      } catch (error) {
+        if (error?.name === 'AbortError') throw error;
+        return toolRefusal(`Добавить блок не удалось: ${String(error?.message || error)}`);
+      }
+      if (!outcome || outcome.ok !== true) return personalRefusal(`Свой блок «${title}» не добавлен`, outcome);
+
+      const savedTitle = String(outcome.title || title).trim() || title;
+      const schedule = String(outcome.schedule || '').trim();
+      const customCount = Number(outcome.customCount);
+      const limit = Number(outcome.limit);
+      const lastPlace = Number.isFinite(customCount) && Number.isFinite(limit) && customCount === limit;
+      /* Дословно то, что человек прочитает на экране: блок личный, основа на
+         месте, а отменить можно одной кнопкой. Расписание — словами сервера. */
+      const text = `Свой блок «${savedTitle}» добавлен: он в вашем аккаунте, основа дашборда не изменилась.${schedule ? ` Расписание: ${schedule}.` : ''} Если не понравится — на дашборде кнопка «Отменить».${lastPlace ? ` Это последнее свободное место: всего своих блоков ${limit}.` : ''}`;
+      return {
+        text,
+        meta: {
+          taskId: outcome.taskId == null ? '' : String(outcome.taskId),
+          title: savedTitle,
+          schedule,
+          customCount: Number.isFinite(customCount) ? customCount : null,
+          limit: Number.isFinite(limit) ? limit : null,
+        },
+      };
+    }
+    case 'add_news_topic': {
+      if (typeof ctx.createNewsTopic !== 'function') {
+        return toolRefusal(
+          'Свои темы в этом окружении недоступны: их добавляют кнопкой на экране Top news.',
+          'Свои темы в этом окружении недоступны',
+        );
+      }
+      if (Number(ctx.depth) > 0) {
+        return toolRefusal(
+          'Вложенный агент не добавляет темы: об этом просит основной агент.',
+          'Вложенный агент не добавляет темы',
+        );
+      }
+      const turn = personalTurnGuard(ctx);
+      if (turn.topic) {
+        return toolRefusal(
+          'За один ход можно добавить одну свою тему. Вторую — отдельным сообщением.',
+          'За один ход можно добавить одну свою тему',
+        );
+      }
+      const title = String(args.title ?? '')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, PERSONAL_TOOL_LIMITS.topicTitle);
+      if (!title) throw new Error('Нужно название темы: до 40 знаков, например «Логистика».');
+      const query = String(args.query ?? '')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, PERSONAL_TOOL_LIMITS.query);
+      if (!query) throw new Error('Нужен поисковый запрос: по нему собираются новости, например «логистика Беларусь».');
+      /* Лишние запросы не отбрасываем молча: человек думает, что попросил три,
+         а тема собирается по одному — так теряется смысл просьбы. */
+      const extraQueries = (Array.isArray(args.extraQueries) ? args.extraQueries : [])
+        .map((item) => String(item ?? '').replace(/\s+/g, ' ').trim())
+        .filter(Boolean);
+      if (extraQueries.length > PERSONAL_TOOL_LIMITS.extraQueriesMax) {
+        throw new Error('Дополнительных запросов может быть не больше 3');
+      }
+      const payload = { title, query };
+      const kicker = String(args.kicker ?? '')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, PERSONAL_TOOL_LIMITS.kicker);
+      if (kicker) payload.kicker = kicker;
+      if (extraQueries.length) payload.extraQueries = extraQueries.map((item) => item.slice(0, PERSONAL_TOOL_LIMITS.extraQueryChars));
+      turn.topic = true;
+
+      let outcome = null;
+      try {
+        outcome = await ctx.createNewsTopic(payload);
+      } catch (error) {
+        if (error?.name === 'AbortError') throw error;
+        return toolRefusal(`Добавить тему не удалось: ${String(error?.message || error)}`);
+      }
+      if (!outcome || outcome.ok !== true) return personalRefusal(`Своя тема «${title}» не добавлена`, outcome);
+
+      const savedTitle = String(outcome.title || title).trim() || title;
+      const used = Number(outcome.used);
+      const limit = Number(outcome.limit);
+      const lastPlace = Number.isFinite(used) && Number.isFinite(limit) && used === limit;
+      const text = `Своя тема «${savedTitle}» добавлена в Top news: блок соберётся в фоне, шесть базовых тем выпуска не изменились. Если не понравится — кнопка «Отменить» на экране Top news.${lastPlace ? ` Это последняя свободная тема: всего своих тем ${limit}.` : ''}`;
+      return {
+        text,
+        meta: {
+          topicId: outcome.topicId == null ? '' : String(outcome.topicId),
+          title: savedTitle,
+          used: Number.isFinite(used) ? used : null,
+          limit: Number.isFinite(limit) ? limit : null,
+        },
+      };
+    }
     case 'use_skill': {
       const id = String(args.id || '').trim();
+      const file = String(args.file || '').trim();
+      /* Шаблоны и примеры лежат рядом с навыком и не видны обычному чтению
+         проекта: их отдаёт тот же инструмент, иначе ссылка в инструкции
+         обрывается. */
+      if (file) {
+        const answer = skillFile(id, file);
+        return {
+          text: answer.ok ? answer.text : `${answer.text}\nДоступные навыки: ${skillIds().join(', ')}.`,
+          meta: { skill: id, found: answer.ok, file: answer.file || file },
+        };
+      }
       const body = skillBody(id);
       if (!body.ok) {
         return { text: `${body.text}\nДоступные навыки: ${skillIds().join(', ')}.`, meta: { skill: id, found: false } };
       }
-      return { text: body.text, meta: { skill: body.id, found: true } };
+      return { text: body.text, meta: { skill: body.id, found: true, files: skillFiles(body.id) } };
     }
     case 'check_document': {
       const rel = String(args.path || '');
@@ -3008,6 +4098,164 @@ async function executeToolInner(name, args, ctx) {
         };
       }
       throw new Error(`Неизвестное действие legal_task: ${action} (status, sync, list, show, fetch, prepare, grade)`);
+    }
+    /* ----------------------------- Телеграм -----------------------------
+       Модуль раздела может быть не установлен (import выше по функции) —
+       тогда эти ветки бросают «Раздел недоступен», а остальные инструменты
+       продолжают работать. Ничего файлового здесь нет: хранилище раздела
+       целиком принадлежит сервису. */
+    case 'tg_channels': {
+      const api = await telegramApi('listChannels');
+      const result = await api.listChannels();
+      const channels = Array.isArray(result?.channels) ? result.channels : [];
+      if (!channels.length) {
+        return {
+          text: 'Каналы Telegram пока не добавлены. Добавьте первый: tg_add_channel {"username":"durov"} — после этого tg_collect соберёт его посты.',
+          meta: { count: 0 },
+        };
+      }
+      return {
+        text: `Каналы Telegram (${channels.length}):\n${channels.map((channel) => tgChannelLine(channel)).join('\n')}`,
+        meta: { count: channels.length },
+      };
+    }
+    case 'tg_add_channel': {
+      const api = await telegramApi('addChannel');
+      const username = String(args.username || '').trim();
+      if (!username) throw new Error('Укажите username канала без @, например durov');
+      const result = await api.addChannel({ username });
+      const channel = result?.channel && typeof result.channel === 'object' ? result.channel : result || {};
+      const name = String(channel?.username || username).replace(/^@/, '');
+      const title = channel?.title ? ` — «${String(channel.title).slice(0, 80)}»` : '';
+      return {
+        text: `Канал @${name} добавлен${title}. Постов пока нет: соберите ленту через tg_collect.`,
+        meta: { username: name },
+      };
+    }
+    case 'tg_collect': {
+      const api = await telegramApi('collect');
+      const channels = tgChannelList(args.channels);
+      const limit = Math.max(1, Math.min(200, Number(args.limit) || 40));
+      const params = { limit, signal: ctx.signal };
+      if (channels.length) params.usernames = channels;
+      const result = await api.collect(params);
+      const collected = result?.collected && typeof result.collected === 'object' ? result.collected : {};
+      const errors = Array.isArray(result?.errors) ? result.errors : [];
+      const names = Object.keys(collected);
+      const total = names.reduce((sum, name) => sum + (Number(collected[name]) || 0), 0);
+      const lines = [];
+      if (total > 0) {
+        lines.push(`Собрано новых постов: ${total}`);
+        lines.push(...names.map((name) => `@${name} — ${Number(collected[name]) || 0}`));
+      } else {
+        lines.push('Новых постов нет: всё уже собрано (или каналы ещё не добавлены — tg_channels).');
+      }
+      if (errors.length) {
+        lines.push('', 'Не удалось собрать:');
+        for (const item of errors.slice(0, 10)) {
+          lines.push(`@${String(item?.username || '?')} — ${String(item?.error || 'ошибка')}`);
+        }
+      }
+      return { text: lines.join('\n'), meta: { total, channels: names.length, errors: errors.length } };
+    }
+    case 'tg_feed': {
+      const api = await telegramApi('feed');
+      const limit = Math.max(1, Math.min(30, Number(args.limit) || 30));
+      const channels = tgChannelList(args.channels);
+      const hours = tgHours(args.hours, 0);
+      const q = String(args.q || '').trim();
+      const params = { limit };
+      if (q) params.q = q;
+      if (channels.length) params.channels = channels;
+      if (hours) params.hours = hours;
+      const result = await api.feed(params);
+      const posts = Array.isArray(result?.posts) ? result.posts : Array.isArray(result) ? result : [];
+      const total = Number.isFinite(Number(result?.total)) ? Number(result.total) : posts.length;
+      if (!posts.length) {
+        const scope = [hours ? `за ${hours} ч` : '', q ? `по запросу «${q}»` : ''].filter(Boolean).join(', ');
+        return {
+          text: `Постов нет${scope ? ` ${scope}` : ''}. Соберите новые (tg_collect) или расширьте период (hours).`,
+          meta: { total: 0 },
+        };
+      }
+      const shown = posts.slice(0, 30).map((post) => {
+        /* Одна строка на пост: переводы строк внутри текста ломают формат,
+           поэтому абзацы склеиваются. Обрезка своя, а не truncate(): тот
+           вставляет перевод строки с пометкой «сокращено», и на тридцати
+           постах ответ превращается в мусор. */
+        const flat = String(post?.text || '').replace(/\s+/g, ' ').trim();
+        const snippet = flat.length > 300 ? `${flat.slice(0, 300)}…` : flat || 'без текста';
+        const when = tgWhen(post?.date) || 'без даты';
+        return `${when} · @${String(post?.ch || '?')} · ${snippet} · ${String(post?.url || '')}`;
+      });
+      const head = [
+        `Лента Telegram: ${total} ${plural(total, 'пост', 'поста', 'постов')}`,
+        hours ? `за ${hours} ч` : '',
+        q ? `по «${q}»` : '',
+        channels.length ? `каналы: ${channels.map((name) => `@${name}`).join(', ')}` : '',
+        total > shown.length ? `показаны первые ${shown.length}` : '',
+      ]
+        .filter(Boolean)
+        .join(' · ');
+      return { text: `${head}\n${shown.join('\n')}`, meta: { total, shown: shown.length } };
+    }
+    case 'tg_stats': {
+      const api = await telegramApi('stats');
+      const hours = tgHours(args.hours, 24);
+      const result = await api.stats({ hours });
+      const rows = Array.isArray(result?.channels) ? result.channels : [];
+      const keywords = Array.isArray(result?.topKeywords) ? result.topKeywords : [];
+      const links = Array.isArray(result?.topLinks) ? result.topLinks : [];
+      const duplicates = Array.isArray(result?.duplicates) ? result.duplicates : [];
+      if (!rows.length && !keywords.length && !links.length && !duplicates.length) {
+        return { text: `За ${hours} ч статистики нет: постов пока не собрано — сначала tg_collect.`, meta: { hours } };
+      }
+      const lines = [`Статистика Telegram за ${hours} ч:`];
+      for (const row of rows.slice(0, 20)) lines.push(tgChannelLine(row));
+      if (keywords.length) {
+        lines.push('', `Частые слова: ${keywords.slice(0, 15).map((item) => `${item?.word} (${item?.count})`).join(', ')}`);
+      }
+      if (links.length) {
+        lines.push(`Частые ссылки: ${links.slice(0, 8).map((item) => `${item?.url} (${item?.count})`).join(', ')}`);
+      }
+      if (duplicates.length) {
+        lines.push('', `Повторы (${duplicates.length}) — одна новость в нескольких каналах:`);
+        for (const group of duplicates.slice(0, 6)) {
+          const refs = Array.isArray(group?.posts) ? group.posts : [];
+          const first = refs[0] && typeof refs[0] === 'object' ? refs[0] : {};
+          const snippet = String(first.text || first.url || '').replace(/\s+/g, ' ').trim().slice(0, 110) || 'без текста';
+          const where = refs.map((ref) => `@${String(ref?.ch || '?')}`).join(', ');
+          lines.push(`• ${snippet} — ${Number(group?.count) || refs.length} постов: ${where}`);
+        }
+      }
+      return { text: lines.join('\n'), meta: { hours, channels: rows.length, duplicates: duplicates.length } };
+    }
+    case 'tg_digest': {
+      const api = await telegramApi('digest');
+      const hours = tgHours(args.hours, 24);
+      const channels = tgChannelList(args.channels);
+      const focus = String(args.focus || '').trim();
+      const params = { hours, signal: ctx.signal };
+      if (channels.length) params.channels = channels;
+      if (focus) params.focus = focus;
+      const result = await api.digest(params);
+      const digest = result?.digest && typeof result.digest === 'object' ? result.digest : result || {};
+      const text = String(digest?.text || '').trim();
+      if (!text) throw new Error('Дайджест не собрался: модель не вернула текст. Попробуйте другой период или меньше каналов.');
+      const posts = Number(digest?.posts);
+      const head = [
+        `Дайджест Telegram за ${hours} ч`,
+        Number.isFinite(posts) ? `${posts} ${plural(posts, 'пост', 'поста', 'постов')}` : '',
+        digest?.model ? `модель ${String(digest.model)}` : '',
+      ]
+        .filter(Boolean)
+        .join(' · ');
+      /* digest.text отдаём целиком: это готовый markdown со ссылками на посты,
+         пересказ модели только потерял бы их и добавил отсебятину. */
+      return {
+        text: `${head}:\n\n${text}`,
+        meta: { hours, posts: Number.isFinite(posts) ? posts : null, model: String(digest?.model || '') },
+      };
     }
     default:
       throw new Error(`Инструмент ${name} недоступен`);

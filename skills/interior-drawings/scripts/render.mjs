@@ -22,10 +22,44 @@ const EDGE_CANDIDATES = [
   '/usr/bin/microsoft-edge',
   '/usr/bin/google-chrome',
   '/usr/bin/chromium',
+  /* Встроенный @sparticuz/chromium распаковывается сюда в облаке. */
+  '/tmp/chromium',
+  '/tmp/chromium-headless-shell',
 ];
 
+/** Chromium, который Playwright положил в /ms-playwright или в кэш пользователя. */
+function playwrightBrowser() {
+  const bases = [
+    process.env.PLAYWRIGHT_BROWSERS_PATH,
+    '/ms-playwright',
+    path.join(os.homedir(), '.cache', 'ms-playwright'),
+  ].filter(Boolean);
+  for (const base of [...new Set(bases)]) {
+    if (!fs.existsSync(base)) continue;
+    let dirs = [];
+    try {
+      dirs = fs.readdirSync(base).filter((d) => /^chromium-\d+$/.test(d));
+    } catch {
+      continue;
+    }
+    for (const dir of dirs.sort((a, b) => Number(b.split('-')[1]) - Number(a.split('-')[1]))) {
+      for (const rel of [
+        'chrome-linux/chrome',
+        'chrome-linux64/chrome',
+        'chrome-win64/chrome.exe',
+        'chrome-win/chrome.exe',
+        'chrome-mac/Chromium.app/Contents/MacOS/Chromium',
+      ]) {
+        const file = path.join(base, dir, rel);
+        if (fs.existsSync(file)) return file;
+      }
+    }
+  }
+  return '';
+}
+
 export function findBrowser() {
-  for (const p of EDGE_CANDIDATES) if (p && fs.existsSync(p)) return p;
+  for (const p of [...EDGE_CANDIDATES, playwrightBrowser()]) if (p && fs.existsSync(p)) return p;
   return null;
 }
 
@@ -53,7 +87,7 @@ ${svg.replace(/<\?xml[^>]*\?>/g, '')}
 function browserRun(bin, args, o = {}) {
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-edge-'));
   const gpu = o.gpu ? [] : ['--disable-gpu'];
-  const res = spawnSync(bin, ['--headless=new', ...gpu, '--no-first-run', '--no-default-browser-check', `--user-data-dir=${profile}`, ...args], {
+  const res = spawnSync(bin, ['--headless=new', ...gpu, '--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--no-first-run', '--no-default-browser-check', `--user-data-dir=${profile}`, ...args], {
     encoding: 'utf8',
     timeout: 120000,
   });

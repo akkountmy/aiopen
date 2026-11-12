@@ -110,6 +110,9 @@ const state = {
      более глубокие папки подгружаются при раскрытии. */
   filesLoaded: new Set(),
   filesLoading: false,
+  /* Запись, открытая в полосе прослушивания внизу панели файлов:
+     { path, name, projectId, api }. null — полосы нет. */
+  filesAudio: null,
   /* Дизайн-проект выбранного проекта: спек и листы. Приходит одним запросом
      вместе с деревом файлов — панель дизайна показывает их над списком. */
   design: null,
@@ -122,10 +125,30 @@ const state = {
   /* «Дашборд»: шесть постоянных заданий и их настройки. loaded — чтобы не
      запрашивать список заново при каждом открытии экрана. */
   dashboard: emptyDashboardState(),
+  /* «Top news»: один утренний выпуск и серверный тумблер. Готового выпуска
+     может не быть — тогда loaded=false, issue=null, а экран показывает
+     выключенное состояние или скелетоны. */
+  news: emptyNewsState(),
 };
 
 function emptyDashboardState() {
-  return { loaded: false, loading: false, tasks: [], deleted: 0, tz: 'Europe/Minsk', nextRunAt: null, canAutoRun: false, balanceUsd: 0 };
+  return {
+    loaded: false,
+    loading: false,
+    tasks: [],
+    deleted: 0,
+    tz: 'Europe/Minsk',
+    nextRunAt: null,
+    canAutoRun: false,
+    balanceUsd: 0,
+    /* Личный слой: сколько своих блоков уже есть и можно ли добавить ещё.
+       Предел (6) — из контракта сервера; он присылает своё значение в каждом
+       ответе про дашборд, здесь только запасное. */
+    personal: { customCount: 0, customLimit: 6, canAddCustom: true },
+    /* Сводка журнала отмены: подпись последнего действия и «есть что вернуть».
+       Приходит в ответе дашборда, поэтому отдельного запроса не нужно. */
+    undo: { canUndo: false, label: '' },
+  };
 }
 
 /* Выбранные режимы ответа. Как в мобильном приложении, это не разовая
@@ -228,6 +251,115 @@ function fmtUsd(value) {
   return `$${Number(value || 0).toFixed(2)}`;
 }
 
+/* Дата и время в ленте, в очереди и в списке диалогов.
+   Часовой пояс у сервиса один — тот же, по которому считаются выпуски новостей
+   и задания дашборда: иначе на телефоне в другом поясе время в списке диалогов
+   и время под сообщением разошлись бы, и человек не понял бы, чему верить. */
+const WHEN_TZ = 'Europe/Minsk';
+
+/* Ключ суток вида 2026-11-12 в поясе сервиса: по нему видно, сегодня это или нет. */
+function dayKey(value) {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: WHEN_TZ,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(value);
+}
+
+function timeOfDay(date) {
+  return new Intl.DateTimeFormat('ru-RU', {
+    timeZone: WHEN_TZ,
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(date);
+}
+
+/* Время сообщения: сегодня — только часы (их и так все читают), в другой день —
+   день, месяц и часы, в другой год — ещё и год. Пустая строка вместо «Invalid
+   Date»: у старых сообщений метки может не быть, и подпись тогда просто не
+   рисуется. */
+function messageWhen(iso) {
+  if (!iso) return '';
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return '';
+  try {
+    const time = timeOfDay(date);
+    const now = new Date();
+    if (dayKey(date) === dayKey(now)) return time;
+    /* Месяц сокращённый и без точки: «5 нояб, 09:14» короче и не даёт двух
+       точек подряд перед часами. */
+    const day = new Intl.DateTimeFormat('ru-RU', {
+      timeZone: WHEN_TZ,
+      day: 'numeric',
+      month: 'short',
+      ...(date.getFullYear() === now.getFullYear() ? {} : { year: 'numeric' }),
+    })
+      .format(date)
+      .replace(/\.\s*$/, '');
+    return `${day}, ${time}`;
+  } catch {
+    return '';
+  }
+}
+
+/* В строке диалога места мало: сегодня — часы, в другой день — «12.11 14:32»,
+   в другой год — с годом. Полные дата, время и часовой пояс — в подсказке. */
+function chatWhen(iso) {
+  if (!iso) return '';
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return '';
+  try {
+    const time = timeOfDay(date);
+    const now = new Date();
+    if (dayKey(date) === dayKey(now)) return time;
+    const day = new Intl.DateTimeFormat('ru-RU', {
+      timeZone: WHEN_TZ,
+      day: '2-digit',
+      month: '2-digit',
+      ...(date.getFullYear() === now.getFullYear() ? {} : { year: '2-digit' }),
+    }).format(date);
+    return `${day} ${time}`;
+  } catch {
+    return '';
+  }
+}
+
+/* Полная метка для подсказки: «12 ноября 2026 г., 14:32». По ней человек
+   сверяет время с тем, что помнит, — поэтому год и минуты здесь всегда есть. */
+function whenFull(iso) {
+  if (!iso) return '';
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return '';
+  try {
+    return new Intl.DateTimeFormat('ru-RU', {
+      timeZone: WHEN_TZ,
+      day: 'numeric',
+      month: 'long',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    }).format(date);
+  } catch {
+    return '';
+  }
+}
+
+/* Время последней работы в диалоге лежит в метке диалога (её пишет сервер при
+   сохранении). Свежий ход обновляем сразу: иначе в списке висело бы время
+   прошлой загрузки страницы, пока сервер не перезапишет метку. */
+function touchChatMeta(chatId, iso) {
+  const at = iso || new Date().toISOString();
+  for (const project of state.projects || []) {
+    const meta = (project.chats || []).find((chat) => chat.id === chatId);
+    if (meta) {
+      meta.updatedAt = at;
+      return meta;
+    }
+  }
+  return null;
+}
+
 /* Баланс в долларах в правом верхнем углу. У администратора лимита нет,
    поэтому счётчик ему не показываем; подсказки при наведении тоже нет. */
 function renderBalance() {
@@ -253,34 +385,80 @@ function updateBalance(value) {
    текст, который человек в этот момент печатал. Теперь она сверху, живёт 5 секунд
    и закрывается щелчком. */
 const toastTimers = new Map();
+const TOAST_MS = 5200;
+/* Плашка с кнопкой действия живёт дольше обычной: человек должен успеть
+   прочитать «Блок удалён» и решить, вернуть ли его. */
+const TOAST_ACTION_MS = 9000;
 
-function toastTimer(node) {
+function toastTimer(node, ms = TOAST_MS) {
   clearTimeout(toastTimers.get(node));
   const timer = setTimeout(() => {
     node.style.opacity = '0';
     node.style.transition = 'opacity .2s ease';
     setTimeout(() => node.remove(), 220);
-  }, 5200);
+  }, ms);
   toastTimers.set(node, timer);
 }
 
-function toast(message, type = 'error') {
+/* Плашка с действием: кнопка стоит внутри плашки, а само дело (отмена
+   удаления) делает переданный обработчик. Плашку убираем только после ответа
+   сервера — человек должен увидеть, что отмена сработала, а не пустое место.
+   Пока ответ идёт, кнопка говорит «Возвращаем…»: выключенная кнопка со старым
+   словом «Отменить» читается как «нажатие не приняли». */
+function bindToastAction(node, action) {
+  const button = el('button', 'toast-action', action.label);
+  button.type = 'button';
+  button.addEventListener('click', async (event) => {
+    event.stopPropagation();
+    button.disabled = true;
+    if (action.busyLabel) button.textContent = action.busyLabel;
+    try {
+      await action.onClick();
+    } catch (error) {
+      /* Своё сообщение об ошибке уже показал обработчик: второй плашки не надо. */
+      void error;
+    } finally {
+      clearTimeout(toastTimers.get(node));
+      toastTimers.delete(node);
+      node.remove();
+    }
+  });
+  node.appendChild(button);
+  return button;
+}
+
+function toast(message, type = 'error', action) {
   const root = $('#toastRoot');
   if (!root) return;
   /* Одна и та же новость не должна вставать стопкой: если такая плашка уже
-     висит, продлеваем ей жизнь вместо второй копии. */
-  const alive = [...root.children].find((node) => node.dataset.text === message && node.classList.contains(type));
-  if (alive) {
+     висит, продлеваем ей жизнь вместо второй копии. Плашка с действием в это
+     правило не попадает: у неё своя кнопка и свой срок. */
+  const alive = [...root.children].find(
+    (node) => !node.dataset.action && node.dataset.text === message && node.classList.contains(type),
+  );
+  if (alive && !action) {
     toastTimer(alive);
     return;
   }
-  const node = el('div', `toast ${type}`, message);
+  /* Текст — отдельным элементом: рядом с ним должна встать кнопка, а не
+     слипнуться с ним в одну строку. */
+  const node = el('div', `toast ${type}${action ? ' has-action' : ''}`);
+  node.appendChild(el('span', 'toast-text', message));
   node.dataset.text = message;
-  node.addEventListener('click', () => node.remove());
+  node.addEventListener('click', (event) => {
+    /* Клик по кнопке не закрывает плашку раньше, чем сработает отмена. */
+    if (event.target instanceof Element && event.target.closest('.toast-action')) return;
+    node.remove();
+  });
   root.appendChild(node);
+  const hasAction = Boolean(action && action.label && typeof action.onClick === 'function');
+  if (hasAction) {
+    node.dataset.action = '1';
+    bindToastAction(node, action);
+  }
   /* Больше трёх плашек не держим: старое убираем, чтобы экран не застило. */
   while (root.childElementCount > 3) root.firstElementChild.remove();
-  toastTimer(node);
+  toastTimer(node, hasAction ? TOAST_ACTION_MS : TOAST_MS);
 }
 
 /* ------------------------------ markdown ------------------------------ */
@@ -314,6 +492,14 @@ const MD_FILE_MANY = new RegExp(
   `^[^\\s/\\\\:*?"'<>|()«»]+(?:/[^\\s/\\\\:*?"'<>|()«»]+)*\\.(?:${MD_FILE_EXTS})$`,
   'i',
 );
+
+/* Запись проекта открывается не в окне просмотра, а в полосе прослушивания
+   внизу панели «Файлы проекта» — там же, где включают остальные файлы. Окно
+   пришлось бы закрывать, чтобы вернуться к разговору, а полоса стоит рядом с
+   перепиской и на телефоне приходит вместе со шторкой. Список расширений свой,
+   а не AUDIO_FILE: разбор markdown проверяется отдельно от остального кода, и
+   постоянная из другого места в той проверке не видна. */
+const MD_AUDIO = /\.(mp3|m4a|wav|ogg|oga|opus|aac|flac)$/i;
 
 /* Имя файла с пробелами: «Предисловие к обзору лизинга 2025.docx». В обычном
    тексте такое от фразы не отличить, поэтому такой шаблон применяем только к
@@ -375,7 +561,11 @@ function inlineMd(text) {
     holdLink(`<a class="msg-link" href="${url}" target="_blank" rel="noopener noreferrer">${label}</a>`);
   const fileLink = (label, path) =>
     holdLink(
-      `<a class="msg-link msg-file" href="${projectFileHref(path)}" data-file-path="${path}" title="Открыть в просмотре сервиса">${label}</a>`,
+      /* Подсказка говорит, куда именно ведёт нажатие: документ — в окно
+         просмотра, запись — в полосу прослушивания панели файлов. */
+      `<a class="msg-link msg-file" href="${projectFileHref(path)}" data-file-path="${path}" title="${
+        MD_AUDIO.test(path) ? 'Слушать в полосе «Файлы проекта»' : 'Открыть в просмотре сервиса'
+      }">${label}</a>`,
     );
 
   let src = text.replace(/`([^`\n]+)`/g, (_, code) => {
@@ -924,10 +1114,12 @@ function activeProject() {
   return state.projects.find((project) => project.id === state.activeProjectId) || null;
 }
 
-/* Правая панель всегда показывает файлы активного проекта — того, который
-   открыт в панели «Проекты» слева. Отдельного выбора в заголовке нет: два
-   источника проекта (панель слева и заголовок справа) расходились, и файлы
-   «пропадали» после очередной сверки с сервером. */
+/* Правая панель показывает файлы активного проекта — того, который открыт в
+   панели «Проекты» слева. Если выбран диалог, тот же список сужается до файлов
+   этого диалога: рабочая папка у проекта одна, поэтому сервер отбирает пути по
+   происхождению файла. Отдельного выбора проекта в заголовке нет: два источника
+   проекта (панель слева и заголовок справа) расходились, и файлы «пропадали»
+   после очередной сверки с сервером. */
 function filesProjectId() {
   const id = state.activeProjectId || '';
   return id && state.projects.some((project) => project.id === id) ? id : '';
@@ -938,19 +1130,40 @@ function filesProject() {
   return state.projects.find((project) => project.id === id) || null;
 }
 
-/* Заголовок панели — подпись, а не кнопка. Имя проекта видно во всплывающей
-   подсказке: сама подпись остаётся неизменной и стоит по центру блока. */
+/* Диалог, к которому относится панель. Проверяем проект: при переключении
+   проекта старый activeChatId не должен на секунду сузить новый список. */
+function filesChat() {
+  const project = filesProject();
+  const id = state.activeChatId || '';
+  if (!project || !id) return null;
+  if (state.chat?.id === id && state.chat.projectId === project.id) return state.chat;
+  return (project.chats || []).find((chat) => chat.id === id) || null;
+}
+
+function filesChatId() {
+  return filesChat()?.id || '';
+}
+
+/* Заголовок панели — подпись, а не кнопка. В проектном виде имя проекта
+   остаётся во всплывающей подсказке; в диалоговом подпись прямо говорит, что
+   показаны только файлы выбранного диалога. */
 function syncFilesProjectLabel() {
   const title = $('#filesProjectTitle');
   const label = $('#filesProjectName');
   if (!label) return;
-  label.textContent = 'Файлы проекта';
   const project = filesProject();
+  const chat = filesChat();
+  if (chat) {
+    label.textContent = 'Файлы диалога';
+    if (title) title.title = `Файлы диалога «${chat.title || 'Без названия'}» · только файлы этого диалога`;
+    return;
+  }
+  label.textContent = 'Файлы проекта';
   if (title) title.title = project ? `Файлы проекта «${project.name}»` : 'Файлы проекта';
 }
 
-/* Переключение диалога или проекта просто освежает подпись: файлы панели уже
-   принадлежат активному проекту. */
+/* Переключение диалога или проекта освежает подпись. Сам список перечитывает
+   loadFiles: у проекта и диалога он разный. */
 function followActiveProject() {
   rememberProject(state.activeProjectId);
   syncFilesProjectLabel();
@@ -1032,17 +1245,24 @@ function projectNode(project) {
     openProjectMenu(event, project);
   });
   row.appendChild(menuBtn);
-  /* Нажатие по имени проекта: первый раз открывает проект и показывает его
-     диалоги, повторное — сворачивает и раскрывает список. На телефоне ящик
-     остаётся открытым, пока есть из чего выбирать. */
+  /* Нажатие по имени проекта: открывает проект и показывает все его файлы.
+     Если был выбран диалог, клик по папке проекта возвращает панель к полному
+     списку. Повторное нажатие по уже открытому проекту без выбранного диалога
+     сворачивает и раскрывает список, как раньше. */
   const activate = () => {
     const wasActive = project.id === state.activeProjectId;
+    const hadChat = Boolean(state.activeChatId);
+    /* Открытый раздел («Дашборд», «Top news») занимает место диалога, поэтому
+       нажатие по проекту поверх него — это всегда переход в проект, даже по
+       уже выбранному: иначе сворачивание списка диалогов происходило бы под
+       разделом, и человек снова оставался бы на разделе. */
+    const inSection = dashboardOpen() || newsOpen();
+    const toProject = !wasActive || hadChat || inSection;
     state.activeProjectId = project.id;
-    if (!wasActive) {
-      if (chats.length) state.expanded.add(project.id);
-      /* Проект — это отдельная папка со своими файлами. При переключении
-         закрываем диалог прошлого проекта и перечитываем «Файлы проекта»,
-         иначе справа оставался список чужой папки. */
+    if (toProject) {
+      if (!wasActive && chats.length) state.expanded.add(project.id);
+      /* Проект — это папка со своими файлами. Закрываем диалог и перечитываем
+         «Файлы проекта», иначе справа оставался список прошлой папки. */
       state.chat = null;
       state.activeChatId = null;
       /* Здесь ответ не показываем, но задача в покинутом диалоге продолжается:
@@ -1051,7 +1271,6 @@ function projectNode(project) {
       state.attachments = [];
       renderAttachStrip();
       resetFilesTree();
-      /* Панель файлов возвращается к проекту, который открыли в диалоге. */
       followActiveProject();
       if (state.filesOpen) loadFiles();
     } else if (chats.length) {
@@ -1059,7 +1278,11 @@ function projectNode(project) {
       else state.expanded.add(project.id);
     }
     renderSidebar();
-    if (!wasActive) {
+    if (toProject) {
+      /* Перешли в проект — значит нужен его диалог. Экран-раздел, если он был
+         открыт («Дашборд», «Top news»), закрываем: иначе лента обновилась бы
+         под ним, а человек остался бы на разделе. */
+      leaveSections();
       renderThread();
       updateCrumbs();
     }
@@ -1085,6 +1308,14 @@ function projectNode(project) {
       const title = el('span', 'c-title', chat.title || 'Новый диалог');
       title.title = chat.title || '';
       chatMain.appendChild(title);
+      /* Когда в диалоге последний раз шла работа: без этого в списке не понять,
+         какой из десяти диалогов вчерашний, а какой — с прошлой недели. */
+      const chatStamp = chatWhen(chat.updatedAt);
+      if (chatStamp) {
+        const when = el('span', 'c-when', chatStamp);
+        when.title = `Последняя работа в диалоге: ${whenFull(chat.updatedAt)}`;
+        chatMain.appendChild(when);
+      }
       if (liveRunFor(chat.id)) {
         const live = el('span', 'c-live');
         live.title = 'В диалоге идёт задача';
@@ -1211,9 +1442,13 @@ function renderSidebar() {
 function updateCrumbs() {
   /* Подсветка кнопки-меню не зависит от того, что показано в колонке диалога. */
   syncSidebarToggle();
+  /* Заголовок файловой панели живёт по тем же данным, что и крошка: сервер
+     сам придумывает название диалогу, и подпись панели должна обновиться
+     вместе с боковым списком, иначе она остаётся «Новый диалог». */
+  syncFilesProjectLabel();
   /* Экран «Дашборд» сам держит заголовок в крошке: перерисовка диалога в фоне
-     не должна подменять его названием чата. */
-  if (dashboardOpen()) return;
+     не должна подменять его названием чата. То же и у «Телеграма». */
+  if (dashboardOpen() || newsOpen()) return;
   const project = activeProject();
   const projectName = project?.name || '';
   const chatTitle = state.chat?.title || '';
@@ -1306,7 +1541,7 @@ function takeThemeReload() {
 async function openChat(chatId) {
   /* Переключение во время ответа теперь разрешено: работа идёт на сервере, а
      вкладка просто показывает другой диалог и возвращается к потоку позже. */
-  hideDashboard();
+  leaveSections();
   try {
     const data = await api(`/api/chats/${chatId}`);
     state.chat = data.chat;
@@ -1362,6 +1597,11 @@ async function ensureChat() {
   state.chat = chat;
   state.activeChatId = chat.id;
   state.expanded.add(state.activeProjectId);
+  /* Новый диалог пуст — панель сразу переходит к его файлам, а не показывает
+     весь проект до первого ответа. */
+  syncFilesProjectLabel();
+  resetFilesTree();
+  if (state.filesOpen) loadFiles();
   /* Новый диалог, начатый с пустого экрана, тоже должен стать «последним»:
      иначе после перезагрузки открывался предыдущий разговор. */
   rememberChat(chat.id);
@@ -1549,12 +1789,24 @@ function userAttachmentChips(attachments) {
 
 function renderMessage(message) {
   const wrap = el('article', `msg msg-${message.role}`);
+  /* Адрес блока — номер запуска. По нему живой ответ находит СВОЙ пузырь в ленте
+     и не пишет текст в соседний: новый запуск (например, следующая задача из
+     очереди) появляется в данных раньше, чем его блок на экране. */
+  if (message.runId) wrap.dataset.run = String(message.runId);
   if (message.role === 'user') {
     if (message.attachments?.length) wrap.appendChild(userAttachmentChips(message.attachments));
     if (message.content) {
       const bubble = el('div', 'bubble');
       bubble.textContent = message.content;
       wrap.appendChild(bubble);
+    }
+    /* Время просьбы — под пузырём: по нему потом видно, сколько задача ждала
+       ответа и что именно было вчера, а что сегодня. */
+    const asked = messageWhen(message.at);
+    if (asked) {
+      const when = el('div', 'msg-when', asked);
+      when.title = `Отправлено: ${whenFull(message.at)}`;
+      wrap.appendChild(when);
     }
     return wrap;
   }
@@ -1564,6 +1816,14 @@ function renderMessage(message) {
   /* Пока ответ идёт, вместо глухого «работаю…» стоит подпись текущего шага —
      текст из события инструмента, поэтому только textContent. */
   head.querySelector('.work-label').textContent = message.streaming && message.workNote ? message.workNote : 'работаю…';
+  /* Время ответа в шапке, рядом с подписью шага: у готового ответа подписи нет,
+     и дата встаёт на её место, не сдвигая текст ответа. */
+  const answered = messageWhen(message.at);
+  if (answered) {
+    const when = el('span', 'msg-when', answered);
+    when.title = message.streaming ? `Ответ начат: ${whenFull(message.at)}` : `Ответ готов: ${whenFull(message.at)}`;
+    head.appendChild(when);
+  }
   wrap.appendChild(head);
 
   /* Запрос здесь не цитируем: просьба человека стоит своим пузырём прямо над
@@ -1624,10 +1884,29 @@ function renderMessage(message) {
     wrap.appendChild(note);
   }
 
-  if (message.content) {
+  /* Пустой .md у живого ответа нужен заранее: на нём CSS рисует курсор,
+     пока модель ещё думает и текста нет. */
+  if (message.content || message.streaming) {
     const md = el('div', 'md');
-    md.innerHTML = renderMarkdown(message.content);
+    if (message.content) md.innerHTML = renderMarkdown(message.content);
     wrap.appendChild(md);
+  }
+
+  /* Работа встала до результата. Вместо того чтобы заставлять человека
+     вспоминать слово «продолжи», даём одну понятную кнопку. */
+  if (message.incomplete) {
+    const box = el('div', 'msg-incomplete');
+    box.appendChild(el('span', '', message.incompleteNote || 'Работа не доведена до результата.'));
+    const again = el('button', 'msg-continue', 'Продолжить');
+    again.type = 'button';
+    again.addEventListener('click', () => {
+      const input = $('#input');
+      if (!input) return;
+      input.value = 'Продолжи';
+      sendMessage();
+    });
+    box.appendChild(again);
+    wrap.appendChild(box);
   }
 
   if (message.content) wrap.appendChild(messageActions(message.content));
@@ -1710,7 +1989,13 @@ function streamingMessageOf(run) {
   if (!run || !state.chat || state.chat.id !== run.chatId) return null;
   const messages = state.chat.messages;
   let message = messages.find((item) => item.runId === run.id);
-  if (!message) message = messages.find((item) => item.streaming && !item.runId);
+  if (!message) {
+    /* Заготовка ответа, которую нарисовали при отправке, годится только если она
+       последняя в ленте. Иначе это брошенный блок прошлого хода — текст нового
+       ответа попал бы в него, выше нового вопроса. */
+    const last = messages[messages.length - 1];
+    if (last && last.streaming && !last.runId) message = last;
+  }
   if (!message) {
     message = { role: 'assistant', content: '', streaming: true, at: new Date().toISOString() };
     messages.push(message);
@@ -1773,8 +2058,21 @@ function paintRun(run) {
    не подменили ли браузер разбором по коду. */
 function paintWorkNote(run) {
   if (!run || !state.chat || state.chat.id !== run.chatId) return;
-  const nodes = document.querySelectorAll('#thread .msg-assistant.streaming .work-label');
-  const label = nodes[nodes.length - 1];
+  let label = null;
+  try {
+    if (run.id) {
+      label = document.querySelector(`#thread .msg-assistant[data-run="${CSS.escape(String(run.id))}"] .work-label`);
+    }
+  } catch {
+    label = null;
+  }
+  /* Подпись шага — только в блоке этого запуска. Иначе «Пересобираю…» от новой
+     задачи появлялось над ней, в прошлом ответе. Пока свой блок не нарисован,
+     годится единственный идущий ответ в ленте: второй ответ в диалоге не идёт. */
+  if (!label) {
+    const streaming = document.querySelectorAll('#thread .msg-assistant.streaming');
+    if (streaming.length === 1) label = streaming[0].querySelector('.work-label');
+  }
   if (!label) return;
   label.textContent = run.note || 'работаю…';
 }
@@ -1796,6 +2094,10 @@ function closeRunView(run, status) {
     message.streaming = false;
     message.workNote = '';
     if (run.content) message.content = run.content;
+    if (run.incomplete) {
+      message.incomplete = true;
+      message.incompleteNote = run.incompleteNote || 'Работа не доведена до результата.';
+    }
     if (run.error && !run.content) message.error = run.error;
   }
   setStreaming(Boolean(currentLiveRun()));
@@ -1821,6 +2123,11 @@ async function reloadChatInPlace(chatId, { pollQueue = true } = {}) {
       meta.title = data.chat.title;
       meta.messageCount = data.chat.messages.length;
       meta.running = Boolean(data.chat.run);
+      /* Время последней работы берём у последнего сообщения: метку диалога
+         сервер пишет при сохранении, а в ленте может быть ответ, сохранённый
+         секундой позже и точнее её. */
+      const last = data.chat.messages[data.chat.messages.length - 1];
+      if (last?.at) meta.updatedAt = last.at;
     }
     if (state.chat && state.chat.id === chatId) {
       state.chat = data.chat;
@@ -1906,6 +2213,8 @@ function applyRunEvent(run, event) {
     toast('Запрос отправлен администратору: задача тяжелее обычного порога.', 'warn');
   } else if (event.type === 'done') {
     run.status = 'done';
+    run.incomplete = Boolean(event.incomplete);
+    run.incompleteNote = event.incompleteNote || '';
     updateBalance(event.balanceUsd);
   } else if (event.type === 'error') {
     run.status = event.aborted ? 'stopped' : 'error';
@@ -2158,13 +2467,16 @@ async function refreshFilesQuietly() {
      приносила файлы другого проекта и подменяла список под рукой. */
   const projectId = filesProjectId();
   if (!projectId || !state.filesOpen) return;
+  const scopeChatId = filesChatId();
   let data;
   try {
-    data = await api(`/api/projects/${projectId}/files?path=${encodeURIComponent('.')}&depth=6`);
+    const query = new URLSearchParams({ path: '.', depth: '6' });
+    if (scopeChatId) query.set('chatId', scopeChatId);
+    data = await api(`/api/projects/${projectId}/files?${query}`);
   } catch {
     return; /* нет связи — остаётся то, что уже нарисовано */
   }
-  if (projectId !== filesProjectId()) return;
+  if (projectId !== filesProjectId() || scopeChatId !== filesChatId()) return;
   const items = data.items || [];
   if (filesSignature(items) === filesSignature(state.files)) return;
   state.files = items;
@@ -2210,6 +2522,7 @@ async function syncFromServer() {
       state.files = [];
       syncFilesProjectLabel();
       if (first) state.expanded.add(first.id);
+      if (state.filesOpen) loadFiles();
       renderThread();
     } else if (state.activeProjectId) {
       state.expanded.add(state.activeProjectId);
@@ -2221,6 +2534,9 @@ async function syncFromServer() {
     ) {
       state.activeChatId = null;
       state.chat = null;
+      resetFilesTree();
+      syncFilesProjectLabel();
+      if (state.filesOpen) loadFiles();
       renderThread();
     }
     renderSidebarQuietly();
@@ -2328,15 +2644,44 @@ const STREAM_PAINT_MS = 80;
 function paintStreamingMessage() {
   const message = getStreamingMessage();
   const thread = $('#thread');
+  if (!thread) return;
+  if (!message) {
+    renderThread();
+    return;
+  }
   const nodes = thread.querySelectorAll('.msg-assistant');
-  const target = message && nodes[nodes.length - 1];
-  if (!message || !target) {
+  /* Свой блок ищем по номеру запуска. «Последний блок ассистента» — не адрес: при
+     старте задачи из очереди лента уже перерисована с новым вопросом, а блок
+     ответа ещё не создан, и текст уходил в прошлый ответ, который стоит ВЫШЕ
+     вопроса. Тогда человек видел свою просьбу внизу, а ответ на неё — сверху. */
+  let target = null;
+  if (message.runId) {
+    try {
+      target = thread.querySelector(`.msg-assistant[data-run="${CSS.escape(String(message.runId))}"]`);
+    } catch {
+      target = null;
+    }
+  }
+  if (!target) {
+    const messages = state.chat?.messages || [];
+    const last = nodes[nodes.length - 1];
+    /* Номера запуска ещё нет — это заготовка, нарисованная при отправке: годится
+       последний блок, и только если живое сообщение действительно последнее. Если
+       номер есть, а блока с ним нет, подставлять чужой нельзя — перерисовываем. */
+    if (!message.runId && last && messages[messages.length - 1] === message) target = last;
+  }
+  if (!target) {
+    /* Блока ещё нет: перерисовываем ленту — свежий ответ встанет под вопросом. */
     renderThread();
     return;
   }
   target.classList.toggle('streaming', Boolean(message.streaming));
   const md = target.querySelector('.md');
-  const html = renderMarkdown(message.content || '') + '<span class="cursor"></span>';
+  /* Курсор живого ответа рисует CSS на самом .md (см. .msg.streaming .md::after).
+     Отдельный span приходилось бы создавать заново на каждой перерисовке, и
+     анимация мигания сбрасывалась бы 12 раз в секунду — курсор выглядел
+     застывшим. */
+  const html = renderMarkdown(message.content || '');
   if (md) md.innerHTML = html;
   else {
     const block = el('div', 'md');
@@ -2515,6 +2860,8 @@ async function sendMessage(event) {
     ...(modes.thinking || modes.search ? { modes } : {}),
   };
   state.chat.messages.push(assistant);
+  touchChatMeta(state.chat.id, userMessage.at);
+  renderSidebar();
   renderThread();
   setStreaming(true);
   scrollToBottom(true);
@@ -2630,6 +2977,14 @@ function renderQueue() {
       if (item.attachments.length > 3) files.appendChild(el('span', 'queue-file', `+${item.attachments.length - 3}`));
       body.appendChild(files);
     }
+    /* Время постановки в очередь — рядом с текстом задачи, чтобы строка не
+       выглядела вечной: «жду с 14:32» против «жду с утра» — разные вещи. */
+    const queuedAt = messageWhen(item.at);
+    if (queuedAt) {
+      const when = el('div', 'queue-when', `поставлена ${queuedAt}`);
+      when.title = `Поставлена в очередь: ${whenFull(item.at)}`;
+      body.appendChild(when);
+    }
     row.appendChild(body);
 
     const actions = el('div', 'queue-actions');
@@ -2659,13 +3014,13 @@ function renderQueuedMessage(item) {
   const bubble = el('div', 'bubble');
   bubble.textContent = item.text || 'Вложение без текста';
   wrap.appendChild(bubble);
-  wrap.appendChild(
-    el(
-      'div',
-      'queued-note',
-      currentLiveRun() ? 'В очереди · начну, как только закончу текущий ответ' : 'В очереди · нажмите ▶ у поля ввода, чтобы запустить',
-    ),
-  );
+  /* Когда задачу поставили в очередь: иначе непонятно, она ждёт минуту или
+     висит с прошлого вечера. */
+  const queuedAt = messageWhen(item.at);
+  const note = currentLiveRun() ? 'В очереди · начну, как только закончу текущий ответ' : 'В очереди · нажмите ▶ у поля ввода, чтобы запустить';
+  const noteEl = el('div', 'queued-note', queuedAt ? `${note} · поставлена ${queuedAt}` : note);
+  if (queuedAt) noteEl.title = `Поставлена в очередь: ${whenFull(item.at)}`;
+  wrap.appendChild(noteEl);
   return wrap;
 }
 
@@ -3670,6 +4025,9 @@ function resetFilesTree() {
      оставаться листы прошлого. */
   state.design = null;
   renderDesign();
+  /* Прошлый проект мог оставить свою запись в полосе прослушивания — чужой
+     MP3 в папке нового проекта выглядел бы ошибкой. */
+  filesAudioSyncProject();
 }
 
 function saveFilesUi() {
@@ -3723,6 +4081,9 @@ function syncFilesPanel({ reload = false } = {}) {
   saveFilesUi();
   applyLayout();
   syncFilesProjectLabel();
+  /* Полоса прослушивания возвращается вместе с панелью: на телефоне шторку
+     закрывают и открывают, а запись должна оставаться на виду. */
+  if (open) filesAudioRestore();
   if (open && reload && filesProjectId()) {
     loadFiles();
   }
@@ -3761,30 +4122,45 @@ function filesNote(text) {
 
 /* Корень проекта приходит одним запросом вместе со всем деревом: папки и их
    документы уже в наборе, поэтому раскрытие папки ничего не ждёт. */
+let filesSeq = 0;
 async function loadFiles() {
   const projectId = filesProjectId();
   if (!projectId) return;
-  /* Проект мог смениться, пока шёл запрос: ответ от прошлого проекта не должен
+  /* Диалог мог смениться, пока шёл запрос: ответ от прошлого вида не должен
      перерисовать список уже выбранного. */
+  const scopeChatId = filesChatId();
+  /* Запросов к одному и тому же проекту может быть несколько: переключение,
+     загрузка файла, обновление после ответа агента. Ответы приходят не по
+     порядку — и медленный старый ответ затирал свежий список, из-за чего
+     только что загруженный файл пропадал до следующего обновления. Поэтому
+     рисует только последний запрос. */
+  const seq = ++filesSeq;
   const list = $('#filesList');
   list.innerHTML = '<div class="files-empty"><div class="spin-lg"></div></div>';
   state.filesLoading = true;
   try {
-    const data = await api(`/api/projects/${projectId}/files?path=${encodeURIComponent('.')}&depth=6`);
-    if (projectId !== filesProjectId()) return;
+    const query = new URLSearchParams({ path: '.', depth: '6' });
+    if (scopeChatId) query.set('chatId', scopeChatId);
+    const data = await api(`/api/projects/${projectId}/files?${query}`);
+    if (seq !== filesSeq) return;
+    if (projectId !== filesProjectId() || scopeChatId !== filesChatId()) return;
     state.files = data.items || [];
     state.filesLoaded = new Set(['.']);
     pruneFilesExpanded();
     renderFiles();
+    /* Дерево пришло — значит можно понять, существует ли ещё та запись,
+       которую слушали в прошлый раз. */
+    filesAudioRestore();
     /* Дизайн спрашиваем вместе с деревом: панель листов появляется сама, как
        только в проекте есть design.json или собранные листы. */
     loadDesign();
   } catch (error) {
-    if (projectId !== filesProjectId()) return;
+    if (seq !== filesSeq) return;
+    if (projectId !== filesProjectId() || scopeChatId !== filesChatId()) return;
     list.innerHTML = '';
     list.appendChild(el('div', 'files-empty', error.message));
   } finally {
-    if (projectId === filesProjectId()) state.filesLoading = false;
+    if (seq === filesSeq && projectId === filesProjectId() && scopeChatId === filesChatId()) state.filesLoading = false;
   }
 }
 
@@ -3820,11 +4196,15 @@ function renderFiles() {
   const scrollTop = list.scrollTop;
   list.innerHTML = '';
   if (!(state.files || []).length) {
-    list.appendChild(el('div', 'files-empty', 'Пока пусто. Загрузите файл кнопкой выше.'));
+    const chat = filesChat();
+    list.appendChild(
+      el('div', 'files-empty', chat ? 'В этом диалоге пока нет файлов.' : 'Пока пусто. Загрузите файл кнопкой выше.'),
+    );
     return;
   }
   for (const node of filesTreeNodes('.')) list.appendChild(node);
   list.scrollTop = scrollTop;
+  markFilesAudioRow();
 }
 
 /* ------------------------- дизайн-проект и 3D-сцена -------------------------
@@ -5393,9 +5773,12 @@ function toggleFolder(item) {
 async function loadFolderContents(item) {
   const projectId = filesProjectId();
   if (!projectId) return;
+  const scopeChatId = filesChatId();
   try {
-    const data = await api(`/api/projects/${projectId}/files?path=${encodeURIComponent(item.path)}&depth=6`);
-    if (projectId !== filesProjectId()) return;
+    const query = new URLSearchParams({ path: item.path, depth: '6' });
+    if (scopeChatId) query.set('chatId', scopeChatId);
+    const data = await api(`/api/projects/${projectId}/files?${query}`);
+    if (projectId !== filesProjectId() || scopeChatId !== filesChatId()) return;
     state.files = mergeFiles(state.files, data.items || []);
     state.filesLoaded.add(item.path);
     renderFiles();
@@ -5413,18 +5796,24 @@ function mergeFiles(items, extra) {
 function fileRow(item) {
   const row = el('div', 'file-row');
   const isImage = /\.(png|jpe?g|webp|gif|bmp)$/i.test(item.name);
+  /* MP3 играет не в окне просмотра, а в полосе внизу панели: окно пришлось бы
+     закрывать, чтобы вернуться к списку, а полоса живёт рядом с ним. */
+  const isAudio = !item.dir && AUDIO_FILE.test(item.name);
   /* Открытие файла — отдельная кнопка: справа от неё лежат кнопки «Скачать»
      и «Удалить», и роль кнопки на всей строке делала их вложенными. */
   const fileMain = el('button', 'row-main');
   fileMain.type = 'button';
-  fileMain.innerHTML = `<span class="f-icon">${isImage ? ICONS.image : ICONS.file}</span>`;
+  fileMain.innerHTML = `<span class="f-icon">${isImage ? ICONS.image : isAudio ? ICONS.play : ICONS.file}</span>`;
   const name = fileNameEl(item.name, 'f-name');
   /* Подсказка про управление: на телефоне — тап, на компьютере — двойной щелчок.
      В обоих случаях файл открывается в окне просмотра приложения. */
   const touch = isTouchUi();
-  name.title = touch
-    ? `${item.path} — нажмите, чтобы открыть в приложении; кнопка «Скачать» — сохранить файл`
-    : `${item.path} — двойной щелчок: открыть в приложении; кнопка «Скачать» — сохранить файл`;
+  name.title = isAudio
+    ? `${item.path} — нажмите, чтобы слушать внизу панели; повторно — пауза; кнопка «Скачать» — сохранить файл`
+    : touch
+      ? `${item.path} — нажмите, чтобы открыть в приложении; кнопка «Скачать» — сохранить файл`
+      : `${item.path} — двойной щелчок: открыть в приложении; кнопка «Скачать» — сохранить файл`;
+  if (isAudio) row.dataset.audio = item.path;
   fileMain.appendChild(name);
   fileMain.appendChild(el('span', 'f-size', fmtSize(item.size)));
   row.appendChild(fileMain);
@@ -5452,8 +5841,10 @@ function fileRow(item) {
     /* На тач-экране одиночный тап открывает файл в окне просмотра (скачивание —
        только кнопкой «Скачать»). На компьютере открывает двойной щелчок — и тоже
        в окне просмотра: внешние Word/Excel/PowerPoint больше не вызываются, они
-       показывали системное окно «Microsoft Office» с вопросом про безопасность. */
-    if (isTouchUi()) openFilePreview(item);
+       показывали системное окно «Microsoft Office» с вопросом про безопасность.
+       Запись — исключение: она включается в полосе внизу панели. */
+    if (isAudio) filesAudioPlay(item);
+    else if (isTouchUi()) openFilePreview(item);
   });
   row.addEventListener('click', (event) => {
     /* Клик мимо кнопок — то же, что по названию файла. */
@@ -5462,6 +5853,9 @@ function fileRow(item) {
   fileMain.addEventListener('dblclick', (event) => {
     if (isTouchUi()) return;
     event.preventDefault();
+    /* У записи двойной щелчок уже отработал двумя нажатиями: окно просмотра
+       для звука не нужно. */
+    if (isAudio) return;
     openFilePreview(item);
   });
   row.addEventListener('dblclick', (event) => {
@@ -5469,6 +5863,7 @@ function fileRow(item) {
     /* Двойной щелчок по кнопкам справа — это два нажатия, а не открытие. */
     if (event.target.closest('.f-actions')) return;
     event.preventDefault();
+    if (isAudio) return;
     openFilePreview(item);
   });
   return row;
@@ -6517,6 +6912,1171 @@ function mountSheetPreview(container, url, name) {
   };
 }
 
+/* ------------------------- прослушивание: общий плеер -------------------------
+   Один компонент на два места: предпросмотр MP3 в панели файлов (полоса внизу
+   панели) и результат озвучки книги. Полоса управления своя, а не браузерная: в
+   родном меню «три точки» браузер предлагает только 0,5–2 без 0,8 и 0,9, а
+   запись читают подбором темпа. Сам звук живёт в доке вне окон: закрыли окно
+   или ушли в другой проект — запись продолжает играть, а не обрывается
+   с разметкой. Полос может быть несколько (панель и открытое окно): они
+   управляют одним аудио-элементом и перерисовываются вместе. */
+/* --- audio-player:start --- */
+const AUDIO_RATES = [0.5, 0.75, 0.8, 0.9, 1, 1.25, 1.5, 1.75, 2];
+const AUDIO_NOW_KEY = 'dshowNowPlaying';
+const AUDIO_NOW_TTL = 12 * 60 * 60 * 1000;
+/* Знаки управления — тонкие, как системные символы Apple: мягкий треугольник
+   и две палочки без рамок, круговые стрелки перемотки без цифр внутри. Число
+   10 стоит рядом со стрелкой, в одной пилюле с ней: так шаг виден сразу и не
+   спорит с самим знаком. */
+const AUDIO_ICON = {
+  play:
+    '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M6.35 4.5c0-1.18 1.29-1.9 2.3-1.26l8.36 5.49c.94.62.94 2 0 2.62l-8.36 5.49c-1.01.64-2.3-.08-2.3-1.26V4.5Z"/></svg>',
+  pause:
+    '<svg viewBox="0 0 20 20" aria-hidden="true"><rect x="5.95" y="4.25" width="3.05" height="11.5" rx="1.52"/><rect x="11" y="4.25" width="3.05" height="11.5" rx="1.52"/></svg>',
+  back:
+    '<svg viewBox="0 0 24 24" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3.6 12a8.4 8.4 0 1 0 8.4-8.4c-2.5 0-4.78 1.09-6.3 2.83L3.6 8.1"/><path d="M3.6 3.2v4.9h4.9"/></g></svg>',
+  forward:
+    '<svg viewBox="0 0 24 24" aria-hidden="true"><g transform="translate(24 0) scale(-1 1)" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3.6 12a8.4 8.4 0 1 0 8.4-8.4c-2.5 0-4.78 1.09-6.3 2.83L3.6 8.1"/><path d="M3.6 3.2v4.9h4.9"/></g></svg>',
+  note:
+    '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M12.6 3.4v8.9a2.6 2.6 0 11-1.5-2.36V5.6L6.5 6.7v6.6a2.6 2.6 0 11-1.5-2.36V4.5z"/></svg>',
+  chevron:
+    '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M3.2 4.6 6 7.2l2.8-2.6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+};
+/* Перемотка симметричная, по 10 секунд: это привычный шаг в плеерах, и
+   назад он возвращает не только фразу, но и пару предложений. На экране
+   блокировки действуют те же значения. */
+const AUDIO_SKIP_BACK = 10;
+const AUDIO_SKIP_FORWARD = 10;
+const AUDIO_PAUSE_ICON = AUDIO_ICON.pause;
+let audioDock = null;
+
+/* --- Обложка записи -------------------------------------------------------
+   Сначала ищем картинку рядом с файлом (обложка книги обычно лежит в той же
+   папке), затем читаем встроенную в ID3v2 обложку. Чтение идёт диапазоном:
+   сервер отдаёт MP3 частями, поэтому забираем только заголовок тега. */
+const AUDIO_COVER_IMAGE = /\.(png|jpe?g|webp|gif|avif)$/i;
+const AUDIO_COVER_CACHE = new Map();
+const AUDIO_COVER_PENDING = new Map();
+const AUDIO_COVER_MAX = 48;
+/* Книги, которых нет в магазинах, не ищем на каждый клик: две минуты плеер
+   помнит «обложки нет» и остаётся с ноткой. */
+const AUDIO_COVER_MISS = new Map();
+const AUDIO_COVER_MISS_TTL = 2 * 60 * 1000;
+
+function audioCoverParent(value) {
+  const text = String(value || '');
+  const at = text.lastIndexOf('/');
+  return at < 0 ? '' : text.slice(0, at);
+}
+
+function audioCoverName(value) {
+  const text = String(value || '');
+  return text.slice(text.lastIndexOf('/') + 1);
+}
+
+function audioCoverStem(value) {
+  return audioCoverName(value).replace(/\.[^.]+$/, '');
+}
+
+function audioCoverNorm(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/ё/g, 'е')
+    .replace(/[^a-zа-я0-9]+/gi, ' ')
+    .trim();
+}
+
+function audioCoverFileUrl(projectId, path) {
+  return `/api/projects/${encodeURIComponent(projectId)}/file?path=${encodeURIComponent(path)}`;
+}
+
+/* Обложка-сосед: точное имя, имя папки, стандартные cover/folder/front,
+   затем единственная картинка в папке. Так не цепляем иллюстрации книги. */
+function audioCoverSidecar(path, name) {
+  const files = Array.isArray(state.files) ? state.files : [];
+  if (!files.length) return '';
+  const dir = audioCoverParent(path);
+  const stem = audioCoverNorm(audioCoverStem(name || path));
+  const folder = dir ? audioCoverNorm(audioCoverName(dir)) : '';
+  const images = files.filter(
+    (file) =>
+      file &&
+      !file.dir &&
+      AUDIO_COVER_IMAGE.test(file.name || file.path) &&
+      audioCoverParent(file.path) === dir,
+  );
+  if (!images.length) return '';
+  const usual = /^(cover|обложка|обложк|front|folder|book|обл)$/;
+  let best = '';
+  let bestScore = 0;
+  for (const file of images) {
+    const other = audioCoverNorm(audioCoverStem(file.name || file.path));
+    let score = 0;
+    if (other && other === stem) score = 100;
+    else if (other && folder && other === folder) score = 90;
+    else if (usual.test(other)) score = 80;
+    else if (other.includes('cover') || other.includes('обложк')) score = 70;
+    else if (other && stem && (other.startsWith(stem) || stem.startsWith(other))) score = 60;
+    if (score > bestScore) {
+      bestScore = score;
+      best = file.path;
+    }
+  }
+  if (best) return best;
+  return images.length === 1 ? images[0].path : '';
+}
+
+/* Один диапазон байт. Если сервер вдруг ответил целым файлом, не тянем его:
+   обложка не стоит десятков мегабайт. */
+async function audioCoverRange(url, start, end) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 7000);
+  try {
+    const response = await fetch(url, {
+      headers: { Range: `bytes=${start}-${end}` },
+      credentials: 'same-origin',
+      signal: controller.signal,
+      cache: 'force-cache',
+    });
+    if (response.status !== 206) {
+      try {
+        await response.body?.cancel();
+      } catch {
+        /* тело уже закрыто */
+      }
+      return null;
+    }
+    return new Uint8Array(await response.arrayBuffer());
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function audioCoverAscii(bytes, at, length) {
+  let out = '';
+  for (let index = 0; index < length; index += 1) out += String.fromCharCode(bytes[at + index] || 0);
+  return out;
+}
+
+function audioCoverSyncSafe(bytes, at) {
+  return (
+    ((bytes[at] & 0x7f) << 21) |
+    ((bytes[at + 1] & 0x7f) << 14) |
+    ((bytes[at + 2] & 0x7f) << 7) |
+    (bytes[at + 3] & 0x7f)
+  );
+}
+
+function audioCoverU32(bytes, at) {
+  return ((bytes[at] << 24) | (bytes[at + 1] << 16) | (bytes[at + 2] << 8) | bytes[at + 3]) >>> 0;
+}
+
+/* Разбор одного кадра APIC/PIC: MIME (или формат), тип, описание, картинка. */
+function audioCoverPicture(bytes, id, start, end) {
+  let at = start;
+  if (at >= end) return null;
+  const encoding = bytes[at];
+  at += 1;
+  let mime = '';
+  if (id === 'APIC') {
+    const from = at;
+    while (at < end && bytes[at] !== 0) at += 1;
+    mime = audioCoverAscii(bytes, from, at - from).trim();
+    at += 1;
+  } else {
+    const format = audioCoverAscii(bytes, at, 3).toUpperCase();
+    at += 3;
+    mime = format === 'PNG' ? 'image/png' : 'image/jpeg';
+  }
+  at += 1;
+  if (encoding === 1 || encoding === 2) {
+    while (at + 1 < end && !(bytes[at] === 0 && bytes[at + 1] === 0)) at += 2;
+    at += 2;
+  } else {
+    while (at < end && bytes[at] !== 0) at += 1;
+    at += 1;
+  }
+  if (at >= end) return null;
+  const data = bytes.subarray(at, end);
+  if (data.length < 64 || data.length > 4 * 1024 * 1024) return null;
+  let type = /^image\//i.test(mime) ? mime.toLowerCase() : '';
+  if (data[0] === 0xff && data[1] === 0xd8) type = 'image/jpeg';
+  else if (data[0] === 0x89 && data[1] === 0x50) type = 'image/png';
+  else if (data[0] === 0x47 && data[1] === 0x49) type = 'image/gif';
+  else if (data[0] === 0x52 && data[1] === 0x49 && data[8] === 0x57) type = 'image/webp';
+  if (!type) type = 'image/jpeg';
+  return { type, data };
+}
+
+function audioCoverParseTag(bytes, version) {
+  if (!bytes || bytes.length < 10) return null;
+  if (bytes[0] !== 0x49 || bytes[1] !== 0x44 || bytes[2] !== 0x33) return null;
+  const tagEnd = Math.min(bytes.length, 10 + audioCoverSyncSafe(bytes, 6));
+  let at = 10;
+  if (bytes[5] & 0x40) at += 4 + (version === 4 ? audioCoverSyncSafe(bytes, at) : audioCoverU32(bytes, at));
+  while (at + 6 <= tagEnd) {
+    let id = '';
+    let size = 0;
+    let header = 0;
+    if (version === 2) {
+      id = audioCoverAscii(bytes, at, 3);
+      size = (bytes[at + 3] << 16) | (bytes[at + 4] << 8) | bytes[at + 5];
+      header = 6;
+    } else {
+      id = audioCoverAscii(bytes, at, 4);
+      size = version === 4 ? audioCoverSyncSafe(bytes, at + 4) : audioCoverU32(bytes, at + 4);
+      header = 10;
+    }
+    if (!/^[A-Z0-9]{3,4}$/.test(id) || size <= 0) break;
+    const start = at + header;
+    const end = start + size;
+    if (end > bytes.length) break;
+    if (id === 'APIC' || id === 'PIC') {
+      const picture = audioCoverPicture(bytes, id, start, end, version);
+      if (picture) return picture;
+    }
+    at = end + (version === 3 && bytes[at + 9] & 0x80 ? 4 : 0);
+  }
+  return null;
+}
+
+async function audioCoverId3(projectId, path) {
+  const url = audioCoverFileUrl(projectId, path);
+  const head = await audioCoverRange(url, 0, 9);
+  if (!head || head.length < 10) return null;
+  if (head[0] !== 0x49 || head[1] !== 0x44 || head[2] !== 0x33) return null;
+  const version = head[3];
+  if (version < 2 || version > 4) return null;
+  const size = audioCoverSyncSafe(head, 6);
+  if (!size || size < 32) return null;
+  const tag = await audioCoverRange(url, 0, Math.min(size + 10, 4 * 1024 * 1024) - 1);
+  return audioCoverParseTag(tag, version);
+}
+
+/* Обложки в папке нет: просим сервер найти книгу в магазинах и положить
+   картинку рядом с записью. Ответ приходит не сразу, но плеер уже играет —
+   до него остаётся нотка. */
+async function audioCoverOnline(projectId, path) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 25000);
+  try {
+    const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/book-cover`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({ path }),
+      signal: controller.signal,
+    });
+    if (!response.ok) return '';
+    const data = await response.json().catch(() => null);
+    if (!data || !data.ok || !data.path) return '';
+    return audioCoverFileUrl(projectId, data.path);
+  } catch {
+    return '';
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function audioCoverResolve(projectId, path) {
+  const name = audioCoverName(path);
+  const sidecar = audioCoverSidecar(path, name);
+  if (sidecar) return audioCoverFileUrl(projectId, sidecar);
+  /* Встроенную обложку читаем только у файла проекта: у потока озвучки
+     диапазонов может быть нет, и качать её целиком незачем. */
+  const known = (Array.isArray(state.files) ? state.files : []).some((file) => file && file.path === path);
+  if (known) {
+    const picture = await audioCoverId3(projectId, path);
+    if (picture) return URL.createObjectURL(new Blob([picture.data], { type: picture.type }));
+  }
+  /* Потоки озвучки (/api/tts/…) и чужие абсолютные пути серверу не нужны. */
+  if (!path || path.startsWith('/') || path.includes('\\') || path.split('/').includes('..')) return '';
+  return audioCoverOnline(projectId, path);
+}
+
+async function audioCoverFind(projectId, path) {
+  if (!projectId || !path) return '';
+  const key = `${projectId}:${path}`;
+  if (AUDIO_COVER_CACHE.has(key)) return AUDIO_COVER_CACHE.get(key);
+  if (AUDIO_COVER_PENDING.has(key)) return AUDIO_COVER_PENDING.get(key);
+  const missed = AUDIO_COVER_MISS.get(key);
+  if (missed && Date.now() - missed < AUDIO_COVER_MISS_TTL) return '';
+  const job = audioCoverResolve(projectId, path)
+    .catch(() => '')
+    .then((url) => {
+      if (url) {
+        AUDIO_COVER_MISS.delete(key);
+        AUDIO_COVER_CACHE.set(key, url);
+        if (AUDIO_COVER_CACHE.size > AUDIO_COVER_MAX) {
+          const [oldKey, oldUrl] = AUDIO_COVER_CACHE.entries().next().value;
+          AUDIO_COVER_CACHE.delete(oldKey);
+          if (String(oldUrl).startsWith('blob:')) URL.revokeObjectURL(oldUrl);
+        }
+      } else {
+        AUDIO_COVER_MISS.set(key, Date.now());
+      }
+      return url;
+    })
+    .finally(() => AUDIO_COVER_PENDING.delete(key));
+  AUDIO_COVER_PENDING.set(key, job);
+  return job;
+}
+
+/* Навесить обложку на плитку. Пока картинка не найдена, остаётся нота;
+   токен защищает от позднего ответа, когда запись уже сменилась. */
+function audioCoverApply(host, projectId, path, name) {
+  if (!host) return;
+  host.classList.remove('has-cover');
+  host.style.removeProperty('--audio-cover');
+  const token = String((Number(host.dataset.coverToken) || 0) + 1);
+  host.dataset.coverToken = token;
+  const lookup = path || name;
+  if (!lookup) return;
+  audioCoverFind(projectId, path || name).then((url) => {
+    if (!url || host.dataset.coverToken !== token || !host.isConnected) return;
+    host.style.setProperty('--audio-cover', `url("${String(url).replace(/["\\]/g, encodeURIComponent)}")`);
+    host.classList.add('has-cover');
+  });
+}
+
+/* --- Волна и звук ---------------------------------------------------------
+   Раньше волна шла от AnalyserNode: каждую секунду создавался AudioContext,
+   звук заводился в Web Audio через createMediaElementSource, а высоты пяти
+   полос писались в --eq-* на body по 60 раз в секунду. На слабых машинах
+   это пересчитывало стили всей страницы и подхрипывало на речи. Волна теперь
+   чисто CSS-анимация: тот же ритм, но без вмешательства в аудиопоток. */
+
+function audioUrlKey(value) {
+  try {
+    return new URL(String(value || ''), window.location.href).href;
+  } catch {
+    return String(value || '');
+  }
+}
+
+/* Сохранённая запись живёт 12 часов: вчерашняя книга не должна всплывать
+   плашкой на следующий день. Битое или устаревшее значение стираем сами. */
+function audioNowPlaying() {
+  try {
+    const raw = localStorage.getItem(AUDIO_NOW_KEY);
+    if (!raw) return null;
+    const data = JSON.parse(raw);
+    if (!data || typeof data !== 'object' || !data.src) return null;
+    const at = Number(data.at) || 0;
+    if (!at || Date.now() - at > AUDIO_NOW_TTL) {
+      localStorage.removeItem(AUDIO_NOW_KEY);
+      return null;
+    }
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+function saveNowPlaying(patch) {
+  try {
+    const previous = audioNowPlaying() || {};
+    const next = { ...previous, ...patch, at: Date.now() };
+    if (!next.src) return null;
+    localStorage.setItem(AUDIO_NOW_KEY, JSON.stringify(next));
+    return next;
+  } catch {
+    return null;
+  }
+}
+
+function audioClock(seconds) {
+  const total = Math.max(0, Math.floor(Number(seconds) || 0));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const rest = String(total % 60).padStart(2, '0');
+  return hours ? `${hours}:${String(minutes).padStart(2, '0')}:${rest}` : `${minutes}:${rest}`;
+}
+
+function audioRateLabel(rate) {
+  return `${String(rate).replace('.', ',')}×`;
+}
+
+function audioSessionMetadata(title) {
+  const session = navigator.mediaSession;
+  if (!session || typeof MediaMetadata === 'undefined') return;
+  try {
+    session.metadata = new MediaMetadata({
+      title: title || 'DSH Open',
+      artist: 'DSH Open',
+      album: title || 'DSH Open',
+      artwork: [{ src: '/icons/icon-512.png', sizes: '512x512', type: 'image/png' }],
+    });
+  } catch {
+    /* Safari без MediaMetadata — плеер всё равно работает */
+  }
+}
+
+function audioSessionState(value) {
+  const session = navigator.mediaSession;
+  if (!session) return;
+  try {
+    session.playbackState = value;
+  } catch {
+    /* состояние не поддерживается — не повод ронять плеер */
+  }
+}
+
+function audioSessionPosition(player) {
+  const session = navigator.mediaSession;
+  if (!session?.setPositionState) return;
+  const duration = Number(player.duration);
+  if (!Number.isFinite(duration) || duration <= 0) return;
+  try {
+    session.setPositionState({
+      duration,
+      playbackRate: Number(player.playbackRate) || 1,
+      position: Math.max(0, Math.min(Number(player.currentTime) || 0, duration)),
+    });
+  } catch {
+    /* позиция вне диапазона — просто пропускаем обновление */
+  }
+}
+
+/* Кнопки на экране блокировки: play/pause, 10 секунд и перемотка тапом.
+   Один и тот же набор вешаем и на плеер в окне, и на скрытый audio плашки. */
+function bindAudioSession(player, titleOf) {
+  audioSessionMetadata(titleOf());
+  const session = navigator.mediaSession;
+  if (!session?.setActionHandler) return;
+  const actions = {
+    play: () => player.play()?.catch?.(() => {}),
+    pause: () => player.pause(),
+    /* Свои 10 секунд важнее seekOffset от системы: иначе Chrome подставляет
+       свой шаг, и с экрана блокировки приходит другая перемотка. */
+    seekbackward: () => {
+      player.currentTime = Math.max(0, (Number(player.currentTime) || 0) - AUDIO_SKIP_BACK);
+    },
+    seekforward: () => {
+      const duration = Number(player.duration);
+      const next = (Number(player.currentTime) || 0) + AUDIO_SKIP_FORWARD;
+      player.currentTime = Number.isFinite(duration) && duration > 0 ? Math.min(duration, next) : next;
+    },
+    seekto: (details) => {
+      if (!details || details.seekTime === undefined) return;
+      if (details.fastSeek && typeof player.fastSeek === 'function') player.fastSeek(details.seekTime);
+      else player.currentTime = details.seekTime;
+    },
+  };
+  for (const [name, handler] of Object.entries(actions)) {
+    try {
+      session.setActionHandler(name, handler);
+    } catch {
+      /* отдельное действие не поддерживается — остальные работают */
+    }
+  }
+}
+
+/* Док: единственный в приложении аудио-элемент и состояние текущей записи.
+   Живёт в body, поэтому смена окна или проекта его не касается. */
+function audioDockElement() {
+  if (audioDock) return audioDock;
+  const root = el('div', 'audio-dock');
+  const player = el('audio', 'audio-dock-audio');
+  /* auto, а не metadata: речь длинная, и запас буфера важнее экономии трафика. */
+  player.preload = 'auto';
+  root.appendChild(player);
+  document.body.appendChild(root);
+
+  const state = {
+    player,
+    /* Полосы управления, которые сейчас показывают эту запись. Их может быть
+       несколько: одна внизу панели файлов, другая — в открытом окне. Все они
+       управляют одним аудио-элементом, поэтому перерисовываем каждую. */
+    uis: new Set(),
+    title: '',
+    name: '',
+    path: '',
+    projectId: '',
+    pendingTime: 0, // куда вернуться, когда подойдут метаданные
+    pendingSrc: '',
+    lastSaved: 0,
+    lastPosition: 0,
+    lastSession: 0,
+  };
+  audioDock = state;
+
+  const paint = () => {
+    for (const ui of [...state.uis]) {
+      /* Удалённую из документа полосу не перерисовываем: её хозяин уже ушёл. */
+      if (!ui.root.isConnected) {
+        state.uis.delete(ui);
+        continue;
+      }
+      ui.paint?.();
+    }
+  };
+
+  const remember = (extra = {}) => {
+    const duration = Number(player.duration);
+    return saveNowPlaying({
+      src: audioUrlKey(player.currentSrc || player.src),
+      title: state.title,
+      name: state.name,
+      path: state.path,
+      projectId: state.projectId,
+      rate: Number(player.playbackRate) || 1,
+      time: Number(player.currentTime) || 0,
+      duration: Number.isFinite(duration) && duration > 0 ? duration : 0,
+      ...extra,
+    });
+  };
+
+  player.addEventListener('loadedmetadata', () => {
+    /* Новые метаданные приходят и при смене части книги: скорость остаётся,
+       а место из памяти ставим один раз и только для того же файла. */
+    player.playbackRate = Number(player.defaultPlaybackRate) || 1;
+    const duration = Number(player.duration);
+    const time = Number(state.pendingTime) || 0;
+    if (time > 0.5 && audioUrlKey(player.src) === state.pendingSrc && (!Number.isFinite(duration) || duration - time > 2)) {
+      try {
+        player.currentTime = Number.isFinite(duration) ? Math.min(time, Math.max(0, duration - 1)) : time;
+      } catch {
+        /* метаданные ещё не готовы — попробует браузер */
+      }
+    }
+    state.pendingTime = 0;
+    state.pendingSrc = '';
+    remember();
+    paint();
+    audioSessionPosition(player);
+  });
+
+  player.addEventListener('play', () => {
+    audioSessionMetadata(state.title);
+    audioSessionState('playing');
+    remember();
+    paint();
+  });
+
+  player.addEventListener('pause', () => {
+    audioSessionState(player.ended ? 'none' : 'paused');
+    remember();
+    paint();
+  });
+
+  player.addEventListener('durationchange', paint);
+
+  player.addEventListener('timeupdate', () => {
+    const now = Date.now();
+    const time = Number(player.currentTime) || 0;
+    /* localStorage не дёргаем четыре раза в секунду: раз в 4 секунды или при
+       заметном прыжке (перемотка) вполне достаточно. */
+    if (now - state.lastSaved > 4000 || Math.abs(time - state.lastPosition) > 12) {
+      state.lastSaved = now;
+      state.lastPosition = time;
+      remember();
+    }
+    paint();
+    /* Экран блокировки обновляем раз в секунду, а не на каждый timeupdate:
+       setPositionState четыре раза в секунду только грузил браузер. */
+    if (now - state.lastSession > 1000) {
+      state.lastSession = now;
+      audioSessionPosition(player);
+    }
+  });
+
+  player.addEventListener('ended', () => {
+    audioSessionState('none');
+    remember({ time: 0 });
+    paint();
+  });
+
+  bindAudioSession(player, () => state.title);
+  return state;
+}
+
+/* Общий плеер: полоса управления и меню скоростей стоят в блоке, звук — в доке.
+   Возвращает { player, rates, rename }: player нужен вызывающему коду для
+   переключения части, rename обновляет название на экране блокировки. */
+function mountAudioPlayer(container, opts = {}) {
+  const saved = audioNowPlaying();
+  const src = opts.src || '';
+  const srcKey = audioUrlKey(src);
+  const title = opts.title || opts.name || 'Запись';
+  const savedRate = Number(saved?.rate);
+  const knownRate = AUDIO_RATES.includes(savedRate) ? savedRate : 1;
+  const same = Boolean(saved && saved.src === srcKey);
+
+  const state = audioDockElement();
+  const player = state.player;
+  /* Другой файл — другая запись; тот же файл просто продолжаем с того места,
+     где остановились, даже если окно закрывали и открывали заново. */
+  if (audioUrlKey(player.src) !== srcKey) {
+    player.src = src;
+    state.pendingTime = same ? Number(saved.time) || 0 : 0;
+    state.pendingSrc = same ? srcKey : '';
+  } else {
+    state.pendingTime = 0;
+    state.pendingSrc = '';
+  }
+  state.title = title;
+  state.name = opts.name || title;
+  state.path = opts.path || '';
+  state.projectId = opts.projectId ?? filesProjectId();
+  /* Темп ставим только если он действительно другой: лишняя запись в
+     playbackRate на играющем элементе даёт щелчок в звуке. */
+  if (player.defaultPlaybackRate !== knownRate) player.defaultPlaybackRate = knownRate;
+  if (player.playbackRate !== knownRate) player.playbackRate = knownRate;
+  try {
+    if (typeof player.preservesPitch === 'boolean') player.preservesPitch = true;
+  } catch {
+    /* старый браузер без playbackRate — темп просто не меняется */
+  }
+
+  const root = el('div', opts.className ? `audio-player ${opts.className}` : 'audio-player');
+  const bar = el('div', 'audio-bar');
+  /* Название записи показываем только там, где его нет в шапке блока: в окне
+     предпросмотра и в результате озвучки. В панели файлов имя уже стоит сверху,
+     поэтому карточка там начинается сразу с дорожки. */
+  const ownTitle = !opts.headTitle;
+  if (ownTitle) root.classList.add('has-head');
+  else root.classList.add('is-compact');
+
+  /* Подпись в панели файлов живёт в её шапке, рядом с обложкой, но время знает
+     только плеер. Чужой элемент обновляем оттуда же, где свою подпись. */
+  const extSub = opts.subEl || null;
+  let titleEl = null;
+  let subEl = null;
+  if (ownTitle) {
+    const head = el('div', 'audio-head');
+    const art = el('span', 'audio-art');
+    art.setAttribute('aria-hidden', 'true');
+    art.innerHTML = AUDIO_ICON.note;
+    const id = el('span', 'audio-id');
+    /* Расширение в названии записи не показываем: в карточке оно лишнее. */
+    const shownTitle = String(title).replace(/\.(mp3|wav|m4a|aac|ogg|oga|flac|opus)$/i, '');
+    titleEl = el('span', 'audio-title', shownTitle);
+    titleEl.title = title;
+    subEl = el('span', 'audio-sub', 'MP3');
+    id.append(titleEl, subEl);
+    const wave = el('span', 'audio-wave');
+    wave.setAttribute('aria-hidden', 'true');
+    wave.innerHTML = '<i></i><i></i><i></i><i></i><i></i>';
+    head.append(art, id, wave);
+    bar.appendChild(head);
+    audioCoverApply(art, state.projectId, opts.path, opts.name || title);
+  }
+
+  const seek = el('input', 'audio-seek');
+  seek.type = 'range';
+  seek.min = '0';
+  seek.max = '1000';
+  seek.step = '1';
+  seek.value = '0';
+  seek.setAttribute('aria-label', 'Перемотка записи');
+
+  const actions = el('div', 'audio-actions');
+  const backBtn = el('button', 'audio-skip audio-back');
+  backBtn.type = 'button';
+  backBtn.innerHTML = `${AUDIO_ICON.back}<span class="audio-skip-label" aria-hidden="true">${AUDIO_SKIP_BACK}</span>`;
+  backBtn.setAttribute('aria-label', `Назад на ${AUDIO_SKIP_BACK} секунд`);
+  backBtn.title = `Назад на ${AUDIO_SKIP_BACK} секунд`;
+  const toggle = el('button', 'audio-toggle');
+  toggle.type = 'button';
+  toggle.innerHTML = AUDIO_ICON.play;
+  toggle.setAttribute('aria-label', 'Слушать');
+  const fwdBtn = el('button', 'audio-skip audio-forward');
+  fwdBtn.type = 'button';
+  fwdBtn.innerHTML = `${AUDIO_ICON.forward}<span class="audio-skip-label" aria-hidden="true">${AUDIO_SKIP_FORWARD}</span>`;
+  fwdBtn.setAttribute('aria-label', `Вперёд на ${AUDIO_SKIP_FORWARD} секунд`);
+  fwdBtn.title = `Вперёд на ${AUDIO_SKIP_FORWARD} секунд`;
+  actions.append(backBtn, toggle, fwdBtn);
+
+  /* Дорожка как в системном плеере: прошедшее слева, оставшееся справа,
+     полоса между ними. Всё одной строкой — карточка не растёт в высоту. */
+  const time = el('div', 'audio-time');
+  const current = el('span', 'audio-cur', '0:00');
+  const total = el('span', 'audio-dur', '0:00');
+  time.append(current, seek, total);
+
+  /* Скорость — не спрятанное меню «три точки», а видимая пилюля с текущим
+     темпом: её видно с первого взгляда, а список раскрывается по нажатию. */
+  const speed = el('button', 'audio-speed');
+  speed.type = 'button';
+  speed.setAttribute('aria-haspopup', 'menu');
+  speed.setAttribute('aria-expanded', 'false');
+  speed.title = 'Скорость воспроизведения';
+  const speedValue = el('span', 'audio-speed-value', audioRateLabel(knownRate));
+  const speedChevron = el('span', 'audio-speed-chev');
+  speedChevron.innerHTML = AUDIO_ICON.chevron;
+  speed.append(speedValue, speedChevron);
+
+  /* Управление по центру, скорость — справа. Все кнопки — одинаковые
+     пилюли, как кнопка скорости: перемотка по 10 секунд и плей в том же
+     стеклянном ритме, без разнокалиберных кругов. */
+  const controls = el('div', 'audio-controls');
+  controls.append(actions, speed);
+
+  bar.append(time, controls);
+
+  /* Скорости — только здесь, за пилюлей с текущим темпом: отдельного ряда
+     кнопок нет, иначе одно и то же управление стоит в блоке дважды. */
+  const menu = el('div', 'audio-menu');
+  menu.hidden = true;
+  menu.setAttribute('role', 'menu');
+  menu.setAttribute('aria-label', 'Скорость прослушивания');
+  const items = new Map();
+  for (const value of AUDIO_RATES) {
+    const item = el('button', 'audio-menu-item', audioRateLabel(value));
+    item.type = 'button';
+    item.dataset.rate = String(value);
+    item.setAttribute('role', 'menuitemradio');
+    item.setAttribute('aria-checked', 'false');
+    item.addEventListener('click', () => {
+      setRate(value);
+      closeMenu(true);
+    });
+    items.set(value, item);
+    menu.appendChild(item);
+  }
+
+  root.append(bar, menu);
+  container.appendChild(root);
+
+  let scrubbing = false;
+  let watching = null;
+  let lastPaused = null;
+
+  const durationOf = () => {
+    const value = Number(player.duration);
+    return Number.isFinite(value) && value > 0 ? value : 0;
+  };
+  const rateOf = () => (AUDIO_RATES.includes(Number(player.playbackRate)) ? Number(player.playbackRate) : 1);
+
+  const paint = () => {
+    if (!root.isConnected) return;
+    const paused = player.paused || player.ended;
+    /* Иконку и состояние перерисовываем только при смене play ↔ pause:
+       timeupdate приходит четыре раза в секунду, и подмена SVG на каждом
+       тике зря дёргала вёрстку во время звука. */
+    if (lastPaused !== paused) {
+      toggle.innerHTML = paused ? AUDIO_ICON.play : AUDIO_ICON.pause;
+      toggle.setAttribute('aria-label', paused ? 'Слушать' : 'Пауза');
+      /* Смена play ↔ pause не должна быть резкой: знак мягко проявляется,
+         когда запись действительно начала или остановила ход. */
+      if (lastPaused !== null) {
+        toggle.classList.remove('is-icon-in');
+        void toggle.offsetWidth;
+        toggle.classList.add('is-icon-in');
+      }
+      root.classList.toggle('is-playing', !paused);
+      lastPaused = paused;
+    }
+    const length = durationOf();
+    const now = Math.max(0, Number(player.currentTime) || 0);
+    current.textContent = audioClock(now);
+    /* Справа — сколько осталось, со знаком минус, как в системном плеере. */
+    total.textContent = length ? `-${audioClock(Math.max(0, length - now))}` : '0:00';
+    seek.disabled = !length;
+    const ratio = length ? Math.min(now, length) / length : 0;
+    if (!scrubbing) seek.value = String(Math.round(ratio * 1000));
+    /* Заливка дорожки — переменная CSS: перемотку красим без второй полосы. */
+    seek.style.setProperty('--audio-fill', `${(ratio * 100).toFixed(2)}%`);
+    seek.setAttribute('aria-valuetext', length ? `${audioClock(now)} из ${audioClock(length)}` : audioClock(now));
+    const subLabel = length ? `MP3 · ${audioClock(length)}` : 'MP3';
+    if (subEl) subEl.textContent = subLabel;
+    else if (extSub) extSub.textContent = subLabel;
+    const rate = rateOf();
+    for (const [value, item] of items) item.setAttribute('aria-checked', value === rate ? 'true' : 'false');
+    speedValue.textContent = audioRateLabel(rate);
+    speed.setAttribute('aria-label', `Скорость прослушивания: ${audioRateLabel(rate)}`);
+  };
+
+  /* Смена скорости. На iOS playbackRate иногда ставит запись на паузу, поэтому
+     если она играла — после смены запускаем её снова. */
+  const setRate = (value) => {
+    const rate = AUDIO_RATES.includes(Number(value)) ? Number(value) : 1;
+    const wasPlaying = !player.paused && !player.ended;
+    try {
+      player.playbackRate = rate;
+      player.defaultPlaybackRate = rate;
+      if (typeof player.preservesPitch === 'boolean') player.preservesPitch = true;
+    } catch {
+      /* старый браузер без playbackRate — меню просто не меняет темп */
+    }
+    if (wasPlaying) player.play()?.catch?.(() => {});
+    saveNowPlaying({ src: audioUrlKey(player.src), rate, time: Number(player.currentTime) || 0 });
+    audioSessionPosition(player);
+    paint();
+  };
+
+  const stopWatching = () => {
+    if (!watching) return;
+    document.removeEventListener('pointerdown', watching.outside, true);
+    document.removeEventListener('keydown', watching.escape, true);
+    window.removeEventListener('scroll', watching.scroll, true);
+    window.removeEventListener('resize', watching.scroll);
+    watching = null;
+  };
+
+  const closeMenu = (focus) => {
+    if (menu.hidden) return;
+    menu.hidden = true;
+    if (root.isConnected) root.appendChild(menu);
+    else menu.remove();
+    speed.setAttribute('aria-expanded', 'false');
+    stopWatching();
+    if (focus) speed.focus();
+  };
+
+  const openMenu = () => {
+    if (!menu.hidden) return;
+    /* Меню уходит в body: у карточки есть backdrop-filter, и position: fixed
+       внутри неё считается от карточки, а не от экрана — список обрезался. */
+    document.body.appendChild(menu);
+    menu.hidden = false;
+    speed.setAttribute('aria-expanded', 'true');
+    /* Всплывашка поверх окна: прокрутка модалки обрезала бы её, будь она
+       привязана к блоку. Координаты считаем от кнопки и держим в экране. */
+    const anchor = speed.getBoundingClientRect();
+    const box = menu.getBoundingClientRect();
+    const left = Math.max(10, Math.min(anchor.right - box.width, window.innerWidth - box.width - 10));
+    /* Снизу места нет — поднимаем список над всей карточкой, а не над кнопкой:
+       иначе он накрывает название и дорожку прогресса того же плеера. */
+    const cardTop = (root.closest('.files-audio') || root).getBoundingClientRect().top;
+    const below = anchor.bottom + 8;
+    const aboveCard = cardTop - box.height - 10;
+    const top = below + box.height <= window.innerHeight - 8 ? below : aboveCard >= 8 ? aboveCard : Math.max(8, anchor.top - box.height - 8);
+    menu.style.left = `${Math.round(left)}px`;
+    menu.style.top = `${Math.round(top)}px`;
+    const outside = (event) => {
+      if (menu.contains(event.target) || speed.contains(event.target)) return;
+      closeMenu();
+    };
+    const escape = (event) => {
+      if (event.key !== 'Escape') return;
+      /* Иначе Esc закрыл бы всё окно вместе с открытым меню. */
+      event.preventDefault();
+      event.stopPropagation();
+      closeMenu(true);
+    };
+    const scroll = (event) => {
+      if (event?.target instanceof Node && menu.contains(event.target)) return;
+      closeMenu();
+    };
+    watching = { outside, escape, scroll };
+    document.addEventListener('pointerdown', outside, true);
+    document.addEventListener('keydown', escape, true);
+    window.addEventListener('scroll', scroll, true);
+    window.addEventListener('resize', scroll);
+    paint();
+    (items.get(rateOf()) || speed).focus({ preventScroll: true });
+  };
+
+  toggle.addEventListener('click', () => {
+    if (player.paused || player.ended) player.play()?.catch?.(() => toast('Запись не запустилась. Нажмите ещё раз.'));
+    else player.pause();
+  });
+
+  /* Перемотка для речи: шаг 10 секунд в обе стороны. Долгое удержание
+     включает плавную перемотку с разгоном: не нужно щёлкать десять раз,
+     чтобы уйти на минуту. Число стоит рядом со стрелкой в пилюле, поэтому
+     знак остаётся тонким. */
+  const skipBy = (delta) => {
+    const length = durationOf();
+    const next = (Number(player.currentTime) || 0) + delta;
+    const target = length ? Math.max(0, Math.min(length - 0.25, next)) : Math.max(0, next);
+    try {
+      player.currentTime = target;
+    } catch {
+      /* запись ещё не готова — позицию выставит загрузка метаданных */
+    }
+    paint();
+    audioSessionPosition(player);
+  };
+
+  let holdTimer = 0;
+  let holdTick = 0;
+  let holdButton = null;
+
+  const stopHold = () => {
+    if (holdTimer) clearTimeout(holdTimer);
+    if (holdTick) clearInterval(holdTick);
+    holdTimer = 0;
+    holdTick = 0;
+    if (holdButton) holdButton.classList.remove('is-holding');
+    holdButton = null;
+  };
+
+  const startHold = (button, delta) => {
+    stopHold();
+    holdButton = button;
+    const startedAt = Date.now();
+    skipBy(delta);
+    holdTimer = setTimeout(() => {
+      holdTimer = 0;
+      button.classList.add('is-holding');
+      holdTick = setInterval(() => {
+        /* 3–14 секунд звука за секунду пальца: сначала точно, потом быстрее. */
+        const elapsed = (Date.now() - startedAt) / 1000;
+        const step = 0.3 + Math.min(1.1, elapsed * 0.42);
+        skipBy(Math.sign(delta) * step);
+      }, 90);
+    }, 360);
+  };
+
+  const bindSkip = (button, delta) => {
+    button.addEventListener('pointerdown', (event) => {
+      if (event.pointerType === 'mouse' && event.button !== 0) return;
+      try {
+        button.setPointerCapture(event.pointerId);
+      } catch {
+        /* указатель уже отпущен — хватит и обычного нажатия */
+      }
+      startHold(button, delta);
+    });
+    const release = () => stopHold();
+    button.addEventListener('pointerup', release);
+    button.addEventListener('pointercancel', release);
+    button.addEventListener('lostpointercapture', release);
+    button.addEventListener('contextmenu', (event) => event.preventDefault());
+    /* Нажатие мышью уже отработано на pointerdown; click с detail = 0 — это
+       клавиатура и скринридер, для них перематываем здесь. */
+    button.addEventListener('click', (event) => {
+      if (event.detail !== 0) return;
+      skipBy(delta);
+    });
+  };
+  bindSkip(backBtn, -AUDIO_SKIP_BACK);
+  bindSkip(fwdBtn, AUDIO_SKIP_FORWARD);
+
+  /* Перемотку тянем пальцем: пока тянут, ползунок не дёргаем из timeupdate. */
+  seek.addEventListener('pointerdown', () => {
+    scrubbing = true;
+    root.classList.add('is-scrubbing');
+  });
+  const endScrub = () => {
+    scrubbing = false;
+    root.classList.remove('is-scrubbing');
+    paint();
+  };
+  seek.addEventListener('pointerup', endScrub);
+  seek.addEventListener('pointercancel', endScrub);
+  seek.addEventListener('change', endScrub);
+  seek.addEventListener('input', () => {
+    const length = durationOf();
+    if (!length) return;
+    const next = (Number(seek.value) / 1000) * length;
+    player.currentTime = Math.max(0, Math.min(length - 0.25, next));
+    seek.style.setProperty('--audio-fill', `${(Number(seek.value) / 10).toFixed(2)}%`);
+  });
+
+  speed.addEventListener('click', () => (menu.hidden ? openMenu() : closeMenu(true)));
+
+  const ui = { root, paint, rate: rateOf };
+  state.uis.add(ui);
+  paint();
+
+  return {
+    player,
+    rates: [...AUDIO_RATES],
+    /* Убрать эту полосу управления. Звук живёт в доке, поэтому чужое
+       прослушивание не прерывается; после удаления оставшиеся полосы
+       продолжают перерисовываться. */
+    destroy() {
+      closeMenu(false);
+      stopWatching();
+      stopHold();
+      state.uis.delete(ui);
+      root.remove();
+    },
+    rename(nextTitle, part) {
+      state.title = nextTitle || title;
+      if (titleEl) {
+        titleEl.textContent = state.title.replace(/\.(mp3|wav|m4a|aac|ogg|oga|flac|opus)$/i, '');
+        titleEl.title = state.title;
+      }
+      audioSessionMetadata(state.title);
+      if (!player.paused) audioSessionState('playing');
+      saveNowPlaying({
+        title: state.title,
+        src: audioUrlKey(player.src || src),
+        time: Number(player.currentTime) || 0,
+      });
+      if (part !== undefined) saveNowPlaying({ part: Number(part) || 0 });
+      paint();
+    },
+  };
+}
+
+/* --- audio-player:end --- */
+
+/* ----------------- прослушивание MP3 внизу панели файлов -----------------
+   Панель — единственное место, где выбирают файл, поэтому и полоса управления
+   стоит в ней, последней в колонке: список папок прокручивается, а запись
+   остаётся внизу, под рукой, и на десктопе закреплена. Ширину полоса не
+   задаёт — она в потоке панели, поэтому разделитель слева меняет и её. На
+   телефоне полоса приходит вместе со шторкой и не пропадает, когда шторку
+   закрывают и открывают снова: звук живёт в доке и идёт своим ходом. */
+let filesAudioDismissed = false;
+
+/* Включить запись в полосе. Повторное нажатие по той же записи — пауза, но
+   двойной щелчок по строке (два клика подряд) считается одним нажатием, иначе
+   он успевал бы поставить паузу. */
+function filesAudioPlay(item) {
+  if (!item || item.dir || !item.path) return null;
+  const key = `${filesProjectId()}:${item.path}`;
+  const now = Date.now();
+  if (filesAudioPlay.lastKey === key && now - filesAudioPlay.lastAt < 450) return state.filesAudio;
+  filesAudioPlay.lastKey = key;
+  filesAudioPlay.lastAt = now;
+  const bar = filesAudioEnsure(item);
+  if (!bar) return null;
+  const player = bar.api.player;
+  if (!player.paused && !player.ended) player.pause();
+  else player.play()?.catch?.(() => filesNote('Запись не запустилась. Нажмите ещё раз.'));
+  return bar;
+}
+
+/* Имя записи, названное в ответе ассистента, включает ту же полосу, что и
+   нажатие по файлу в списке: один плеер на всё приложение, никаких отдельных
+   окон со звуком. На телефоне панель закрыта шторкой — полоса включилась бы
+   невидимой, поэтому шторку открываем: звук идёт своим ходом и после того, как
+   её закроют снова. */
+function filesAudioPlayLink(relPath) {
+  const path = String(relPath || '').replace(/^\.?\//, '');
+  if (!path) return null;
+  const name = path.split('/').pop();
+  if (!AUDIO_FILE.test(name)) return null;
+  if (filesNarrow()) openFilesDrawer();
+  return filesAudioPlay({ path, name });
+}
+
+/* Показать запись в полосе. Тот же файл заново не монтируется: он уже в доке и
+   помнит место, поэтому полоса просто снова появляется на экране. */
+function filesAudioEnsure(item) {
+  const panel = $('#filesAudio');
+  const holder = $('#filesAudioMount');
+  if (!panel || !holder || !item || !item.path) return null;
+  if (!AUDIO_FILE.test(item.name || item.path)) return null;
+  const projectId = filesProjectId();
+  if (!projectId) return null;
+  const name = item.name || String(item.path).split('/').pop();
+  const current = state.filesAudio;
+  const same = Boolean(current && current.projectId === projectId && current.path === item.path);
+  if (!same) {
+    if (current) filesAudioDispose();
+    const api = mountAudioPlayer(holder, {
+      src: fileUrl(item.path, false),
+      title: name,
+      name,
+      path: item.path,
+      projectId,
+      className: 'audio-in-files',
+      /* Название и подпись уже стоят в шапке блока — второй раз не дублируем. */
+      headTitle: true,
+      subEl: $('#filesAudioSub'),
+    });
+    state.filesAudio = { path: item.path, name, projectId, api };
+    filesAudioWatch(api.player);
+  }
+  filesAudioDismissed = false;
+  const title = $('#filesAudioTitle');
+  if (title) {
+    /* В шапке расширение лишнее: подпись ниже и так говорит «MP3». */
+    const shown = String(name).replace(/\.(mp3|wav|m4a|aac|ogg|oga|flac|opus)$/i, '');
+    title.textContent = shown || name;
+    title.title = `${name} — ${item.path}`;
+  }
+  audioCoverApply($('.files-audio-art'), projectId, item.path, name);
+  panel.classList.remove('hidden');
+  panel.setAttribute('aria-hidden', 'false');
+  markFilesAudioRow();
+  return state.filesAudio;
+}
+
+/* Запись не открылась: чаще всего файл удалили с другого устройства. Полосу с
+   мёртвой ссылкой не оставляем — сообщение важнее кнопки. */
+function filesAudioWatch(player) {
+  player.addEventListener('error', () => {
+    if (!state.filesAudio || state.filesAudio.api.player !== player) return;
+    filesNote('Звук не открылся: файла нет или он повреждён.');
+    filesAudioDismiss();
+  });
+}
+
+/* Убрать полосу совсем: крестик означает «мне это сейчас не нужно». Запись
+   останавливается и не всплывает сама, пока её не включат снова. */
+function filesAudioDismiss() {
+  filesAudioDispose();
+  filesAudioDismissed = true;
+}
+
+/* Освободить полосу: звук остаётся в доке, но кнопки управления снимаются,
+   чтобы не перерисовывать блок, которого больше нет. */
+function filesAudioDispose() {
+  const bar = state.filesAudio;
+  state.filesAudio = null;
+  if (bar) {
+    try {
+      bar.api.player.pause();
+    } catch {
+      /* аудио-элемент уже мог быть выгружен браузером */
+    }
+    bar.api.destroy?.();
+  }
+  const holder = $('#filesAudioMount');
+  if (holder) holder.replaceChildren();
+  const panel = $('#filesAudio');
+  if (panel) {
+    panel.classList.add('hidden');
+    panel.setAttribute('aria-hidden', 'true');
+  }
+  markFilesAudioRow();
+}
+
+/* Проект сменился — полоса прошлого проекта к файлам нового отношения не имеет. */
+function filesAudioSyncProject() {
+  const projectId = filesProjectId();
+  filesAudioDismissed = false;
+  if (!state.filesAudio) return;
+  if (state.filesAudio.projectId === projectId) return;
+  filesAudioDispose();
+}
+
+/* Панель открылась: вернуть запись, которую слушали в прошлый раз. На телефоне
+   это и есть «в полосе всегда видно, что играет», а не только пока шторка не
+   закрывалась. */
+function filesAudioRestore() {
+  const panel = $('#filesAudio');
+  const projectId = filesProjectId();
+  if (!panel || !projectId || filesAudioDismissed) return;
+  if (state.filesAudio) {
+    if (state.filesAudio.projectId !== projectId) return;
+    panel.classList.remove('hidden');
+    panel.setAttribute('aria-hidden', 'false');
+    return;
+  }
+  const saved = audioNowPlaying();
+  if (!saved || !saved.path || saved.projectId !== projectId) return;
+  /* Файл мог быть удалён: полоса со ссылкой в никуда только путала бы. */
+  if (!(state.files || []).some((entry) => !entry.dir && entry.path === saved.path)) return;
+  const name = saved.name || saved.title || String(saved.path).split('/').pop();
+  filesAudioEnsure({ path: saved.path, name });
+}
+
+/* Строка включённой записи в списке: по подсветке видно, что играет именно она,
+   а не соседний файл с похожим именем. */
+function markFilesAudioRow() {
+  const list = $('#filesList');
+  if (!list) return;
+  const active = state.filesAudio && state.filesAudio.projectId === filesProjectId() ? state.filesAudio.path : '';
+  for (const row of list.querySelectorAll('.file-row[data-audio]')) {
+    row.classList.toggle('is-listening', Boolean(active) && row.dataset.audio === active);
+  }
+}
+
+const filesAudioCloseBtn = $('#filesAudioClose');
+if (filesAudioCloseBtn) filesAudioCloseBtn.addEventListener('click', () => filesAudioDismiss());
+
 function openFilePreview(item) {
   /* Та же защита от двойного тапа, что и у скачивания. */
   const key = `${filesProjectId()}:${item.path}`;
@@ -6545,23 +8105,17 @@ function openFilePreview(item) {
   }
 
   if (AUDIO_FILE.test(item.name)) {
-    /* Плеер родной, браузерный: у него уже есть перемотка, громкость и режим
-       «на экране блокировки». Сервер отдаёт файл частями, поэтому перемотка
-       работает и на телефоне, а не только пока загружено начало. */
-    const player = el('audio', 'audio-preview');
-    player.controls = true;
-    player.preload = 'metadata';
-    player.src = url;
-    body.appendChild(player);
-    body.appendChild(
-      el(
-        'p',
-        'pv-hint',
-        'Запись можно слушать здесь же и перематывать. Кнопка «Скачать» сохранит MP3 в память ' +
-          onPhoneWord() +
-          ' — удобно для дороги.',
-      ),
-    );
+    /* Сервер отдаёт файл частями, поэтому перемотка работает и на телефоне, а не
+       только пока загружено начало. Звук уходит в общий док: закрыли окно или
+       ушли в другой проект — запись продолжает играть. */
+    mountAudioPlayer(body, {
+      src: url,
+      title: item.name,
+      name: item.name,
+      path: item.path,
+      projectId: filesProjectId(),
+      className: 'audio-preview',
+    });
   } else if (PREVIEW_IMAGE.test(item.name)) {
     if (/\.svg$/i.test(item.name)) {
       /* Лист — это страница, а не фотография: белая бумага и свой масштаб. */
@@ -6740,6 +8294,10 @@ async function openNarration(item) {
     rateSelect.disabled = value;
   };
 
+  /* Файл пишется в папку по ходу синтеза: показываем это в прогрессе и время
+     от времени обновляем список файлов, чтобы растущий MP3 был виден сразу. */
+  let lastPartialRefresh = 0;
+
   const paint = (job) => {
     const percent = Math.max(0, Math.min(100, Number(job.percent) || 0));
     fill.style.width = `${percent}%`;
@@ -6754,6 +8312,15 @@ async function openNarration(item) {
     progressText.textContent = `${parts.join(' · ') || 'Синтез'} — ${percent}%`;
     const notes = [];
     if (job.etaSeconds && job.status === 'running') notes.push(`осталось примерно ${ttsWait(job.etaSeconds)}`);
+    const growing = (job.parts || []).filter((part) => part.partial);
+    if (growing.length) {
+      const bytes = growing.reduce((sum, part) => sum + (Number(part.size) || 0), 0);
+      notes.push(`файл уже пишется в папку (${pvSize(bytes)}) — слушать можно с начала`);
+      if (Date.now() - lastPartialRefresh > 10000) {
+        lastPartialRefresh = Date.now();
+        loadFiles();
+      }
+    }
     if (job.warnings?.length) notes.push(job.warnings.join(' '));
     barNote.textContent = notes.join(' · ');
   };
@@ -6770,11 +8337,18 @@ async function openNarration(item) {
     cancel.hidden = true;
     result.replaceChildren();
     const parts = Array.isArray(job.files) && job.files.length ? job.files : job.file ? [{ ...job.file, index: 1 }] : [];
-    const player = el('audio', 'tts-player');
-    player.controls = true;
-    player.preload = 'metadata';
-    player.src = `/api/tts/jobs/${job.id}/audio`;
-    result.appendChild(player);
+    const bookDir = dirOf(item.path);
+    const firstPath = job.file?.path || (job.file?.name ? [bookDir, job.file.name].filter(Boolean).join('/') : '');
+    const bookTitle = job.title || item.name.replace(/\.[^.]+$/, '');
+    const audio = mountAudioPlayer(result, {
+      src: `/api/tts/jobs/${job.id}/audio`,
+      title: bookTitle,
+      name: job.file?.name || `${bookTitle}.mp3`,
+      path: firstPath,
+      projectId: filesProjectId(),
+      className: 'tts-player',
+    });
+    const player = audio.player;
 
     const meta = el('p', 'tts-result-meta');
     const total = parts.reduce((sum, part) => sum + (Number(part.seconds) || 0), 0);
@@ -6798,7 +8372,9 @@ async function openNarration(item) {
         name.title = part.name || '';
         name.addEventListener('click', () => {
           player.src = `/api/tts/jobs/${job.id}/audio?part=${part.index}`;
-          player.play().catch(() => {});
+          player.currentTime = 0;
+          audio.rename(part.name || `${bookTitle} · часть ${part.index}`, part.index);
+          player.play()?.catch?.(() => {});
         });
         row.appendChild(name);
         const info = el('span', 'tts-part-info', [part.duration, pvSize(part.size)].filter(Boolean).join(' · '));
@@ -7102,10 +8678,15 @@ async function uploadToProject(fileList, dir = '.') {
         const outgoing = await shrinkBeforeUpload(file);
         const name = outgoing.file.name;
         const rel = folder ? `${folder}/${name}` : name;
+        const headers = { 'Content-Type': outgoing.file.type || 'application/octet-stream', 'X-Filename': encodeURIComponent(name) };
+        /* Загрузка при открытом диалоге принадлежит ему: файл появится и в
+           проектном виде, и в списке этого диалога. */
+        const chatId = filesChatId();
+        if (chatId) headers['X-Chat-Id'] = chatId;
         const response = await fetch(`/api/projects/${projectId}/upload?path=${encodeURIComponent(rel)}`, {
           method: 'POST',
           credentials: 'same-origin',
-          headers: { 'Content-Type': outgoing.file.type || 'application/octet-stream', 'X-Filename': encodeURIComponent(name) },
+          headers,
           body: outgoing.file,
         });
         if (!response.ok) {
@@ -7983,6 +9564,11 @@ function createProjectModal({ workflowId = '', anchor = null } = {}) {
       state.attachments = [];
       state.expanded.add(project.id);
       if (chosenWorkflow) state.collapsedWorkflows.delete(chosenWorkflow);
+      /* Человек создаёт проект ради его диалога: если он пришёл сюда с
+         «Дашборда» или из «Top news», раздел уходит с экрана — иначе проект
+         создан, а человек по-прежнему смотрит на раздел и думает, что нажатие
+         не сработало. */
+      leaveSections();
       renderAttachStrip();
       renderSidebar();
       renderThread();
@@ -8324,6 +9910,9 @@ function resetClientState() {
   /* Задания «Дашборда» принадлежат аккаунту: чужое расписание не показываем. */
   hideDashboard();
   state.dashboard = emptyDashboardState();
+  /* «Top news» — тоже аккаунта: при выходе забываем и экран, и данные. */
+  hideNews();
+  state.news = emptyNewsState();
   state.dragOut = false;
   /* Напоминание принадлежит аккаунту: при выходе забываем и загруженное
      состояние, и отложенное окно. */
@@ -8394,6 +9983,7 @@ function supportBytes(size) {
    где искать проблему. */
 function supportPageLabel() {
   if (dashboardOpen()) return 'Дашборд';
+  if (newsOpen()) return 'Top news';
   const chat = state.chat;
   if (chat && chat.title) return `Диалог «${chat.title}»`;
   const project = activeProject();
@@ -10737,6 +12327,8 @@ function dashboardWhen(iso) {
 async function showDashboard() {
   const view = $('#dashboardView');
   if (!view) return;
+  /* Два раздела не могут быть открыты сразу: они оба занимают место диалога. */
+  hideNews();
   closePopover();
   closeModal();
   closeSidebar();
@@ -10768,6 +12360,15 @@ function hideDashboard() {
   syncScrollJump();
 }
 
+/* «Дашборд» и «Top news» занимают место диалога. Любой переход в диалог —
+   открытый чат, новый диалог, только что созданный проект — обязан раздел
+   закрыть. Иначе панель и лента уже переключились на новое, а на экране
+   остаётся раздел, и нажатие выглядит как «ничего не произошло». */
+function leaveSections() {
+  hideDashboard();
+  hideNews();
+}
+
 async function loadDashboard() {
   const grid = $('#dashGrid');
   if (!state.dashboard.loaded && grid) {
@@ -10777,12 +12378,7 @@ async function loadDashboard() {
   }
   try {
     const data = await api('/api/dashboard');
-    state.dashboard.tasks = Array.isArray(data.tasks) ? data.tasks : [];
-    state.dashboard.deleted = Number(data.deleted || 0);
-    state.dashboard.tz = data.tz || state.dashboard.tz;
-    state.dashboard.nextRunAt = data.nextRunAt || null;
-    state.dashboard.canAutoRun = Boolean(data.canAutoRun);
-    state.dashboard.balanceUsd = Number(data.balanceUsd || 0);
+    applyDashboardPayload(data);
     state.dashboard.loaded = true;
     renderDashboard();
   } catch (error) {
@@ -10841,22 +12437,32 @@ function renderDashboard() {
   notice.textContent = text;
 }
 
-function dashIconFor(blockId) {
-  const icon = el('span', `dash-ico block-${blockId}`);
-  icon.innerHTML = ICONS[DASH_ICON_BY_BLOCK[blockId] || 'chart'] || ICONS.chart;
+/* Значок карточки. У основы он берётся из каталога блоков (DASH_ICON_BY_BLOCK),
+   у своего блока — из поля icon, которое вернул сервер; незнакомое имя молча
+   меняем на «chart», чтобы на месте значка не остался пустой квадрат. */
+function dashIconFor(blockId, iconName, custom = false) {
+  const icon = el('span', custom ? 'dash-ico dash-ico-own' : `dash-ico block-${blockId}`);
+  const key = custom
+    ? typeof iconName === 'string' && ICONS[iconName]
+      ? iconName
+      : 'chart'
+    : DASH_ICON_BY_BLOCK[blockId] || 'chart';
+  icon.innerHTML = ICONS[key] || ICONS.chart;
   return icon;
 }
 
 function dashboardCard(task) {
-  const card = el('article', `dash-card${task.enabled ? ' on' : ''}`);
+  const custom = Boolean(task.custom);
+  const card = el('article', `dash-card${task.enabled ? ' on' : ''}${custom ? ' dash-card-own' : ''}`);
   card.dataset.task = task.id;
 
   const top = el('div', 'dash-card-top');
-  top.appendChild(dashIconFor(task.blockId));
+  top.appendChild(dashIconFor(task.blockId, task.icon, custom));
 
   const heading = el('div', 'dash-card-heading');
   heading.appendChild(el('h2', 'dash-card-title', task.title));
-  heading.appendChild(el('p', 'dash-card-short', task.short || ''));
+  /* У своего блока описания может не быть: пустая строка съедала бы место. */
+  if (!custom || task.short) heading.appendChild(el('p', 'dash-card-short', task.short || ''));
   top.appendChild(heading);
 
   /* Переключатель — кнопка с role="switch": так он одинаково понятен мышью,
@@ -10872,7 +12478,7 @@ function dashboardCard(task) {
   top.appendChild(toggle);
   card.appendChild(top);
 
-  card.appendChild(el('p', 'dash-card-desc', task.description || ''));
+  if (!custom || task.description) card.appendChild(el('p', 'dash-card-desc', task.description || ''));
 
   /* Строка состояния: когда сработает и как прошёл прошлый раз. */
   const status = el('div', 'dash-card-status');
@@ -10885,6 +12491,9 @@ function dashboardCard(task) {
   card.appendChild(status);
 
   const meta = el('div', 'dash-card-meta');
+  /* Значок есть только у своих блоков: остальные карточки в подписи не нуждаются. */
+  const badge = personalBadge(custom);
+  if (badge) meta.appendChild(badge);
   const project = el('span', 'dash-chip-badge');
   project.textContent = task.projectName ? `проект: ${task.projectName}` : 'проект: по умолчанию';
   project.title = 'Отчёты создаются в этом проекте';
@@ -10911,7 +12520,9 @@ function dashboardCard(task) {
   const actions = el('div', 'dash-card-actions');
   const run = el('button', 'btn btn-quiet dash-run');
   run.type = 'button';
-  run.innerHTML = `${ICONS.play}<span>Запустить</span>`;
+  /* «Сейчас» отделяет ручной прогон от расписания: кнопка рядом с заданием,
+     у которого уже есть свой день и час. */
+  run.innerHTML = `${ICONS.play}<span>Запустить сейчас</span>`;
   run.title = task.enabled ? 'Сделать отчёт сейчас' : 'Разовый запуск: задание останется выключенным';
   run.addEventListener('click', () => runDashboardTask(task, run));
   actions.appendChild(run);
@@ -10940,6 +12551,9 @@ async function toggleDashboardTask(task, control) {
     const data = await api(`/api/dashboard/tasks/${task.id}`, { method: 'PATCH', body: { enabled: next } });
     const index = state.dashboard.tasks.findIndex((item) => item.id === task.id);
     if (index >= 0) state.dashboard.tasks[index] = data.task;
+    /* Сервер кладёт в ответ сводку журнала: переключение тоже можно вернуть,
+       и кнопка в плашке должна ожить сразу, а не после перезагрузки. */
+    applyUndoSummary(data.undo);
     renderDashboard();
     toast(next ? 'Задание включено — отчёт придёт по расписанию' : 'Задание выключено', 'ok');
   } catch (error) {
@@ -10962,6 +12576,8 @@ async function toggleAllDashboardTasks() {
       const data = await api(`/api/dashboard/tasks/${task.id}`, { method: 'PATCH', body: { enabled: next } });
       const index = state.dashboard.tasks.findIndex((item) => item.id === task.id);
       if (index >= 0) state.dashboard.tasks[index] = data.task;
+      /* В журнале остаётся последнее переключение: отменяем по одному шагу. */
+      applyUndoSummary(data.undo);
     }
     renderDashboard();
     toast(next ? 'Все задания включены' : 'Все задания выключены', 'ok');
@@ -10972,19 +12588,29 @@ async function toggleAllDashboardTasks() {
 }
 
 async function deleteDashboardTask(task, button) {
+  const custom = Boolean(task.custom);
+  /* Свой блок удаляется насовсем, но это не опасно: журнал личного слоя вернёт
+     его вместе с расписанием и текстом задания. Вопрос поэтому звучит иначе —
+     человек боится потерять своё, а не «сломать сервис». */
   const confirmed = await confirmPopover({
     anchor: button,
-    title: 'Удалить задание?',
-    text: `«${task.title}» больше не будет запускаться по расписанию. Настройки и документы сохранятся: задание можно вернуть кнопкой «Вернуть удалённые».`,
+    title: custom ? 'Удалить свой блок?' : 'Удалить задание?',
+    text: custom
+      ? `«${task.title}» исчезнет из дашборда. Передумаете — верните кнопкой «Отменить» в плашке: блок вернётся вместе с расписанием и текстом задания.`
+      : `«${task.title}» больше не будет запускаться по расписанию. Настройки и документы сохранятся: задание можно вернуть кнопкой «Вернуть удалённые».`,
+    confirmLabel: custom ? 'Удалить блок' : 'Удалить',
   });
   if (!confirmed) return;
   if (button) button.disabled = true;
   try {
     const data = await api(`/api/dashboard/tasks/${task.id}`, { method: 'DELETE' });
-    state.dashboard.tasks = state.dashboard.tasks.filter((item) => item.id !== task.id);
-    state.dashboard.deleted = Number(data.deleted || 0);
+    applyDashboardPayload(data);
     renderDashboard();
-    toast('Задание удалено — вернуть его можно в «Дашборде»', 'ok');
+    if (custom) {
+      toast('Свой блок удалён', 'ok', { label: 'Отменить', busyLabel: 'Возвращаем…', onClick: () => personalUndo() });
+    } else {
+      toast('Задание удалено — вернуть его можно в «Дашборде»', 'ok');
+    }
   } catch (error) {
     if (!error.unauthorized) toast(error.message || 'Не удалось удалить задание');
     if (button) button.disabled = false;
@@ -10996,11 +12622,7 @@ async function restoreDashboardTasks() {
   if (button) button.disabled = true;
   try {
     const data = await api('/api/dashboard/restore', { method: 'POST', body: {} });
-    state.dashboard.tasks = Array.isArray(data.tasks) ? data.tasks : [];
-    state.dashboard.deleted = Number(data.deleted || 0);
-    state.dashboard.nextRunAt = data.nextRunAt || null;
-    state.dashboard.canAutoRun = Boolean(data.canAutoRun);
-    state.dashboard.balanceUsd = Number(data.balanceUsd || 0);
+    applyDashboardPayload(data);
     renderDashboard();
     toast('Задания возвращены выключенными — включите нужные', 'ok');
   } catch (error) {
@@ -11267,20 +12889,24 @@ function openDashboardTaskModal(task) {
   renderDay();
   refreshNote();
 
-  const reset = el('button', 'dash-reset');
-  reset.type = 'button';
-  reset.textContent = 'Вернуть текст по умолчанию';
-  reset.addEventListener('click', () => {
-    draft.prompt = task.defaults?.prompt || '';
-    prompt.value = draft.prompt;
-    toast('Текст задания сброшен — нажмите «Сохранить»', 'ok');
-  });
-  body.appendChild(reset);
+  /* У своего блока нет «текста по умолчанию»: сброс стёр бы всё, что человек
+     написал. Поэтому кнопка есть только у блоков основы. */
+  if (!task.custom) {
+    const reset = el('button', 'dash-reset');
+    reset.type = 'button';
+    reset.textContent = 'Вернуть текст по умолчанию';
+    reset.addEventListener('click', () => {
+      draft.prompt = task.defaults?.prompt || '';
+      prompt.value = draft.prompt;
+      toast('Текст задания сброшен — нажмите «Сохранить»', 'ok');
+    });
+    body.appendChild(reset);
+  }
 
   openModal({
     title: task.title,
-    subtitle: 'Постоянное задание',
-    headLead: dashIconFor(task.blockId),
+    subtitle: task.custom ? 'Мой блок — только в вашем аккаунте' : 'Постоянное задание',
+    headLead: dashIconFor(task.blockId, task.icon, Boolean(task.custom)),
     className: 'dash-modal',
     body,
     actions: [
@@ -11302,6 +12928,7 @@ function openDashboardTaskModal(task) {
             });
             const index = state.dashboard.tasks.findIndex((item) => item.id === task.id);
             if (index >= 0) state.dashboard.tasks[index] = data.task;
+            applyUndoSummary(data.undo);
             renderDashboard();
             toast('Настройки сохранены', 'ok');
           } catch (error) {
@@ -11316,17 +12943,1010 @@ function openDashboardTaskModal(task) {
   });
 }
 
+/* --------------------------- личный слой --------------------------- */
+/* Правило, из которого здесь всё следует: основа сервиса — это код (шесть
+   блоков дашборда и шесть тем выпуска), личный слой — данные в аккаунте.
+   Человек может добавить свой блок или тему, поменять расписание и удалить
+   своё — но не может удалить основу и не трогает чужие аккаунты. Задача этого
+   куска не «показать фичу», а снять страх: рядом с каждой опасной кнопкой
+   сказано, что она делает и как вернуть. */
+
+/* Спокойное пояснение под полем: человек читает его перед нажатием, а не
+   после ошибки. */
+function personalNote(text) {
+  return el('p', 'personal-note', text);
+}
+
+/* Значок на карточке. У своего блока — «Мой блок»: по нему видно, что это
+   добавлено лично и удаляется в один клик. У блоков основы значка нет — само
+   собой разумеется, что они есть у всех, и подписывать каждую карточку незачем. */
+function personalBadge(custom) {
+  if (!custom) return null;
+  const badge = el('span', 'personal-badge is-own', 'Мой блок');
+  badge.title = 'Ваш блок: удаляется и возвращается кнопкой отмены';
+  return badge;
+}
+
+/* Общий разбор ответа про дашборд. Почти каждая ручка личного слоя отвечает
+   одним и тем же: задания, счётчики, предел своих блоков и сводка журнала
+   отмены. Разбираем в одном месте, чтобы создание, удаление и отмена не
+   расходились в том, что показывать. */
+function applyDashboardPayload(data) {
+  if (!data || typeof data !== 'object') return;
+  if (Array.isArray(data.tasks)) state.dashboard.tasks = data.tasks;
+  if (data.deleted !== undefined) state.dashboard.deleted = Number(data.deleted || 0);
+  if (typeof data.tz === 'string' && data.tz) state.dashboard.tz = data.tz;
+  if (data.nextRunAt !== undefined) state.dashboard.nextRunAt = data.nextRunAt || null;
+  if (data.canAutoRun !== undefined) state.dashboard.canAutoRun = Boolean(data.canAutoRun);
+  if (data.balanceUsd !== undefined) state.dashboard.balanceUsd = Number(data.balanceUsd || 0);
+  if (data.personal && typeof data.personal === 'object') {
+    const personal = data.personal;
+    state.dashboard.personal = {
+      customCount: Number(personal.customCount || 0),
+      customLimit: Number(personal.customLimit || 6),
+      canAddCustom: personal.canAddCustom !== false,
+    };
+  }
+  if (data.undo && typeof data.undo === 'object') applyUndoSummary(data.undo);
+}
+
+/* Сводка журнала отмены — одна на аккаунт и общая для блоков и тем. Ответ про
+   свои темы приносит только её, без заданий и счётчиков блоков: если применить
+   такой ответ целиком, счётчик своих блоков обнулился бы из-за темы выпуска. */
+function applyUndoSummary(undo) {
+  if (!undo || typeof undo !== 'object') return;
+  /* Подпись приходит с сервера готовой фразой («Удалён блок…»). Своей не
+     собираем: иначе подсказка кнопки и журнал говорили бы разными словами. */
+  state.dashboard.undo = {
+    canUndo: undo.canUndo === true,
+    label: typeof undo.label === 'string' ? undo.label : '',
+  };
+}
+
+/* Отмена последнего действия личного слоя. Одна кнопка на все случаи: журнал
+   помнит, что было до действия (создание блока, удаление, своя тема), поэтому
+   клиенту не нужно знать, что именно он отменяет. */
+async function personalUndo() {
+  try {
+    const data = await api('/api/personal/undo', { method: 'POST', body: {} });
+    applyDashboardPayload(data);
+    renderDashboard();
+    /* Своя тема живёт в выпуске: если он открыт, перечитываем его, чтобы
+       карточка вернулась (или исчезла) сразу, а не после перезагрузки. */
+    if (newsOpen()) await loadNews({ quiet: true });
+    const undone = data?.undone && typeof data.undone.label === 'string' ? data.undone.label : '';
+    toast(undone ? `Вернули: ${undone}` : 'Вернули как было', 'ok');
+  } catch (error) {
+    if (error.unauthorized) return;
+    /* 409 — журнал пуст (например, отмену уже нажали в другой вкладке).
+       Честно гасим кнопку, а не показываем одну и ту же ошибку дважды. */
+    if (error.status === 409) {
+      state.dashboard.undo = { canUndo: false, label: '' };
+    }
+    toast(error.message || 'Не удалось вернуть как было');
+  }
+}
+
+/* Свой блок: имя, задание и расписание. Ничего «глубокого» здесь нет —
+   создаётся запись в аккаунте, а шесть блоков основы остаются как были.
+   Поэтому внизу окна прямо написано, что это личное и как это убрать. */
+function openDashboardOwnModal() {
+  const personal = state.dashboard.personal || {};
+  if (personal.canAddCustom === false) {
+    const limit = Number(personal.customLimit || 6);
+    toast(`Своих блоков уже ${limit}. Удалите один — и добавьте новый.`);
+    return;
+  }
+  const draft = { title: '', prompt: '', cadence: 'monthly', dayOfMonth: 1, dayOfWeek: 1, hour: 9 };
+  const body = el('div', 'dash-form dash-form-own');
+
+  const titleInput = el('input', 'dash-own-name');
+  titleInput.type = 'text';
+  titleInput.maxLength = 60;
+  titleInput.autocomplete = 'off';
+  titleInput.placeholder = 'Например: «Свои поставщики»';
+  titleInput.addEventListener('input', () => {
+    draft.title = titleInput.value;
+    syncCreate();
+  });
+  body.appendChild(dashField('Название блока', titleInput, 'До 60 знаков. Так блок будет называться в дашборде.'));
+
+  /* Поле невысокое и растягивается мышью: текст задания длинный, а окно должно
+     целиком влезать в экран телефона — прокручивается само поле. */
+  const prompt = el('textarea', 'dash-prompt');
+  prompt.rows = 4;
+  prompt.maxLength = 2000;
+  prompt.placeholder = 'Что агент должен сделать и что прислать — отрасль, город, формат';
+  prompt.addEventListener('input', () => {
+    draft.prompt = prompt.value;
+    syncCreate();
+  });
+  body.appendChild(
+    dashField('Что должен сделать агент', prompt, 'Текст задания. Чем точнее вопрос, тем полезнее отчёт.'),
+  );
+
+  const cadenceSelect = dashSelect(DASH_CADENCES, draft.cadence);
+  body.appendChild(dashField('Как часто', cadenceSelect));
+
+  const daySlot = el('div', 'dash-form-day');
+  const note = el('p', 'dash-form-note');
+  const refreshNote = () => {
+    note.textContent = `Запуск: ${dashboardScheduleLabel(draft)} по времени Минска`;
+  };
+  const renderDay = () => {
+    daySlot.innerHTML = '';
+    if (draft.cadence === 'weekly') {
+      const days = DASH_WEEKDAYS.map((name, index) => [index + 1, name]);
+      const select = dashSelect(days, draft.dayOfWeek);
+      select.addEventListener('change', () => {
+        draft.dayOfWeek = Number(select.value);
+        refreshNote();
+      });
+      daySlot.appendChild(dashField('День недели', select));
+    } else {
+      const days = [];
+      for (let day = 1; day <= 28; day += 1) days.push([day, `${day}-е число`]);
+      const select = dashSelect(days, draft.dayOfMonth);
+      select.addEventListener('change', () => {
+        draft.dayOfMonth = Number(select.value);
+        refreshNote();
+      });
+      daySlot.appendChild(dashField('День месяца', select, 'С 1-го по 28-е: так задание не пропускает февраль.'));
+    }
+  };
+  cadenceSelect.addEventListener('change', () => {
+    draft.cadence = cadenceSelect.value;
+    renderDay();
+    refreshNote();
+  });
+  body.appendChild(daySlot);
+
+  const hours = [];
+  for (let hour = 0; hour < 24; hour += 1) hours.push([hour, `${String(hour).padStart(2, '0')}:00`]);
+  const hourSelect = dashSelect(hours, draft.hour);
+  hourSelect.addEventListener('change', () => {
+    draft.hour = Number(hourSelect.value);
+    refreshNote();
+  });
+  body.appendChild(dashField('Во сколько', hourSelect, 'Время минское (Europe/Minsk): часовой пояс сервера не важен.'));
+
+  body.appendChild(note);
+  renderDay();
+  refreshNote();
+
+  body.appendChild(
+    personalNote(
+      'Это личный блок: он в вашем аккаунте и не меняет основу сервиса. Удалить и вернуть — в один клик',
+    ),
+  );
+
+  let createButton = null;
+  const ready = () => draft.title.trim().length > 0 && draft.prompt.trim().length > 0;
+  function syncCreate() {
+    if (createButton) createButton.disabled = !ready();
+  }
+
+  openModal({
+    title: 'Свой блок',
+    subtitle: 'Личный блок в вашем аккаунте',
+    headLead: dashIconFor('', 'chart', true),
+    className: 'dash-modal',
+    body,
+    /* Кнопка «Создать» гаснет, пока не заполнены имя и задание: пустой блок
+       ничего не делает, и человеку не нужно узнавать об этом по ошибке. */
+    onMount: (_bodyNode, modal) => {
+      createButton = modal.querySelector('.modal-foot .btn-primary');
+      syncCreate();
+    },
+    actions: [
+      {
+        label: 'Создать',
+        kind: 'primary',
+        onClick: async () => {
+          try {
+            const data = await api('/api/dashboard/tasks', {
+              method: 'POST',
+              body: {
+                title: draft.title.trim(),
+                prompt: draft.prompt.trim(),
+                cadence: draft.cadence,
+                dayOfMonth: draft.dayOfMonth,
+                dayOfWeek: draft.dayOfWeek,
+                hour: draft.hour,
+              },
+            });
+            applyDashboardPayload(data);
+            renderDashboard();
+            toast(`Блок «${draft.title.trim()}» добавлен`, 'ok', { label: 'Отменить', busyLabel: 'Возвращаем…', onClick: () => personalUndo() });
+          } catch (error) {
+            if (!error.unauthorized) toast(error.message || 'Не удалось создать блок');
+            return false;
+          }
+          return true;
+        },
+      },
+      { label: 'Отмена', kind: 'quiet' },
+    ],
+  });
+}
+
+/* ------------------------------- top news ------------------------------- */
+/* Раздел «Top news»: один утренний выпуск, шесть тем, по две новости. Устроен
+   как «Дашборд» — своя секция в разметке, свой класс состояния .news-open на
+   #app и та же связка «показать / скрыть / загрузить / нарисовать». Отличие
+   одно: здесь нет ничего лишнего и ручных кнопок. Сервер собирает выпуск сам,
+   экран только читает готовое и показывает, что тумблер включён. */
+
+const NEWS_TONES = new Set(['gold', 'blue', 'green', 'violet', 'sky', 'rose']);
+
+/* Названия цветов — для выбора в окне своей темы. Цвет здесь единственная
+   «настройка вида»: одинаковый в обеих темах и не ломает тон карточки. */
+const NEWS_TONE_NAMES = [
+  ['gold', 'Янтарный'],
+  ['blue', 'Синий'],
+  ['green', 'Зелёный'],
+  ['violet', 'Сиреневый'],
+  ['sky', 'Небесный'],
+  ['rose', 'Розовый'],
+];
+
+/* Иконки тем — простые штриховые рисунки в одном весе, без внешних файлов.
+   Это константы, поэтому вставлять их через innerHTML безопасно. */
+const NEWS_ICONS = {
+  main: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 2.6c.7 4.3 3.1 6.7 7.4 7.4-4.3.7-6.7 3.1-7.4 7.4C9.3 13.1 6.9 10.7 2.6 10 6.9 9.3 9.3 6.9 10 2.6Z"/></svg>',
+  world: '<svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7.2"/><path d="M2.8 10h14.4M10 2.8c2 2.1 3 4.5 3 7.2s-1 5.1-3 7.2c-2-2.1-3-4.5-3-7.2s1-5.1 3-7.2Z"/></svg>',
+  money: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 16.4h14M5 13.4l3.2-3.5 2.6 2.3 4.2-5.2"/><path d="M12.4 7H16v3.6"/></svg>',
+  tech: '<svg viewBox="0 0 20 20" aria-hidden="true"><rect x="5.2" y="5.2" width="9.6" height="9.6" rx="2"/><path d="M7.8 2.8v2.4M12.2 2.8v2.4M7.8 14.8v2.4M12.2 14.8v2.4M2.8 7.8h2.4M2.8 12.2h2.4M14.8 7.8h2.4M14.8 12.2h2.4"/><circle cx="10" cy="10" r="1.2"/></svg>',
+  telegram: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3.2 4.5h9.6v6.2H7.4L4.9 13v-2.3H3.2z"/><path d="M8.2 12.1h5.6l2.4 1.7v-2.1h.6V7.2H13"/></svg>',
+  social: '<svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="5" cy="10" r="2.1"/><circle cx="15" cy="5.4" r="2.1"/><circle cx="15" cy="14.6" r="2.1"/><path d="M7 9.2l6-3.2M7 10.8l6 3.2"/></svg>',
+};
+
+const NEWS_ARROW = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4.2 11.8 11.8 4.2M5.8 4.2h6v6"/></svg>';
+
+const NEWS_POLL_MS = 4000;
+const NEWS_POLL_LIMIT = 45;
+let newsPollTimer = 0;
+let newsPollCount = 0;
+
+function newsOpen() {
+  const view = $('#newsView');
+  return Boolean(view) && !view.classList.contains('hidden');
+}
+
+function emptyNewsState() {
+  return {
+    loaded: false,
+    loading: false,
+    enabled: false,
+    busy: false,
+    building: false,
+    issue: null,
+    nextAt: '',
+    preview: [],
+    serverError: '',
+    warning: '',
+    fetchError: '',
+    renderKey: '',
+    /* Свои темы выпуска. Идут после шести основных и только когда тумблер
+       включён. Предел (3) приходит с сервером, здесь только запасной. */
+    personal: { topics: [], blocks: [], limit: 3, used: 0 },
+  };
+}
+
+/* Свои темы: сервер присылает { topics, limit, used, blocks }. Любого поля
+   может не быть (сервер новее или старее клиента) — тогда личного слоя просто
+   нет, и выпуск выглядит как раньше, без пустых карточек. */
+function normalisePersonalNews(raw) {
+  const empty = { topics: [], blocks: [], limit: 3, used: 0 };
+  if (!raw || typeof raw !== 'object') return empty;
+  const topics = Array.isArray(raw.topics)
+    ? raw.topics.filter((item) => item && typeof item === 'object' && typeof item.id === 'string' && item.id)
+    : [];
+  const blocks = Array.isArray(raw.blocks) ? raw.blocks.filter((item) => item && typeof item === 'object') : [];
+  return {
+    topics,
+    blocks,
+    limit: Math.max(1, Number(raw.limit || 3)),
+    used: Math.max(0, Number(raw.used !== undefined ? raw.used : topics.length) || 0),
+  };
+}
+
+/* После создания или удаления своей темы сервер присылает только personal.
+   Применяем его отдельно, чтобы не переписывать состояние основы выпуска. */
+function applyNewsPersonal(raw) {
+  state.news.personal = normalisePersonalNews(raw);
+}
+
+/* Собирается ли сейчас своя тема. Опрос нужен и для основы, и для своих тем:
+   иначе «Собираем вашу тему…» осталось бы на экране до перезагрузки. */
+function ownNewsBuilding() {
+  const personal = state.news.personal || {};
+  const topics = Array.isArray(personal.topics) ? personal.topics : [];
+  const blocks = Array.isArray(personal.blocks) ? personal.blocks : [];
+  return topics.some((topic) => {
+    const entry = blocks.find((item) => item && item.topicId === topic.id);
+    return !entry || entry.status === 'building';
+  });
+}
+
+function stopNewsPoll() {
+  clearTimeout(newsPollTimer);
+  newsPollTimer = 0;
+}
+
+/* Ответ раздела короткий и всегда готовый: сервер не держит запрос на время
+   сборки. Двадцати секунд хватает с запасом, а зависший запрос не оставляет
+   экран в вечных скелетонах. */
+const NEWS_CALL_TIMEOUT = 20000;
+
+async function newsCall(path, options = {}) {
+  const timeoutMs = Math.max(1000, Number(options.timeoutMs) || NEWS_CALL_TIMEOUT);
+  const rest = { ...options };
+  delete rest.timeoutMs;
+  const controller = typeof AbortController === 'function' ? new AbortController() : null;
+  const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : 0;
+  try {
+    const data = await api(path, controller ? { ...rest, signal: controller.signal } : rest);
+    return { ok: true, data: data && typeof data === 'object' ? data : {} };
+  } catch (error) {
+    return { ok: false, error };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function newsErrorText(error) {
+  if (!error) return 'Не удалось получить выпуск. Попробуйте ещё раз.';
+  if (error.name === 'AbortError' || error.name === 'TimeoutError') {
+    return 'Сервер не ответил. Попробуйте ещё раз.';
+  }
+  if (error.status === 401) return 'Нужно войти снова.';
+  if (error.status === 429) return 'Слишком много запросов. Подождите минуту.';
+  const text = String(error.message || '').trim();
+  if (text && text.length <= 220) return text;
+  return 'Не удалось получить выпуск. Попробуйте ещё раз.';
+}
+
+function applyNewsState(data) {
+  if (!data || typeof data !== 'object') return;
+  state.news.enabled = data.enabled === true;
+  state.news.building = data.building === true;
+  state.news.issue =
+    data.issue && typeof data.issue === 'object' && Array.isArray(data.issue.categories) ? data.issue : null;
+  state.news.nextAt = typeof data.nextAt === 'string' ? data.nextAt : '';
+  state.news.preview = Array.isArray(data.preview) ? data.preview : [];
+  state.news.serverError = typeof data.error === 'string' ? data.error : '';
+  state.news.warning = typeof data.warning === 'string' ? data.warning : '';
+  state.news.personal = normalisePersonalNews(data.personal);
+  state.news.loaded = true;
+  state.news.loading = false;
+  state.news.fetchError = '';
+}
+
+function newsNextText(iso) {
+  if (!iso) return '';
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return '';
+  try {
+    return new Intl.DateTimeFormat('ru-RU', {
+      timeZone: 'Europe/Minsk',
+      day: 'numeric',
+      month: 'long',
+      hour: '2-digit',
+      minute: '2-digit',
+    }).format(date);
+  } catch {
+    return '';
+  }
+}
+
+/* Время публикации: сегодня — только часы, в другой день — дата и часы.
+   Относительных «два дня назад» нет: у выпуска есть своя дата, и она честнее. */
+function newsWhen(iso) {
+  if (!iso) return '';
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return '';
+  try {
+    const key = (value) =>
+      new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'Europe/Minsk',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+      }).format(value);
+    const time = new Intl.DateTimeFormat('ru-RU', {
+      timeZone: 'Europe/Minsk',
+      hour: '2-digit',
+      minute: '2-digit',
+    }).format(date);
+    if (key(date) === key(new Date())) return time;
+    const day = new Intl.DateTimeFormat('ru-RU', {
+      timeZone: 'Europe/Minsk',
+      day: 'numeric',
+      month: 'short',
+    }).format(date);
+    return `${day}, ${time}`;
+  } catch {
+    return '';
+  }
+}
+
+function newsSourceMark(source) {
+  const text = String(source || '').trim();
+  const mark = el('span', 'tn-mark', (text ? text[0] : '?').toUpperCase());
+  mark.setAttribute('aria-hidden', 'true');
+  return mark;
+}
+
+function renderNewsTopics() {
+  const box = $('#newsTopics');
+  if (!box) return;
+  const preview = state.news.preview.length
+    ? state.news.preview
+    : [
+        { id: 'main', title: 'Главное', tone: 'gold' },
+        { id: 'world', title: 'Мир', tone: 'blue' },
+        { id: 'money', title: 'Экономика', tone: 'green' },
+        { id: 'tech', title: 'Технологии', tone: 'violet' },
+        { id: 'telegram', title: 'Телеграм', tone: 'sky' },
+        { id: 'social', title: 'Соцсети', tone: 'rose' },
+      ];
+  const key = preview.map((item) => `${item.id}:${item.title}`).join('|');
+  if (box.dataset.key === key) return;
+  box.replaceChildren();
+  for (const category of preview) {
+    const tone = NEWS_TONES.has(category.tone) ? category.tone : 'gold';
+    const chip = el('span', `tn-topic tn-tone-${tone}`);
+    chip.insertAdjacentHTML('afterbegin', NEWS_ICONS[category.id] || NEWS_ICONS.main);
+    chip.append(el('span', '', String(category.title || '')));
+    box.append(chip);
+  }
+  box.dataset.key = key;
+}
+
+function renderNewsSkeleton() {
+  const box = $('#newsSkeleton');
+  if (!box || box.dataset.ready === '1') return;
+  for (let index = 0; index < 6; index += 1) box.append(el('div', 'tn-skel'));
+  box.dataset.ready = '1';
+}
+
+/* Две новости в блоке делят карточку ровно пополам, поэтому описание в карточке
+   живёт в плашке из двух строк. Режем текст сами, по границе фразы: тогда
+   видимый анонс заканчивается точкой, а не многоточием посреди слова. Полный
+   текст никуда не девается — он остаётся в источнике по ссылке. */
+const NEWS_CARD_SUMMARY_LIMIT = 140;
+
+function newsCardSummary(raw) {
+  const text = String(raw || '').replace(/\s+/g, ' ').trim();
+  if (text.length <= NEWS_CARD_SUMMARY_LIMIT) return text;
+  const cut = text.slice(0, NEWS_CARD_SUMMARY_LIMIT);
+  const stop = Math.max(cut.lastIndexOf('. '), cut.lastIndexOf('! '), cut.lastIndexOf('? '));
+  if (stop >= 55) return cut.slice(0, stop + 1);
+  const space = cut.lastIndexOf(' ');
+  const head = space > 35 ? cut.slice(0, space) : cut;
+  return `${head.replace(/[\s,;:—–-]+$/, '')}…`;
+}
+
+/* Строки новости — общие для основы и для своих тем: одинаковые классы,
+   одинаковое чтение с экрана. Правило выпуска — две новости на блок. */
+function newsStories(items) {
+  const stories = el('div', 'tn-stories');
+  items.slice(0, 2).forEach((item, index) => {
+    const href = typeof item.url === 'string' && /^https?:\/\//i.test(item.url) ? item.url : '';
+    const story = el('a', `tn-story ${index === 0 ? 'tn-lead' : 'tn-brief'}`);
+    story.href = href || '#';
+    if (!href) story.setAttribute('aria-disabled', 'true');
+    story.target = '_blank';
+    story.rel = 'noopener noreferrer';
+
+    const rank = el('span', 'tn-rank', String(index + 1).padStart(2, '0'));
+    rank.setAttribute('aria-hidden', 'true');
+
+    const main = el('span', 'tn-story-main');
+    main.append(el('h3', 'tn-story-headline', String(item.headline || '')));
+    if (item.summary) main.append(el('p', 'tn-story-summary', newsCardSummary(item.summary)));
+
+    const meta = el('span', 'tn-story-meta');
+    meta.append(newsSourceMark(item.source));
+    if (item.source) meta.append(el('span', 'tn-source', String(item.source)));
+    const when = newsWhen(item.publishedAt);
+    if (when) {
+      meta.append(el('span', 'tn-dot'));
+      meta.append(el('span', 'tn-when', when));
+    }
+    main.append(meta);
+
+    const arrow = el('span', 'tn-arrow');
+    arrow.innerHTML = NEWS_ARROW;
+    arrow.setAttribute('aria-hidden', 'true');
+
+    const sr = el('span', 'tn-sr', `Новость ${index + 1} из 2. ${String(item.headline || '')}`);
+    story.append(rank, main, arrow, sr);
+    stories.append(story);
+  });
+  return stories;
+}
+
+function renderNewsGrid(issue) {
+  const grid = $('#newsGrid');
+  if (!grid) return 0;
+  grid.replaceChildren();
+  const categories = Array.isArray(issue.categories) ? issue.categories : [];
+  let rendered = 0;
+
+  for (const category of categories) {
+    const items = Array.isArray(category.items) ? category.items.slice(0, 2) : [];
+    /* Блок без двух новостей не рисуем: «1 из 2» выглядит как сбой, а не как
+       выпуск. Сервер такой блок и не сохраняет, здесь — вторая страховка. */
+    if (items.length < 2) continue;
+    const tone = NEWS_TONES.has(category.tone) ? category.tone : 'gold';
+    const block = el('article', `tn-block tn-tone-${tone}`);
+    block.style.setProperty('--i', String(rendered));
+
+    const head = el('header', 'tn-block-head');
+    const icon = el('span', 'tn-cat-icon');
+    icon.innerHTML = NEWS_ICONS[category.id] || NEWS_ICONS.main;
+    icon.setAttribute('aria-hidden', 'true');
+    const copy = el('div', 'tn-cat-copy');
+    copy.append(el('h2', 'tn-cat-title', String(category.title || '')));
+    if (category.kicker) copy.append(el('span', 'tn-cat-kicker', String(category.kicker)));
+    head.append(icon, copy);
+    head.append(el('span', 'tn-cat-index', String(rendered + 1).padStart(2, '0')));
+    block.append(head);
+
+    block.append(newsStories(items));
+    grid.append(block);
+    rendered += 1;
+  }
+  return rendered;
+}
+
+/* Карточка своей темы. Выглядит как блок основы (та же сетка и тот же тон), но
+   в шапке стоят значок «Мой блок» и кнопка удаления: это моё — и убрать можно
+   здесь же. Пока сервер собирает новости, вместо строк честно написано, что
+   идёт работа; если ничего не нашлось — так и сказано, без пустых заглушек. */
+function newsOwnBlock(topic, entry, index) {
+  const tone = NEWS_TONES.has(topic.tone) ? topic.tone : 'gold';
+  const block = el('article', `tn-block tn-block-own tn-tone-${tone}`);
+  block.dataset.own = String(topic.id);
+  block.style.setProperty('--i', String(index));
+
+  const head = el('header', 'tn-block-head');
+  const icon = el('span', 'tn-cat-icon');
+  icon.innerHTML = NEWS_ICONS.main;
+  icon.setAttribute('aria-hidden', 'true');
+
+  const title = String(topic.title || '');
+  const copy = el('div', 'tn-cat-copy');
+  copy.append(el('h2', 'tn-cat-title', title));
+  /* Если человек не задал строку под заголовком, сервер повторяет заголовок.
+     Печатать «Логистика» дважды подряд незачем: второй строкой служит значок. */
+  if (topic.kicker && String(topic.kicker) !== title) copy.append(el('span', 'tn-cat-kicker', String(topic.kicker)));
+  /* Значок тот же, что на карточках дашборда, но подсказка говорит про тему. */
+  const badge = personalBadge(true);
+  badge.title = 'Ваша тема: удаляется и возвращается кнопкой отмены';
+  copy.append(badge);
+  head.append(icon, copy);
+
+  const remove = el('button', 'btn btn-ghost btn-icon tn-own-del');
+  remove.type = 'button';
+  remove.title = `Удалить свою тему «${title}»`;
+  remove.setAttribute('aria-label', `Удалить свою тему «${title}»`);
+  remove.innerHTML = ICONS.trash;
+  remove.addEventListener('click', () => deleteOwnTopic(topic, remove));
+  head.append(remove);
+  block.append(head);
+
+  const status = entry && typeof entry.status === 'string' ? entry.status : 'building';
+  const items = entry && Array.isArray(entry.items) ? entry.items : [];
+  if (status === 'ready' && items.length >= 2) {
+    block.append(newsStories(items));
+  } else {
+    const wait = el('div', 'tn-own-state');
+    if (status === 'empty') {
+      wait.append(el('span', 'tn-own-state-text', 'Сегодня по этой теме ничего не нашлось'));
+    } else {
+      const pulse = el('span', 'tn-pulse');
+      pulse.setAttribute('aria-hidden', 'true');
+      wait.append(pulse);
+      wait.append(el('span', 'tn-own-state-text', 'Собираем вашу тему…'));
+    }
+    block.append(wait);
+  }
+  return block;
+}
+
+/* Свои темы рисуем отдельно от основы: их состояние меняется чаще (сборка,
+   удаление, отмена), а основа выпуска при этом остаётся той же и не
+   перерисовывается впустую. */
+function renderNewsOwn() {
+  const grid = $('#newsGrid');
+  if (!grid) return 0;
+  grid.querySelectorAll('[data-own]').forEach((node) => node.remove());
+  if (!state.news.enabled) return 0;
+  const personal = state.news.personal || {};
+  const topics = Array.isArray(personal.topics) ? personal.topics : [];
+  const blocks = Array.isArray(personal.blocks) ? personal.blocks : [];
+  topics.forEach((topic, index) => {
+    const entry = blocks.find((item) => item && item.topicId === topic.id);
+    grid.append(newsOwnBlock(topic, entry, index));
+  });
+  return topics.length;
+}
+
+/* Окно своей темы. Человек пишет, о чём искать, и выбирает цвет — остальное
+   сервер делает так же, как для шести тем основы. Поля и словарь те же, что в
+   настройках блока: учиться заново нечему. */
+function openOwnTopicModal() {
+  const personal = state.news.personal || {};
+  const used = Number(personal.used !== undefined ? personal.used : (personal.topics || []).length) || 0;
+  const limit = Number(personal.limit || 3);
+  if (used >= limit) {
+    toast(`Своих тем уже ${limit}. Удалите одну — и добавьте новую.`);
+    return;
+  }
+
+  const draft = { title: '', kicker: '', query: '', tone: 'gold' };
+  const body = el('div', 'dash-form dash-form-own');
+
+  const titleInput = el('input', 'tn-own-name');
+  titleInput.type = 'text';
+  titleInput.maxLength = 40;
+  titleInput.autocomplete = 'off';
+  titleInput.placeholder = 'Например: «Логистика»';
+  titleInput.addEventListener('input', () => {
+    draft.title = titleInput.value;
+    syncCreate();
+  });
+  body.appendChild(dashField('Заголовок темы', titleInput, 'До 40 знаков. Так тема будет называться в выпуске.'));
+
+  const kickerInput = el('input', 'tn-own-kicker');
+  kickerInput.type = 'text';
+  kickerInput.maxLength = 60;
+  kickerInput.autocomplete = 'off';
+  kickerInput.placeholder = 'Например: «Склады и перевозки»';
+  kickerInput.addEventListener('input', () => {
+    draft.kicker = kickerInput.value;
+  });
+  body.appendChild(dashField('Строка под заголовком', kickerInput, 'Необязательно. Если пусто, повторим заголовок.'));
+
+  const queryInput = el('input', 'tn-own-query');
+  queryInput.type = 'text';
+  queryInput.maxLength = 120;
+  queryInput.autocomplete = 'off';
+  queryInput.placeholder = 'Например: «новости логистики Беларусь»';
+  queryInput.addEventListener('input', () => {
+    draft.query = queryInput.value;
+    syncCreate();
+  });
+  body.appendChild(
+    dashField('Что искать', queryInput, 'До 120 знаков. Чем точнее слова, тем ближе новости к вашей работе.'),
+  );
+
+  const toneSelect = dashSelect(NEWS_TONE_NAMES, draft.tone);
+  toneSelect.addEventListener('change', () => {
+    draft.tone = toneSelect.value;
+  });
+  body.appendChild(dashField('Цвет карточки', toneSelect));
+
+  body.appendChild(
+    personalNote('Это ваша тема: она в вашем аккаунте и не меняет шесть тем сервиса. Удалить и вернуть — в один клик'),
+  );
+
+  let createButton = null;
+  const ready = () => draft.title.trim().length > 0 && draft.query.trim().length > 0;
+  function syncCreate() {
+    if (createButton) createButton.disabled = !ready();
+  }
+
+  openModal({
+    title: 'Своя тема',
+    subtitle: 'Личная тема в выпуске',
+    headLead: dashIconFor('', 'chart', true),
+    className: 'dash-modal',
+    body,
+    /* Пока не заполнены заголовок и запрос, «Добавить» погашена: пустой
+       запрос вернул бы ошибку сервера, а не новости. */
+    onMount: (_bodyNode, modal) => {
+      createButton = modal.querySelector('.modal-foot .btn-primary');
+      syncCreate();
+    },
+    actions: [
+      {
+        label: 'Добавить',
+        kind: 'primary',
+        onClick: async () => {
+          try {
+            const data = await api('/api/topnews/topics', {
+              method: 'POST',
+              body: {
+                title: draft.title.trim(),
+                kicker: draft.kicker.trim(),
+                query: draft.query.trim(),
+                tone: draft.tone,
+              },
+            });
+            applyNewsPersonal(data.personal);
+            applyUndoSummary(data.undo);
+            renderNews();
+            if (ownNewsBuilding()) {
+              newsPollCount = 0;
+              scheduleNewsPoll();
+            }
+            toast(`Тема «${draft.title.trim()}» добавлена — новости появятся в течение минуты`, 'ok', {
+              label: 'Отменить',
+              busyLabel: 'Возвращаем…',
+              onClick: () => personalUndo(),
+            });
+          } catch (error) {
+            if (!error.unauthorized) toast(error.message || 'Не удалось добавить тему');
+            return false;
+          }
+          return true;
+        },
+      },
+      { label: 'Отмена', kind: 'quiet' },
+    ],
+  });
+}
+
+async function deleteOwnTopic(topic, button) {
+  const title = String(topic.title || 'Своя тема');
+  const confirmed = await confirmPopover({
+    anchor: button,
+    title: 'Удалить свою тему?',
+    text: `«${title}» исчезнет из выпуска. Передумаете — верните кнопкой «Отменить» в плашке.`,
+    confirmLabel: 'Удалить тему',
+  });
+  if (!confirmed) return;
+  if (button) button.disabled = true;
+  try {
+    const data = await api(`/api/topnews/topics/${topic.id}`, { method: 'DELETE' });
+    applyNewsPersonal(data.personal);
+    applyUndoSummary(data.undo);
+    renderNews();
+    toast(`Тема «${title}» удалена`, 'ok', { label: 'Отменить', busyLabel: 'Возвращаем…', onClick: () => personalUndo() });
+  } catch (error) {
+    if (!error.unauthorized) toast(error.message || 'Не удалось удалить тему');
+    if (button && button.isConnected) button.disabled = false;
+  }
+}
+
+/* Перерисовка не трогает сетку, пока выпуск тот же: опрос раз в несколько
+   секунд не должен сбрасывать выделение и позицию чтения. */
+function renderNews() {
+  const view = $('#newsView');
+  if (!view || view.classList.contains('hidden')) return;
+  const toggle = $('#newsToggle');
+  if (!toggle) return;
+  const data = state.news;
+  const issue = data.issue;
+  const error = data.fetchError || data.serverError;
+  const hasBody =
+    Boolean(issue) &&
+    (issue.categories || []).some((category) => Array.isArray(category.items) && category.items.length >= 2);
+  /* Свои темы считаются отдельно от основы: они есть и тогда, когда шесть
+     базовых блоков ещё не собраны, и прячутся вместе с выключенным выпуском. */
+  const ownTopics = data.enabled && Array.isArray(data.personal?.topics) ? data.personal.topics : [];
+  const hasOwn = ownTopics.length > 0;
+
+  toggle.checked = data.enabled;
+  toggle.disabled = data.busy;
+  toggle.setAttribute('aria-checked', String(data.enabled));
+  const switchText = $('#newsSwitchText');
+  if (switchText) switchText.textContent = data.busy ? 'Сохраняем…' : data.enabled ? 'Включено' : 'Выключено';
+  const switchBox = toggle.closest('.tn-switch');
+  switchBox?.classList.toggle('busy', data.busy);
+  switchBox?.classList.toggle('is-on', data.enabled);
+
+  const date = $('#newsDate');
+  if (date) date.textContent = issue?.dateLabel ? `${issue.dateLabel} · 07:00` : '07:00 · Минск';
+
+  const building = $('#newsBuilding');
+  building?.classList.toggle('hidden', !data.building);
+
+  /* Строка состояния в шапке нужна только когда в ней есть что показать:
+     «Собираем выпуск…» или кнопка «Своя тема». Пустая строка не занимает место. */
+  const meta = $('#newsMeta');
+  if (meta) meta.classList.toggle('hidden', !(data.building || data.enabled));
+
+  const notice = $('#newsNotice');
+  if (notice) {
+    const text = error || (data.enabled && data.warning && issue ? data.warning : '');
+    notice.textContent = text;
+    notice.classList.toggle('hidden', !text);
+  }
+
+  const off = $('#newsOff');
+  off?.classList.toggle('hidden', data.enabled);
+  if (!data.enabled) renderNewsTopics();
+
+  /* «Своя тема» видна только во включённом выпуске: выключенный выпуск не
+     должен обещать новые темы. Предел — в подсказке, а не отдельной строкой. */
+  const ownButton = $('#newsOwnTopic');
+  if (ownButton) {
+    const used = Math.max(0, Number(data.personal?.used !== undefined ? data.personal.used : ownTopics.length) || 0);
+    const limit = Math.max(1, Number(data.personal?.limit || 3));
+    ownButton.classList.toggle('hidden', !data.enabled);
+    ownButton.title =
+      used >= limit
+        ? `Своих тем уже ${limit}. Удалите одну — и добавьте новую.`
+        : `Своя тема в выпуске: добавится после шести основных. Занято ${used} из ${limit}.`;
+    ownButton.setAttribute(
+      'aria-label',
+      used >= limit
+        ? `Своих тем уже ${limit}: чтобы добавить новую, удалите одну`
+        : `Добавить свою тему в выпуск. Занято ${used} из ${limit}`,
+    );
+  }
+
+  const body = $('#newsBody');
+  body?.classList.toggle('hidden', !data.enabled || !(hasBody || hasOwn));
+  if (data.enabled && hasBody) {
+    const key = `${issue.id || issue.dateKey}:${issue.createdAt || ''}`;
+    if (data.renderKey !== key) {
+      renderNewsGrid(issue);
+      data.renderKey = key;
+    }
+  } else if (data.renderKey) {
+    $('#newsGrid')?.replaceChildren();
+    data.renderKey = '';
+  }
+  /* Свои карточки — после основы и перерисовываются сами: их состояние меняется
+     чаще (сборка, удаление, отмена), а основа выпуска при этом та же. */
+  if (data.enabled) renderNewsOwn();
+
+  const skeleton = $('#newsSkeleton');
+  const showSkeleton = data.enabled && !hasBody && !hasOwn && data.building;
+  skeleton?.classList.toggle('hidden', !showSkeleton);
+  if (showSkeleton) renderNewsSkeleton();
+
+  const empty = $('#newsEmpty');
+  const showEmpty = data.enabled && !hasBody && !hasOwn && !data.building;
+  empty?.classList.toggle('hidden', !showEmpty);
+  if (showEmpty) {
+    const title = $('#newsEmptyTitle');
+    const text = $('#newsEmptyText');
+    if (error) {
+      if (title) title.textContent = 'Не удалось собрать выпуск';
+      if (text) text.textContent = error;
+    } else {
+      if (title) title.textContent = 'Выпуск пока пуст';
+      if (text) {
+        const at = data.nextAt ? newsNextText(data.nextAt) : '';
+        text.textContent = at ? `Появится здесь ${at}.` : 'Появится здесь в 07:00 по Минску.';
+      }
+    }
+  }
+}
+
+async function loadNews({ quiet = false } = {}) {
+  if (!quiet) {
+    state.news.loading = !state.news.loaded;
+    renderNews();
+  }
+  const result = await newsCall('/api/topnews');
+  if (!result.ok) {
+    state.news.loading = false;
+    state.news.loaded = true;
+    state.news.fetchError = newsErrorText(result.error);
+    if (newsOpen()) renderNews();
+    return;
+  }
+  state.news.fetchError = '';
+  applyNewsState(result.data);
+  /* Опрос нужен и для основы, и для своих тем: иначе «Собираем вашу тему…»
+     осталось бы на экране до перезагрузки страницы. */
+  if (state.news.building || ownNewsBuilding()) {
+    scheduleNewsPoll();
+  } else {
+    newsPollCount = 0;
+  }
+  if (newsOpen()) renderNews();
+}
+
+function scheduleNewsPoll() {
+  if (newsPollTimer || newsPollCount >= NEWS_POLL_LIMIT) return;
+  newsPollTimer = setTimeout(async () => {
+    newsPollTimer = 0;
+    newsPollCount += 1;
+    await loadNews({ quiet: true });
+  }, NEWS_POLL_MS);
+}
+
+async function setNewsEnabled(enabled) {
+  if (state.news.busy) return;
+  state.news.busy = true;
+  state.news.fetchError = '';
+  renderNews();
+  const result = await newsCall('/api/topnews/toggle', { method: 'POST', body: { enabled } });
+  state.news.busy = false;
+  if (!result.ok) {
+    state.news.fetchError = newsErrorText(result.error);
+    renderNews();
+    toast(state.news.fetchError);
+    return;
+  }
+  applyNewsState(result.data);
+  newsPollCount = 0;
+  renderNews();
+  if (state.news.building) scheduleNewsPoll();
+  toast(enabled ? 'Top news включён' : 'Top news выключен', 'ok');
+}
+
+async function showNews() {
+  const view = $('#newsView');
+  if (!view) return;
+  /* Два раздела не могут быть открыты сразу: они оба занимают место диалога. */
+  hideDashboard();
+  closePopover();
+  closeModal();
+  closeSidebar();
+  closeFilesDrawer();
+  view.classList.remove('hidden');
+  $('#app').classList.add('news-open');
+  const button = $('#newsBtn');
+  if (button) {
+    button.classList.add('active');
+    button.setAttribute('aria-pressed', 'true');
+  }
+  const crumb = $('#crumbChat');
+  if (crumb) {
+    crumb.textContent = 'Top news';
+    crumb.title = 'Top news';
+    crumb.classList.remove('hidden');
+  }
+  document.title = 'Top news — DSH Open';
+  /* Накопленное показываем сразу, свежее подтягиваем в фоне. */
+  renderNews();
+  await loadNews();
+}
+
+function hideNews() {
+  const view = $('#newsView');
+  if (!view || view.classList.contains('hidden')) return;
+  view.classList.add('hidden');
+  $('#app').classList.remove('news-open');
+  const button = $('#newsBtn');
+  if (button) {
+    button.classList.remove('active');
+    button.setAttribute('aria-pressed', 'false');
+  }
+  stopNewsPoll();
+  newsPollCount = 0;
+  updateCrumbs();
+  /* Вернулись из раздела: лента снова видима, пересчитываем её середину. */
+  syncScrollJump();
+}
+
 /* ------------------------------ wiring ------------------------------ */
 /* Кнопка «Дашборд» в шапке: открывает и закрывает экран постоянных заданий. */
-$('#dashboardBtn').addEventListener('click', () => {
+$('#dashboardBtn')?.addEventListener('click', () => {
   if (dashboardOpen()) hideDashboard();
   else showDashboard();
 });
 /* Кнопка «Поддержка» — слева от «Дашборда»: окно обращения к администратору. */
-$('#supportBtn').addEventListener('click', () => openSupportModal());
-$('#dashRefresh').addEventListener('click', () => loadDashboard());
-$('#dashEnableAll').addEventListener('click', toggleAllDashboardTasks);
-$('#dashRestore').addEventListener('click', restoreDashboardTasks);
+$('#supportBtn')?.addEventListener('click', () => openSupportModal());
+$('#dashRefresh')?.addEventListener('click', () => loadDashboard());
+$('#dashEnableAll')?.addEventListener('click', toggleAllDashboardTasks);
+$('#dashRestore')?.addEventListener('click', restoreDashboardTasks);
+/* Личный слой дашборда: свой блок; отмена последнего действия живёт в плашках
+   «Отменить» и отдельной кнопки на экране больше не имеет. */
+$('#dashAddOwn')?.addEventListener('click', () => openDashboardOwnModal());
+
+/* Кнопка «Top news» в шапке: открывает и закрывает свой экран. */
+$('#newsBtn')?.addEventListener('click', () => {
+  if (newsOpen()) hideNews();
+  else showNews();
+});
+/* Тумблер — единственный способ включить выпуск. Пока сервер сохраняет
+   настройку, он заблокирован; после ответа экран перерисовывается из данных
+   сервера, а не из локального оптимистичного состояния. */
+$('#newsToggle')?.addEventListener('change', (event) => setNewsEnabled(event.currentTarget.checked));
+$('#newsEnable')?.addEventListener('click', () => setNewsEnabled(true));
+/* Своя тема: окно добавления — из шапки выпуска. */
+$('#newsOwnTopic')?.addEventListener('click', () => openOwnTopicModal());
 
 $('#loginForm').addEventListener('submit', onLogin);
 $('#signupForm').addEventListener('submit', onSignup);
@@ -12063,7 +14683,8 @@ $('#spellBtn').addEventListener('click', checkSpelling);
 applyTheme(currentTheme(), false);
 
 /* Файл проекта, названный ассистентом в ответе, открывается в окне просмотра
-   сервиса. Слушаем на всём документе: такие же ссылки бывают в просмотре
+   сервиса, а запись — в полосе прослушивания внизу панели «Файлы проекта».
+   Слушаем на всём документе: такие же ссылки бывают в просмотре
    markdown-файла. Ctrl/Shift/средняя кнопка — обычное поведение браузера:
    ссылка открывается новой вкладкой, файл отдаётся как есть. */
 document.addEventListener('click', (event) => {
@@ -12078,6 +14699,12 @@ document.addEventListener('click', (event) => {
     return;
   }
   fileLink.setAttribute('href', projectFileHref(relPath));
+  /* Звук не открываем окном: человек слушает и продолжает читать ответ, а окно
+     пришлось бы закрывать. Полоса внизу панели — тот же плеер, что у файлов. */
+  if (MD_AUDIO.test(relPath)) {
+    filesAudioPlayLink(relPath);
+    return;
+  }
   openFilePreview({ path: relPath, name: relPath.split('/').pop() });
 });
 

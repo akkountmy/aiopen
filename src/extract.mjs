@@ -10,12 +10,35 @@
  * раздел). Поэтому рядом считается полный текст смыслового контейнера; если
  * Readability потерял больше трети, отдаём полный вариант, а не половину статьи.
  */
-import { JSDOM } from 'jsdom';
-import { Readability } from '@mozilla/readability';
-import TurndownService from 'turndown';
-import gfmPlugin from 'turndown-plugin-gfm';
+/* jsdom, Readability и Turndown весят секунды на холодном старте: их импорт
+   тянулся и в server.mjs через search.mjs → extract.mjs, поэтому сервис
+   поднимался ~14 с. Разбор статьи нужен только в момент, когда статью реально
+   достают, — грузим набор по требованию и один раз на процесс. */
+let parsersPromise = null;
 
-const { gfm } = gfmPlugin;
+function loadParsers() {
+  if (!parsersPromise) {
+    parsersPromise = (async () => {
+      const [{ JSDOM }, { Readability }, turndown, gfmPlugin] = await Promise.all([
+        import('jsdom'),
+        import('@mozilla/readability'),
+        import('turndown'),
+        import('turndown-plugin-gfm'),
+      ]);
+      return {
+        JSDOM,
+        Readability,
+        TurndownService: turndown.default,
+        gfm: gfmPlugin.default.gfm,
+      };
+    })().catch((error) => {
+      /* Неудача не должна отравлять процесс: следующая попытка грузит заново. */
+      parsersPromise = null;
+      throw error;
+    });
+  }
+  return parsersPromise;
+}
 
 const MAX_MARKDOWN = 300000;
 const FALLBACK_URL = 'https://example.invalid/';
@@ -140,7 +163,7 @@ function readMeta(document) {
   };
 }
 
-function makeTurndown() {
+function makeTurndown({ TurndownService, gfm }) {
   const service = new TurndownService({
     headingStyle: 'atx',
     hr: '---',
@@ -290,9 +313,11 @@ function linkDensity(text, links) {
 /**
  * Разбирает HTML в статью. Всегда возвращает результат, даже на битой разметке.
  */
-export function extractReadable(html, baseUrl, { maxChars = 0 } = {}) {
+export async function extractReadable(html, baseUrl, { maxChars = 0 } = {}) {
   const raw = String(html || '');
   const limit = Number(maxChars) > 0 ? Math.min(Number(maxChars), MAX_MARKDOWN) : 0;
+  const { JSDOM, Readability, TurndownService, gfm } = await loadParsers();
+  const turndown = () => makeTurndown({ TurndownService, gfm });
   let dom;
   try {
     dom = new JSDOM(raw, { url: baseUrl || FALLBACK_URL });
@@ -312,7 +337,7 @@ export function extractReadable(html, baseUrl, { maxChars = 0 } = {}) {
     const mainHtml = container.innerHTML;
     full = {
       text: blockText(container),
-      markdown: makeTurndown().turndown(mainHtml),
+      markdown: turndown().turndown(mainHtml),
       headings: headingsFrom(container),
       tables: tablesFrom(container),
       links: linksFrom(container, docBase),
@@ -346,7 +371,7 @@ export function extractReadable(html, baseUrl, { maxChars = 0 } = {}) {
       const articleHtml = root.innerHTML;
       const candidate = {
         text: blockText(root),
-        markdown: makeTurndown().turndown(articleHtml),
+        markdown: turndown().turndown(articleHtml),
         headings: headingsFrom(root),
         tables: tablesFrom(root),
         links: linksFrom(root, docBase),
@@ -428,7 +453,8 @@ function empty(engine) {
  * `@attr` в конце селектора берёт атрибут вместо текста.
  * Несколько совпадений — массив, одно — строка.
  */
-export function extractFields(html, baseUrl, selectors) {
+export async function extractFields(html, baseUrl, selectors) {
+  const { JSDOM } = await loadParsers();
   const dom = new JSDOM(String(html || ''), { url: baseUrl || FALLBACK_URL });
   const document = dom.window.document;
   const docBase = pageBase(document, baseUrl);

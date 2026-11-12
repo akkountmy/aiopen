@@ -16,7 +16,22 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import ExcelJS from 'exceljs';
+
+/* ExcelJS (≈90 пакетов внутри) нужен только для чтения .xlsx: грузим его в
+   момент открытия книги, а не на старте сервиса. */
+let excelPromise = null;
+
+function loadExcelJs() {
+  if (!excelPromise) {
+    excelPromise = import('exceljs')
+      .then((mod) => mod.default || mod)
+      .catch((error) => {
+        excelPromise = null;
+        throw error;
+      });
+  }
+  return excelPromise;
+}
 
 const MAX_ROWS = Number.POSITIVE_INFINITY;
 const SAMPLE_SIZE = 20000;
@@ -227,6 +242,7 @@ async function openWorkbook(filePath) {
       + 'Сохрани нужный лист в CSV (или разбей на файлы по годам/месяцам) и анализируй CSV: он читается потоком без ограничения по строкам.',
     );
   }
+  const ExcelJS = await loadExcelJs();
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.readFile(filePath);
   return workbook;
@@ -324,6 +340,36 @@ async function openTable(filePath, { sheet, delimiter, encoding, header = true, 
       }
     },
   };
+}
+
+/**
+ * Таблица целиком в памяти: нужна расчётам, которым мало агрегатов (например
+ * скоринговой модели — ей нужны все строки, чтобы считать WOE и AUC).
+ * Тот же разбор CSV/XLSX, что у analyze_data, поэтому поведение совпадает.
+ * @param {string} filePath — абсолютный путь
+ * @param {{sheet?: string, delimiter?: string, encoding?: string, headerRow?: number, limit?: number}} [options]
+ */
+export async function readTable(filePath, options = {}) {
+  const { columns, iterate } = await openTable(filePath, {
+    sheet: options.sheet,
+    delimiter: options.delimiter,
+    encoding: options.encoding,
+    header: true,
+    headerRow: options.headerRow || 1,
+  });
+  const limit = Math.max(1, options.limit || 200000);
+  const rows = [];
+  let truncated = false;
+  for await (const values of iterate()) {
+    if (rows.length >= limit) {
+      truncated = true;
+      break;
+    }
+    const row = {};
+    for (let index = 0; index < columns.length; index += 1) row[columns[index]] = values[index] ?? null;
+    rows.push(row);
+  }
+  return { columns, rows, truncated };
 }
 
 /* -------------------------------- статистика ------------------------------- */

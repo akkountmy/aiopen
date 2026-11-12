@@ -1,0 +1,63 @@
+/* ==========================================================================
+   deck-extra.css — layouts, которых нет в шаблоне deck-design, но которые
+   нужны генератору DSH.OPEN.WEB: список тезисов, KPI-строка, цитата,
+   разделитель и финальный слайд. Geometry follows the same grid as deck.css:
+   margins 92 px, top 128 px, hairlines 1 px, kicker/lead/meta tokens reused.
+   ========================================================================== */
+
+/* —— список тезисов: утверждение сверху, пункты строками —— */
+.list{position:absolute;left:92px;right:92px;top:128px}
+.list .h{font-weight:800;font-size:64px;line-height:1;letter-spacing:-.025em;
+  text-transform:uppercase;color:var(--text);max-width:1180px}
+.list .h em{color:var(--accent-hi);font-style:normal}
+.list .items{margin-top:44px;border-top:1px solid var(--line)}
+.list .item{display:grid;grid-template-columns:58px 1fr;gap:26px;align-items:baseline;
+  padding:22px 0;border-bottom:1px solid var(--line);break-inside:avoid}
+.list .item .n{font-family:var(--cond);font-size:14px;letter-spacing:.14em;color:var(--accent-hi)}
+.list .item .t{font-weight:700;font-size:21px;letter-spacing:-.01em;line-height:1.28;color:var(--text)}
+.list .item .d{margin-top:7px;font-weight:500;font-size:14.5px;line-height:1.58;
+  color:var(--muted);max-width:1080px}
+
+/* —— KPI: три-четыре цифры под тезисом —— */
+.kpi{position:absolute;left:92px;right:92px;top:452px;display:grid;gap:30px}
+.kpi .cell{border-top:2px solid var(--accent);padding-top:24px}
+.kpi .v{font-weight:800;font-size:112px;line-height:.86;letter-spacing:-.045em;color:var(--accent-hi)}
+.kpi .l{margin-top:16px;font-weight:500;font-size:14.5px;line-height:1.55;color:var(--muted)}
+
+/* —— цитата: крупный текст и подпись с чертой —— */
+.quote{position:absolute;left:92px;top:50%;transform:translateY(-54%);width:1240px}
+.quote .q{font-weight:700;font-size:64px;line-height:1.14;letter-spacing:-.025em;color:var(--text)}
+.quote .q em{color:var(--accent-hi);font-style:normal}
+.quote .who{margin-top:44px;display:flex;align-items:center;gap:20px;
+  font-family:var(--cond);font-size:13px;letter-spacing:.2em;text-transform:uppercase;
+  color:var(--accent-hi)}
+.quote .who i{display:block;width:64px;height:1px;background:var(--line)}
+
+/* —— разделитель: номер части и название ——
+   Фон и текст — соседи, а не родитель с ребёнком: абсолютный фон красится
+   ПОВЕРХ обычного блока в потоке, поэтому телу нужен свой z-index. */
+.section{position:absolute;inset:0;background:linear-gradient(160deg,var(--bg-2),var(--bg) 70%)}
+.section-body{position:absolute;left:92px;top:206px;width:1100px;z-index:2}
+.section-body .num{font-weight:800;font-size:190px;line-height:.8;letter-spacing:-.05em;
+  color:var(--accent-hi);opacity:.92}
+.section-body h2{margin-top:24px;font-weight:800;font-size:84px;line-height:.98;
+  letter-spacing:-.03em;text-transform:uppercase;color:var(--text)}
+.section-body .lead{margin-top:26px;max-width:640px}
+
+/* —— финал: утверждение на акцентном поле —— */
+.closing{position:absolute;inset:0;
+  background:linear-gradient(120deg,var(--accent-hi),var(--accent) 45%,var(--accent-deep));
+  background:radial-gradient(90% 120% at 82% 12%,var(--accent-hi) 0%,var(--accent) 42%,var(--accent-deep) 100%)}
+.closing-body{position:absolute;left:92px;top:50%;transform:translateY(-50%);width:1180px;z-index:2}
+.closing-body .k{font-family:var(--cond);font-weight:500;font-size:13px;letter-spacing:.24em;
+  text-transform:uppercase;color:var(--on-accent);opacity:.66}
+.closing-body h2{margin-top:20px;font-weight:800;font-size:100px;line-height:.92;
+  letter-spacing:-.035em;text-transform:uppercase;color:var(--on-accent);max-width:1120px}
+.closing-body .lead{margin-top:30px;max-width:640px;color:var(--on-accent);opacity:.72}
+.closing-body .pill{margin-top:38px;background:var(--on-accent);color:var(--accent-hi)}
+body[data-theme="cobalt"] .closing .pill{color:var(--accent-deep)}
+
+/* —— подвал на акцентном поле: белый текст там не читается —— */
+.footnote.dark{color:var(--on-accent);opacity:.52}
+/* —— план без подписей времени: карточки держим высокими, текст по центру —— */
+.steps.no-meta .step{justify-content:center}
