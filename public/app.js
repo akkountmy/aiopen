@@ -8705,7 +8705,9 @@ async function openNarration(item) {
           ? `${plan.chars.toLocaleString('ru-RU')} знаков ≈ ${totalHuman} звука. Получится ${plan.parts.length} частей ${shape} (до ${longest} мин) и Word «${plan.word}» с текстом.`
           : plan.summary
             ? `${plan.chars.toLocaleString('ru-RU')} знаков ≈ ${totalHuman} звука. Это выжимка — получится один MP3 на ${longest} мин (на части не делим) и Word «${plan.word}» с текстом.`
-            : `${plan.chars.toLocaleString('ru-RU')} знаков ≈ ${totalHuman} звука. Один MP3 на ${longest} мин — на части не делим по вашей просьбе, текст книги озвучивается целиком. Word «${plan.word}» с текстом.`;
+            : plan.requestedSingle
+              ? `${plan.chars.toLocaleString('ru-RU')} знаков ≈ ${totalHuman} звука. Один MP3 на ${longest} мин — на части не делим по вашей просьбе, текст книги озвучивается целиком. Word «${plan.word}» с текстом.`
+              : `${plan.chars.toLocaleString('ru-RU')} знаков ≈ ${totalHuman} звука. Один MP3 на ${longest} мин — по структуре книги делить нечего. Word «${plan.word}» с текстом.`;
     } catch (error) {
       if (request !== planRequest) return;
       planLine.textContent = `Части не рассчитались (${error.message}) — озвучка всё равно работает.`;

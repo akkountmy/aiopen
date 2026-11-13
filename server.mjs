@@ -4918,7 +4918,12 @@ async function route(req, res) {
           });
         }
         const requested = Number(url.searchParams.get('minutes')) || 0;
-        const single = url.searchParams.get('single') === '1' || isSummaryDocument(name);
+        /* Выжимка по имени файла и «одним файлом» по просьбе человека — разные
+           вещи, и окно говорит о них по-разному: книгу, которую просят не делить,
+           нельзя назвать выжимкой, иначе человек решит, что текст сократили. */
+        const summary = isSummaryDocument(name);
+        const singleRequested = url.searchParams.get('single') === '1';
+        const single = singleRequested || summary;
         const totalMinutes = Math.round((text.length / CHARS_PER_MINUTE) * 10) / 10;
         const planMinutes = requested > 0
           ? Math.min(90, Math.max(5, requested))
@@ -4939,7 +4944,8 @@ async function route(req, res) {
           minutes: Math.round((text.length / CHARS_PER_MINUTE) * 10) / 10,
           partMinutes: planMinutes,
           single: plan.length === 1,
-          summary: single,
+          summary,
+          requestedSingle: singleRequested,
           chapters: splitBlocks(text).length,
           parts: plan,
           word: path.basename(files.word),
