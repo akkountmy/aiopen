@@ -3117,10 +3117,15 @@ html.kb-open .scroll-jump {
   flex: none;
   display: flex;
   flex-direction: column;
-  gap: 5px;
-  margin: 6px 10px;
-  padding: 8px 10px;
-  padding-bottom: max(9px, env(safe-area-inset-bottom));
+  gap: 6px;
+  /* Карточка — последняя в колонке, и пустого места под кнопками быть не должно:
+     запас под вырез экрана (home-индикатор) уже даёт сама панель своим
+     padding-bottom, поэтому второй такой же отступ у карточки только поднимал
+     управление вверх и оставлял под ним пустую полосу. Теперь внизу карточки
+     воздух ровно под кнопками, а сам блок управления стоит ниже — у нижнего
+     края панели. */
+  margin: 6px 10px 4px;
+  padding: 8px 10px 6px;
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 16px;
   background:

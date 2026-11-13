@@ -22,9 +22,9 @@ const TRACK_NAME = `проба-${STAMP}.wav`;
    говорит «WAV». */
 const TRACK_TITLE = TRACK_NAME.replace(/\.(mp3|wav|m4a|aac|ogg|oga|flac|opus)$/i, '');
 /* Карточка прослушивания не идёт от края до края панели: в стилях у неё
-   margin 6px 10px и рамка 1px, то есть по 11 px с боков и 6 px снизу. */
+   margin 6px 10px 4px и рамка 1px, то есть по 11 px с боков и 4 px снизу. */
 const BAR_INSET = 11;
-const BAR_GAP = 6;
+const BAR_GAP = 4;
 /* Тишина вместо записи: проверяются полоса, ширина и память места, а не звук,
    поэтому файл собирается здесь же и проверке не нужен mp3 на диске. */
 function buildWav(seconds = 3, rate = 8000) {
