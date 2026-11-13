@@ -14,12 +14,15 @@ import {
   MAX_TTS_CHARS,
   findActiveNarration,
   getJob,
+  humanDuration,
+  isSummaryDocument,
   jobsFor,
   narrationParts,
   publicJob,
   startNarration,
 } from './tts.mjs';
 import { claimNarrationFiles } from './narration-plan.mjs';
+import { joinNarrationParts, narrationArchiveDir } from './narration-join.mjs';
 import { writeNarrationWord } from './narration-word.mjs';
 import { analyzeData, formatAnalysis, readTable } from './analysis.mjs';
 import { buildScorecard, formatCompanyRating, formatScorecard, rateCompany } from './scoring.mjs';
@@ -911,7 +914,7 @@ export const TOOL_DEFS = [
     function: {
       name: 'narrate_document',
       description:
-        'Озвучить документ проекта нейроголосом: короткая выжимка (до 50 минут звука) становится одним MP3, большая книга — несколькими MP3-частями по ~30 минут, плюс один Word с текстом; файлы появляются в разделе «Файлы проекта». Синтез идёт в фоне минутами, инструмент возвращает номер задания сразу. Используй, когда просят «озвучь», «сделай аудиокнигу», «синтезируй речь», «пусть можно послушать».',
+        'Озвучить документ проекта нейроголосом: выжимка книги или просьба «одним файлом» (single: true) — ровно ОДИН MP3, сколько бы минут ни вышло; полная книга — несколькими MP3-частями по ~30 минут; плюс один Word с текстом. Разметку для голоса сервис убирает сам, текст не сокращается. Файлы появляются в разделе «Файлы проекта». Синтез идёт в фоне минутами, инструмент возвращает номер задания сразу. Используй, когда просят «озвучь», «сделай аудиокнигу», «синтезируй речь», «пусть можно послушать».',
       parameters: {
         type: 'object',
         properties: {
@@ -924,8 +927,28 @@ export const TOOL_DEFS = [
           minutes: {
             type: 'number',
             description:
-              'Необязательно: длина ОДНОЙ части в минутах (5..45), не общий хронометраж книги. Если не указывать, короткая выжимка (до 50 минут звука) озвучивается одним файлом, а длина частей большой книги выводится из её глав. Указывать только когда человек прямо просит резать по столько-то минут; «книга на 60–65 минут» — это общий объём, minutes сюда передавать не нужно.',
+              'Необязательно: длина ОДНОЙ части в минутах (5..45), не общий хронометраж книги. Если не указывать, короткая запись (до 50 минут звука) озвучивается одним файлом, а длина частей большой книги выводится из её глав. Для выжимки и для просьбы «одним файлом» minutes не передавай: результат всегда один MP3. Указывать только когда человек прямо просит резать полную книгу по столько-то минут; «книга на 60–65 минут» — это общий объём.',
           },
+          single: {
+            type: 'boolean',
+            description:
+              'Один MP3 на весь документ, какой бы длины он ни был. Ставь true в двух случаях: (1) озвучивается выжимка/конспект книги (для имени с «выжимка»/«конспект» определяется само); (2) человек прямо просит «одним файлом», «одним MP3», «не дели на части» — даже если книга на полтора часа. Содержание при этом НЕ сокращается: single меняет только число файлов.',
+          },
+        },
+        required: ['path'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'join_narration',
+      description:
+        'Собрать готовые части озвучки («… — часть 1 из 3.mp3») в один MP3 рядом с документом. Ничего не синтезирует и текст не меняет: берёт уже наговорённый звук и склеивает — те же слова, тот же голос. Части после успешной склейки уезжают в скрытый архив. Используй, когда просят «собери в один файл», «объедини части озвучки», «хочу одной дорожкой». Если частей ещё нет, а нужен один файл — это narrate_document с single: true.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Путь к документу, чьи части надо собрать, например «Теория игр.docx».' },
         },
         required: ['path'],
       },
@@ -2140,6 +2163,7 @@ export const TOOL_LABELS = {
   find_in_files: 'Поиск по файлам',
   read_document: 'Разбор документа',
   narrate_document: 'Озвучка документа',
+  join_narration: 'Сборка частей в один MP3',
   tts_status: 'Статус озвучки',
   analyze_data: 'Анализ данных',
   score_credit: 'Скоринг заявок',
@@ -2198,6 +2222,7 @@ export function toolSummary(name, args) {
     case 'read_file':
     case 'read_document':
     case 'narrate_document':
+    case 'join_narration':
     case 'analyze_image':
     case 'delete_path':
       return args.path || '';
@@ -2945,12 +2970,13 @@ async function executeToolInner(name, args, ctx) {
           `Документ ${text.length.toLocaleString('ru-RU')} знаков — больше потолка озвучки (${MAX_TTS_CHARS.toLocaleString('ru-RU')}). Разделите книгу на тома и озвучьте по очереди.`,
         );
       }
-      /* Сколько файлов — решает narrationParts, а не сам вызов: короткую
-         выжимку (до 50 минут звука) отдаём одним MP3, даже если в ней есть
-         главы; длинную книгу режем по её структуре. Явный minutes из чата
-         задаёт длину одной части, но narrationParts ограничивает её 45
-         минутами: часовой файл теряется целиком при перезапуске. */
-      const chapters = narrationParts(text, { minutes: args.minutes });
+      /* Сколько файлов — решает narrationParts, а не сам вызов: выжимку книги и
+         просьбу «одним файлом» (single: true) отдаём ОДНИМ MP3 при любой длине;
+         короткую запись — тоже одним; длинную книгу режем по её структуре.
+         Явный minutes из чата задаёт длину одной части, но у «один файл» он не
+         перебивает правило. single не сокращает текст — только число файлов. */
+      const single = args.single === true || isSummaryDocument(path.basename(full));
+      const chapters = narrationParts(text, { minutes: args.minutes, single });
       const files = claimNarrationFiles(full, chapters.length, { root });
       /* Повторная просьба об озвучке того же документа не должна запускать
          второе задание: два писателя в один MP3 перемешивают звук. Возвращаем
@@ -2989,6 +3015,11 @@ async function executeToolInner(name, args, ctx) {
         })),
         wordPath: files.word,
         cacheDir: path.join(DATA_DIR, 'tts-cache'),
+        /* Прошлый звук этого файла уйдёт в скрытый архив при первой записи (и
+           вернётся на место, если синтез сорвётся), а устаревшие файлы прошлой
+           озвучки уберутся только после того, как новый комплект готов. */
+        archiveDir: narrationArchiveDir(path.dirname(files.parts[0].path)),
+        sweep: files.sweep,
       });
       /* Обложка не должна ждать конца синтеза: кладём её рядом с файлами
          сразу, иначе в плеере оставалась бы синяя нотка. */
@@ -3011,6 +3042,42 @@ async function executeToolInner(name, args, ctx) {
           parts: chapters.length,
           word: word.name,
           files: [...files.parts.map((part) => path.basename(part.path)), word.name],
+        },
+      };
+    }
+    case 'join_narration': {
+      /* Склейка готовых частей, а не повторная озвучка: тот же звук, те же слова.
+         Раньше на просьбу «собери в один файл» сервис озвучивал книгу заново —
+         и заодно переписывал текст, из-за чего из книги пропадали куски. */
+      const full = assertInside(root, resolveSafe(root, args.path));
+      if (!fs.existsSync(full) || !fs.statSync(full).isFile()) throw new Error('Файл не найден');
+      const joined = joinNarrationParts(full, {
+        archiveDir: narrationArchiveDir(path.dirname(full)),
+      });
+      if (joined.already) {
+        return {
+          text:
+            `«${joined.name}» уже собран(a) в один файл — это ${humanDuration(joined.seconds)} звука. ` +
+            'Ничего не склеивал: частей в папке нет, файл один. Ищи его в «Файлах проекта».',
+          meta: { path: joined.name, already: true, seconds: joined.seconds },
+        };
+      }
+      return {
+        text: [
+          `Собрал ${joined.parts.length} частей в один файл: «${joined.name}», ${humanDuration(joined.seconds)} звука.`,
+          'Ничего не переозвучивал и текст не менял — это тот же звук, что и в частях.',
+          joined.archived.length
+            ? `Части убраны в скрытый архив проекта: ${joined.archived.join(', ')}.`
+            : 'Части оставил на месте (архив не сработал).',
+          ...(joined.warnings || []),
+          'Файл уже в разделе «Файлы проекта».',
+        ].join('\n'),
+        meta: {
+          path: joined.name,
+          seconds: joined.seconds,
+          parts: joined.parts.length,
+          archived: joined.archived,
+          files: [joined.name],
         },
       };
     }

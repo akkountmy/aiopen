@@ -7282,6 +7282,28 @@ html.kb-open .scroll-jump {
   font-size: var(--fs-13);
 }
 
+/* «Одним файлом» — галочка с подписью на всю ширину: подпись длиннее поля
+   «Голос», и жаться к фиксированной колонке ей незачем. */
+.tts-row-check {
+  gap: 8px;
+  cursor: pointer;
+}
+
+.tts-row-check .tts-label {
+  width: auto;
+  flex: 1 1 auto;
+  color: var(--text-2);
+  font-size: var(--fs-13);
+}
+
+.tts-single {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
 .tts-hint {
   margin: 0;
   color: var(--text-3);

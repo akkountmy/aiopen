@@ -1,11 +1,10 @@
 // Длину части озвучки выбирает не человек, а структура книги: короткие главы
 // собираются в получасовые части, глава на 20–45 минут идёт целиком, простыня
-// режется внутри. Отдельное правило — короткая выжимка: если весь текст
-// укладывается в 50 минут звука, это всегда ОДИН MP3, даже когда внутри есть
-// главы: «часть 1 из 2» у получасовой записи только мешает. Здесь проверяем
-// оба правила и заодно то, что заголовки глав вообще распознаются — `\b` после
-// кириллицы в JavaScript не срабатывает, и однажды из-за этого главы не
-// находились вовсе, а части резались по предложениям.
+// режется внутри. Отдельное правило — выжимка книги: это всегда ОДИН MP3 при
+// любой длине, даже если внутри есть главы и запись идёт больше 50 минут.
+// Здесь проверяем оба правила и заодно то, что заголовки глав вообще
+// распознаются — `\b` после кириллицы в JavaScript не срабатывает, и однажды
+// из-за этого главы не находились вовсе, а части резались по предложениям.
 //
 //   node test/part-length.mjs
 import {
@@ -14,6 +13,7 @@ import {
   PART_MINUTES,
   SINGLE_FILE_MINUTES,
   choosePartMinutes,
+  isSummaryDocument,
   narrationParts,
   planParts,
   splitIntoParts,
@@ -62,13 +62,41 @@ for (const { name, sizes, minutes, pieces } of cases) {
   check(name, minutesOk && parts.length === pieces, `целевая ${chosen} мин, частей ${parts.length}`);
 }
 
-/* Главное правило для выжимок: короткая запись — один файл, даже с главами. */
+/* Главное правило для выжимок: это всегда один файл, даже с главами. */
 const summary = book([6, 5, 7, 6, 6]); // ≈ 30 минут звука, пять глав
 const summaryParts = narrationParts(summary);
 check('выжимка на 30 минут с главами — один MP3', summaryParts.length === 1, `частей ${summaryParts.length}`);
 check('план той же выжимки — одна часть', planParts(summary).length === 1, `частей ${planParts(summary).length}`);
 
-/* Порог 50 минут: ровно на нём ещё один файл, чуть больше — уже части. */
+/* Длинная выжимка: 75 минут звука — всё равно один MP3. Раньше здесь
+   срабатывал порог 50 минут и получались «часть 1 из 3», что противоречило
+   заказу «выжимку — одним файлом». */
+const longSummary = book([15, 16, 14, 15, 15]); // ≈ 75 минут, пять глав
+check(
+  'выжимка на 75 минут — один MP3',
+  narrationParts(longSummary, { single: true }).length === 1,
+  `частей ${narrationParts(longSummary, { single: true }).length}`,
+);
+check(
+  'план длинной выжимки — одна часть',
+  planParts(longSummary, { single: true }).length === 1,
+  `частей ${planParts(longSummary, { single: true }).length}`,
+);
+check(
+  'явные minutes не режут выжимку',
+  narrationParts(longSummary, { minutes: 10, single: true }).length === 1,
+  `частей ${narrationParts(longSummary, { minutes: 10, single: true }).length}`,
+);
+check(
+  'имя файла с «выжимка» включает правило одного MP3',
+  isSummaryDocument('Атомные привычки — выжимка.docx') &&
+    narrationParts(longSummary, { single: isSummaryDocument('Атомные привычки — выжимка.docx') }).length === 1,
+);
+check('конспект в имени — тоже выжимка', isSummaryDocument('Конспект лекций.docx'));
+check('обычная книга не считается выжимкой', !isSummaryDocument('Атомные привычки.docx'));
+
+/* Порог 50 минут: ровно на нём ещё один файл, чуть больше — уже части,
+   если это НЕ выжимка. */
 const atThreshold = 'Слово. '.repeat(Math.floor((SINGLE_FILE_MINUTES * CHARS_PER_MINUTE) / 7));
 check(
   `выжимка на ${SINGLE_FILE_MINUTES} минут — ещё один MP3`,

@@ -8255,7 +8255,17 @@ async function openNarration(item) {
 
   /* Длину части не выбирают вручную: она следует за структурой самой книги —
      короткие главы собираются в получасовые части, глава на 25–45 минут идёт
-     целиком, простыня режется внутри. Итог до старта показывает строка плана. */
+     целиком, простыня режется внутри. Итог до старта показывает строка плана.
+     Единственный выбор человека — «одним файлом»: это про число файлов, а не
+     про сокращение текста, поэтому книга озвучивается целиком. */
+  const singleRow = el('label', 'tts-row tts-row-check');
+  const singleBox = el('input', 'tts-single');
+  singleBox.type = 'checkbox';
+  singleBox.id = 'tts-single-one';
+  singleRow.appendChild(singleBox);
+  singleRow.appendChild(el('span', 'tts-label', 'Одним файлом, даже если книга длинная'));
+  form.appendChild(singleRow);
+
   box.appendChild(form);
 
   const start = el('button', 'btn btn-primary tts-start');
@@ -8362,8 +8372,10 @@ async function openNarration(item) {
       .join(' · ');
     result.appendChild(meta);
 
+    let partsList = null;
     if (parts.length > 1) {
       const list = el('div', 'tts-parts');
+      partsList = list;
       for (const part of parts) {
         const row = el('div', 'tts-part');
         const name = el('button', 'tts-part-name');
@@ -8439,6 +8451,52 @@ async function openNarration(item) {
         save.disabled = false;
       }
     });
+    /* «Собрать в один файл» — единственный честный способ получить одну дорожку
+       из готовых частей: тот же звук, без повторного синтеза и без правки текста.
+       Кнопка есть только там, где есть что собирать (частей больше одной). */
+    if (parts.length > 1) {
+      const join = el('button', 'btn btn-quiet tts-join');
+      join.type = 'button';
+      join.textContent = 'Собрать в один файл';
+      join.title = 'Склеить готовые части в один MP3: тот же звук, без новой озвучки';
+      join.addEventListener('click', async () => {
+        join.disabled = true;
+        const label = join.textContent;
+        join.textContent = 'Собираю…';
+        try {
+          const res = await api(`/api/projects/${filesProjectId()}/tts-join`, {
+            method: 'POST',
+            body: JSON.stringify({ path: item.path }),
+          });
+          if (!res?.ok || !res.file) throw new Error(res?.error || 'Не удалось собрать части');
+          /* Плеер переключаем на собранный файл: старые части уже в архиве,
+             и ссылки на них вели бы в пустоту. */
+          const joinedPath = res.file.path;
+          player.src = fileUrl(joinedPath);
+          audio.rename(res.file.name, 1);
+          if (partsList) partsList.replaceChildren();
+          const done = el('p', 'tts-hint tts-joined');
+          done.textContent = `Части собраны в один файл «${res.file.name}»${
+            res.file.duration ? `, ${res.file.duration}` : ''
+          }. Он лежит в папке проекта, рядом с книгой.`;
+          if (partsList) result.insertBefore(done, partsList);
+          else result.appendChild(done);
+          meta.textContent = ['один файл', res.file.duration ? `всего ${res.file.duration}` : '', 'MP3']
+            .filter(Boolean)
+            .join(' · ');
+          join.remove();
+          if (save) save.hidden = false;
+          toast(`Собрано: ${res.file.name}`);
+          loadFiles();
+        } catch (error) {
+          toast(error.message);
+          join.disabled = false;
+          join.textContent = label;
+        }
+      });
+      actions.appendChild(join);
+    }
+
     /* Скачивание — тем же способом, что у остальных файлов: в памяти страницы,
        без ухода из приложения в чужое окно. */
     result.appendChild(actions);
@@ -8510,7 +8568,7 @@ async function openNarration(item) {
     try {
       const { job } = await api(`/api/projects/${filesProjectId()}/tts`, {
         method: 'POST',
-        body: { path: item.path, voice: voiceSelect.value, rate: rateSelect.value },
+        body: { path: item.path, voice: voiceSelect.value, rate: rateSelect.value, single: singleBox.checked },
       });
       progress.hidden = false;
       paint(job);
@@ -8624,7 +8682,10 @@ async function openNarration(item) {
     const request = (planRequest += 1);
     planLine.textContent = 'Считаю объём и части…';
     try {
-      const plan = await api(`/api/projects/${filesProjectId()}/tts-plan?path=${encodeURIComponent(item.path)}`);
+      const one = singleBox.checked ? '&single=1' : '';
+      const plan = await api(
+        `/api/projects/${filesProjectId()}/tts-plan?path=${encodeURIComponent(item.path)}${one}`,
+      );
       /* Новая загрузка плана отменяет старую: ответ, пришедший позже, не нужен. */
       if (request !== planRequest) return;
       if (!plan.ok) {
@@ -8642,12 +8703,20 @@ async function openNarration(item) {
       planLine.textContent =
         plan.parts.length > 1
           ? `${plan.chars.toLocaleString('ru-RU')} знаков ≈ ${totalHuman} звука. Получится ${plan.parts.length} частей ${shape} (до ${longest} мин) и Word «${plan.word}» с текстом.`
-          : `${plan.chars.toLocaleString('ru-RU')} знаков ≈ ${totalHuman} звука. Запись короткая — получится один MP3 на ${longest} мин (делить на части не нужно) и Word «${plan.word}» с текстом.`;
+          : plan.summary
+            ? `${plan.chars.toLocaleString('ru-RU')} знаков ≈ ${totalHuman} звука. Это выжимка — получится один MP3 на ${longest} мин (на части не делим) и Word «${plan.word}» с текстом.`
+            : `${plan.chars.toLocaleString('ru-RU')} знаков ≈ ${totalHuman} звука. Один MP3 на ${longest} мин — на части не делим по вашей просьбе, текст книги озвучивается целиком. Word «${plan.word}» с текстом.`;
     } catch (error) {
       if (request !== planRequest) return;
       planLine.textContent = `Части не рассчитались (${error.message}) — озвучка всё равно работает.`;
     }
   };
+
+  /* Пересчитываем план при переключении «одним файлом»: строка до старта должна
+     показывать то, что получится, а не то, что было до щелчка. */
+  singleBox.addEventListener('change', () => {
+    if (!busy) loadPlan();
+  });
 
   await loadPlan();
 }

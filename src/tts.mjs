@@ -19,6 +19,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { listVoices, synthesizeChunk } from './edge-tts.mjs';
+import { speechText } from './speech-text.mjs';
 
 /** Голоса, которые предлагаем по умолчанию: остальные 300 — избыточный выбор. */
 export const VOICE_CHOICES = [
@@ -119,9 +120,16 @@ const ABBREVIATIONS = new Set([
   'англ',
 ]);
 
-/** Приводит текст документа к виду, удобному для чтения вслух. */
+/**
+ * Приводит текст документа к виду, удобному для чтения вслух.
+ *
+ * Первый шаг — `speechText`: убирает разметку (решётки заголовков, звёздочки
+ * выделения, черты таблиц), но не слова. Именно здесь, а не правкой документа:
+ * человек, прося «уберите лишние символы», просит не читать «решётка решётка»,
+ * а не сокращать книгу. Исходный файл и Word с текстом остаются нетронутыми.
+ */
 export function normalizeText(raw) {
-  let text = String(raw || '');
+  let text = speechText(raw);
   text = text.replace(/\r\n?/g, '\n');
   /* Переносы внутри абзаца — это вёрстка книги, а не пауза: склеиваем строки,
      кроме пустых (пустая строка = новый абзац). */
@@ -581,6 +589,10 @@ function journalSnapshot(job) {
     wordPath: job.wordPath,
     sourcePath: job.sourcePath,
     cacheDir: job.cacheDir,
+    /* Архив прошлого звука и список отложенных файлов переживают перезапуск:
+       иначе после рестарта уборка заменила бы «вернуть на место» на «удалить». */
+    archiveDir: job.archiveDir || '',
+    retired: Array.isArray(job.retired) ? job.retired : [],
     status: job.status,
     stage: job.stage,
     chars: job.chars,
@@ -758,6 +770,10 @@ function finish(job, status, patch = {}) {
   } else if (status === 'cancelled') {
     job.stage = 'Остановлено';
   }
+  /* Любой не-успешный конец: прошлый звук возвращаем на место, чтобы в папке
+     проекта не осталось пустоты вместо готовой книги. Здесь, а не в ветках
+     runJob, — потому что задание обрывается ещё и сторожем и отменой. */
+  if (status !== 'done') restoreRetired(job);
   saveJournal(job);
 }
 
@@ -769,7 +785,20 @@ function finish(job, status, patch = {}) {
  * пять часов, чтобы начать слушать. `outPath` — имя MP3 для одного файла;
  * для нескольких частей сервер передаёт `parts` со своими путями.
  */
-export function startNarration({ ownerId, title, text, voice, rate, outPath, parts, wordPath = '', sourcePath = '', cacheDir = '' }) {
+export function startNarration({
+  ownerId,
+  title,
+  text,
+  voice,
+  rate,
+  outPath,
+  parts,
+  wordPath = '',
+  sourcePath = '',
+  cacheDir = '',
+  archiveDir = '',
+  sweep = null,
+}) {
   const clean = normalizeText(text ?? (parts || []).map((part) => part.text).join('\n\n'));
   const plan = (parts && parts.length ? parts : [{ text: clean, outPath, label: '' }]).map((part, index) => ({
     index: index + 1,
@@ -811,6 +840,13 @@ export function startNarration({ ownerId, title, text, voice, rate, outPath, par
     files: [],
     sourcePath,
     cacheDir,
+    /* Куда убирать прошлый звук этого же файла: уборка отложена до первого
+       готового куска новой версии, а до тех пор старый MP3 остаётся на месте. */
+    archiveDir,
+    retired: [],
+    /* Уборка устаревших файлов прошлой озвучки: выполняется, только когда все
+       файлы нового плана уже на диске (см. flow в complete). */
+    sweep: typeof sweep === 'function' ? sweep : null,
     provider: 'edge',
     status: 'queued',
     stage: 'В очереди',
@@ -897,6 +933,89 @@ function finishPart(job, part, seconds, cached) {
 }
 
 /**
+ * Убирает прошлый звук этого файла, но не теряет его.
+ *
+ * Раньше файл просто удалялся перед первой записью — и если новая озвучка
+ * падала на первом же куске (сервис недоступен, контейнер перезапустился,
+ * человек отменил), в папке проекта не оставалось ничего: готовая книга
+ * исчезала без замены. Теперь старый MP3 уезжает в скрытый архив
+ * `.dshow/archive/narration/…`, а в задании запоминается, откуда его взять.
+ * Если новая версия не состоится, `restoreRetired` вернёт файл на место.
+ */
+function retireAudio(job, file) {
+  try {
+    if (!fs.existsSync(file)) return;
+    if (fs.statSync(file).size < 1024) {
+      fs.rmSync(file, { force: true });
+      return;
+    }
+  } catch {
+    return;
+  }
+  const box = job.archiveDir;
+  if (!box) {
+    /* Архив не задан — не рискуем: оставляем старый файл, новый перезапишет
+       его целиком первым куском. Терять готовую книгу хуже, чем лишний MP3. */
+    return;
+  }
+  const target = path.join(box, path.basename(file));
+  try {
+    fs.mkdirSync(box, { recursive: true });
+    fs.rmSync(target, { force: true });
+    try {
+      fs.renameSync(file, target);
+    } catch {
+      fs.copyFileSync(file, target);
+      fs.rmSync(file, { force: true });
+    }
+    job.retired = Array.isArray(job.retired) ? job.retired : [];
+    job.retired.push({ file, target });
+  } catch {
+    /* не смогли убрать — файл останется на месте и будет перезаписан */
+  }
+}
+
+/** Новая озвучка не состоялась — возвращаем прошлый звук на место. */
+function restoreRetired(job) {
+  const items = Array.isArray(job.retired) ? job.retired : [];
+  let restored = 0;
+  for (const item of items) {
+    try {
+      /* Если новый файл уже содержит настоящий звук, возвращать нечего. */
+      if (fs.existsSync(item.file) && fs.statSync(item.file).size > 2000) continue;
+      if (!fs.existsSync(item.target)) continue;
+      fs.mkdirSync(path.dirname(item.file), { recursive: true });
+      try {
+        fs.renameSync(item.target, item.file);
+      } catch {
+        fs.copyFileSync(item.target, item.file);
+        fs.rmSync(item.target, { force: true });
+      }
+      restored += 1;
+    } catch {
+      /* не получилось вернуть — файл всё равно лежит в архиве */
+    }
+  }
+  job.retired = [];
+  if (restored) {
+    job.warnings.push(`Прошлая запись возвращена на место (${restored}): новая не получилась, терять готовый звук нельзя.`);
+  }
+  return restored;
+}
+
+/** Все части нового плана уже на диске и с настоящим звуком. */
+function planFilesReady(job) {
+  if (!job.parts.length) return false;
+  return job.parts.every((part) => {
+    try {
+      return fs.statSync(part.outPath).size > 2000;
+    } catch {
+      return false;
+    }
+  });
+}
+
+/**
  * Синтез части сразу в файл.
  *
  * Куски пишутся на диск по порядку, как только готовы, поэтому MP3 появляется
@@ -931,14 +1050,10 @@ async function writePartAudio(job, part) {
   }
   if (!start) {
     /* Файл не создаём заранее: пустой MP3 в папке проекта выглядел бы как
-       сломанная озвучка. Убираем и старый звук прошлого запуска — иначе человек
-       начинал бы слушать прошлую версию, а новый файл подменил бы её посреди
-       прослушивания. Новый появится вместе с первым готовым куском. */
-    try {
-      fs.unlinkSync(part.outPath);
-    } catch {
-      /* файла не было — и хорошо */
-    }
+       сломанная озвучка. Старый звук прошлого запуска убираем — но в архив, а
+       не в никуда: если новая версия не состоится, он вернётся на место
+       (restoreRetired). Новый появится вместе с первым готовым куском. */
+    retireAudio(job, part.outPath);
     part.writtenChunks = 0;
     part.writtenBytes = 0;
     part.seconds = 0;
@@ -1049,6 +1164,7 @@ async function runJob(job) {
       const cacheKey = partCacheKey(job, part);
       const cached = cacheKey ? path.join(job.cacheDir, `${cacheKey}.mp3`) : '';
       if (cached && existsAudio(cached)) {
+        retireAudio(job, part.outPath);
         fs.copyFileSync(cached, part.outPath);
         part.writtenChunks = part.chunks.length;
         part.writtenBytes = fs.statSync(part.outPath).size;
@@ -1107,15 +1223,24 @@ async function runJob(job) {
         `«${path.basename(partial.outPath)}» записан не полностью: в нём ${humanDuration(partial.seconds || 0)} звука.`,
       );
     }
+    /* Ни одного готового куска — finish вернёт на место прошлую запись. */
     finish(job, 'failed');
   }
 }
-
 
 function complete(job) {
   const count = job.files.length;
   job.stage = count > 1 ? `Готово: частей ${count}` : 'Готово';
   finish(job, 'done');
+  /* Уборка прошлых файлов — только теперь: новый комплект уже на диске.
+     Если уборка не удалась, ничего не ломается: лишние части останутся. */
+  if (typeof job.sweep === 'function' && planFilesReady(job)) {
+    try {
+      job.sweep();
+    } catch {
+      /* уборка — не повод считать озвучку неудачной */
+    }
+  }
 }
 
 /**
@@ -1169,18 +1294,32 @@ export const PART_MINUTES = 30;
 export const CHARS_PER_MINUTE = 820;
 
 /**
- * Короче этого — один MP3, даже если в тексте есть главы.
+ * Короче этого — один MP3, даже если в тексте есть главы. Это правило для
+ * обычной записи, не для выжимки: выжимка книги (single) не делится никогда,
+ * сколько бы минут ни вышло.
  *
- * Делить получасовую выжимку на «часть 1 из 2» незачем: она и так укладывается
+ * Делить получасовую запись на «часть 1 из 2» незачем: она и так укладывается
  * в одну дорогу, а лишнее имя только мешает искать запись в папке. Порог равен
- * верхней границе части (50 минут): заказ «выжимка на 45–50 минут» должен
- * получаться одним файлом, а не двумя огрызками. Длиннее — режем по главам.
+ * верхней границе части (50 минут): заказ «на 45–50 минут» должен получаться
+ * одним файлом, а не двумя огрызками. Длиннее — режем по главам.
  */
 export const SINGLE_FILE_MINUTES = 50;
 /* Верхняя граница одной части. Час в одном файле — это долгий синтез без
    промежуточного результата: при перезапуске приложения теряется всё. 45 минут
    остаются удобной «дорогой», но каждая часть успевает записаться отдельно. */
 export const MAX_PART_MINUTES = 45;
+
+/* Выжимка книги — всегда один MP3, сколько бы минут она ни заняла. Признак
+   берём из имени файла: «… — выжимка.docx», «Конспект …», «Краткое содержание …».
+   Это не эвристика по тексту: обычная книга тоже может быть короткой, а имя
+   говорит, что человек заказал именно выжимку, а не полную запись. */
+const SUMMARY_NAME_RE =
+  /(?:^|[^\p{L}\p{N}])(?:выжимк[а-яё]*|конспект[а-яё]*|кратк(?:ое|ая|ий)\s+(?:содержание|изложение|пересказ)|summary)(?:[^\p{L}\p{N}]|$)/iu;
+
+export function isSummaryDocument(name = '') {
+  const base = String(name).split(/[\\/]/).pop() || '';
+  return SUMMARY_NAME_RE.test(base);
+}
 
 /* Заголовок раздела: короткая строка без точки в конце, капсом или с ключевым
    словом. Границу слова задаём явно: `\b` в JavaScript считает словесными
@@ -1250,17 +1389,22 @@ export function choosePartMinutes(raw) {
  * агента отвечали одинаково.
  *
  * Правила:
- *   • короткая выжимка (до SINGLE_FILE_MINUTES) — всегда один MP3, даже если
- *     в ней есть главы: тридцать минут звука делить не на что;
+ *   • single: true — ровно ОДИН MP3 при любой длине. Так приходят два разных
+ *     заказа: выжимка книги (имя с «выжимка»/«конспект» определяется само) и
+ *     прямая просьба человека «одним файлом», даже если книга на полтора часа.
+ *     Раз просили один файл — делить его на части нельзя, это уже не тот файл;
+ *   • короткая запись (до SINGLE_FILE_MINUTES) — тоже один MP3, даже если в ней
+ *     есть главы: тридцать минут звука делить не на что;
  *   • длинная книга — части по её структуре (choosePartMinutes);
  *   • явный размер части (minutes из чата) уважаем как заказ: если модель
  *     осознанно просит по 10 минут — режем по 10, даже короткий текст. Но не
  *     больше MAX_PART_MINUTES: 60–65 минут — это хронометраж книги, а не
- *     размер одной части.
+ *     размер одной части. У выжимки minutes не перебивает «один файл».
  */
-export function narrationParts(raw, { minutes } = {}) {
+export function narrationParts(raw, { minutes, single = false } = {}) {
   const text = normalizeText(raw);
   if (!text) return [];
+  if (single) return [text];
   const requested =
     Number(minutes) > 0 ? Math.min(MAX_PART_MINUTES, Math.max(5, Number(minutes))) : 0;
   if (!requested && text.length / CHARS_PER_MINUTE <= SINGLE_FILE_MINUTES) return [text];
@@ -1317,8 +1461,8 @@ export function splitIntoParts(raw, { minutes = PART_MINUTES } = {}) {
 }
 
 /** План частей для интерфейса: размеры и длительность без синтеза. */
-export function planParts(raw, { minutes } = {}) {
-  return narrationParts(raw, { minutes }).map((text, index) => ({
+export function planParts(raw, { minutes, single = false } = {}) {
+  return narrationParts(raw, { minutes, single }).map((text, index) => ({
     index: index + 1,
     chars: text.length,
     minutes: Math.round((text.length / CHARS_PER_MINUTE) * 10) / 10,

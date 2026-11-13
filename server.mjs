@@ -46,6 +46,8 @@ import {
   choosePartMinutes,
   findActiveNarration,
   getJob,
+  humanDuration,
+  isSummaryDocument,
   jobsFor,
   narrationParts,
   narrationStatus,
@@ -59,6 +61,7 @@ import {
 } from './src/tts.mjs';
 import { detectKind, extractDocumentText, kindLabel } from './src/docparse.mjs';
 import { claimNarrationFiles, planNarrationFiles } from './src/narration-plan.mjs';
+import { joinNarrationParts, listNarrationParts, narrationArchiveDir } from './src/narration-join.mjs';
 import { writeNarrationWord } from './src/narration-word.mjs';
 import { previewDocument } from './src/docpreview.mjs';
 import { projectFilesBrief } from './src/filebrief.mjs';
@@ -4809,16 +4812,23 @@ async function route(req, res) {
         /* Книга отдаётся частями по ~30 минут звука плюс один Word с текстом:
            слушать пять часов одним файлом неудобно, а искать нужное место в
            нём — тем более. Части получают имена «… — часть 2 из 12.mp3».
-           Короткая выжимка (до 50 минут) — исключение: она выходит одним MP3,
-           потому что делить получасовую запись на «части» бессмысленно.
+           Короткая запись — тоже одним MP3. Выжимка книги не дробится никогда:
+           имя с «выжимка»/«конспект» даёт ровно ОДИН MP3 при любой длине.
+           Просьба «одним файлом» (body.single) означает то же самое — один MP3
+           на всю книгу, без сокращения текста: содержание задаёт документ, а не
+           число файлов.
            Длину части человек не выбирает: её задаёт структура самой книги
            (choosePartMinutes — короткие главы собираются, длинные режутся),
            а body.minutes остаётся для вызова из чата, где решение принимает
            модель по оглавлению. */
+        const single = body.single === true || isSummaryDocument(name);
+        const totalMinutes = Math.round((text.length / CHARS_PER_MINUTE) * 10) / 10;
         const partMinutes = Number(body.minutes) > 0
           ? Math.min(90, Math.max(5, Number(body.minutes)))
-          : choosePartMinutes(text);
-        const chapterParts = narrationParts(text, { minutes: body.minutes });
+          : single
+            ? Math.max(1, Math.round(totalMinutes))
+            : choosePartMinutes(text);
+        const chapterParts = narrationParts(text, { minutes: body.minutes, single });
         /* Сколько в документе глав: окно пишет «части по главам», только если
            главы действительно нашлись, иначе это было бы обещанием на пустом
            месте (PDF-выгрузка режется по 30 минут, глав там нет). */
@@ -4865,6 +4875,10 @@ async function route(req, res) {
           sourcePath: rel,
           wordPath: files.word,
           cacheDir: path.join(DATA_DIR, 'tts-cache'),
+          /* Прошлый звук этого файла уедет в скрытый архив при первой записи, а
+             старые файлы прошлой озвучки уберутся только после успеха. */
+          archiveDir: narrationArchiveDir(path.dirname(files.parts[0].path)),
+          sweep: files.sweep,
         });
         /* Обложку ищем сразу, пока синтез идёт: к моменту, когда человек
            откроет запись, картинка уже лежит рядом с MP3. */
@@ -4882,7 +4896,7 @@ async function route(req, res) {
       }
       /* Что получится из документа: сколько частей, сколько это звука и как
          будут называться файлы. Нужен до старта — человек решает, устраивает ли
-         его 12 частей по полчаса, или это короткая выжимка на один MP3, и видит,
+         его 12 частей по полчаса, или это выжимка на один MP3, и видит,
          что Word с текстом тоже будет. */
       if (parts[3] === 'tts-plan' && method === 'GET') {
         const rel = url.searchParams.get('path') || '';
@@ -4904,22 +4918,76 @@ async function route(req, res) {
           });
         }
         const requested = Number(url.searchParams.get('minutes')) || 0;
-        const planMinutes = requested > 0 ? Math.min(90, Math.max(5, requested)) : choosePartMinutes(text);
-        /* Решает не запрошенный размер, а правило из narrationParts: короткая
-           выжимка получается одним файлом, каким бы ни вышел choosePartMinutes. */
-        const plan = planParts(text, { minutes: requested });
+        const single = url.searchParams.get('single') === '1' || isSummaryDocument(name);
+        const totalMinutes = Math.round((text.length / CHARS_PER_MINUTE) * 10) / 10;
+        const planMinutes = requested > 0
+          ? Math.min(90, Math.max(5, requested))
+          : single
+            ? Math.max(1, Math.round(totalMinutes))
+            : choosePartMinutes(text);
+        /* Решает не запрошенный размер, а правило из narrationParts: выжимка
+           книги и короткая запись получаются одним файлом, каким бы ни вышел
+           choosePartMinutes. */
+        const plan = planParts(text, { minutes: requested, single });
         const files = planNarrationFiles(full, plan.length);
+        /* Что уже наговорено раньше: если книга лежит частями, её можно собрать
+           в один файл без синтеза — окно предложит это кнопкой. */
+        const existing = listNarrationParts(full);
         return sendJson(res, 200, {
           ok: true,
           chars: text.length,
           minutes: Math.round((text.length / CHARS_PER_MINUTE) * 10) / 10,
           partMinutes: planMinutes,
           single: plan.length === 1,
+          summary: single,
           chapters: splitBlocks(text).length,
           parts: plan,
           word: path.basename(files.word),
           names: files.parts.map((part) => path.basename(part.path)),
+          existing: {
+            parts: existing.parts.map((part) => path.basename(part.path)),
+            complete: existing.complete,
+            single: fs.existsSync(planNarrationFiles(full, 1).parts[0].path),
+          },
         });
+      }
+      /* Собрать готовые части озвучки в один MP3 — без синтеза и без правки
+         текста. Это ответ на «соберите в один файл»: ровно тот же звук, те же
+         слова, только одним файлом. Повторная озвучка тут не годится — она
+         читает текст заново и может уехать в другую редакцию. */
+      if (parts[3] === 'tts-join' && parts.length === 4 && method === 'POST') {
+        const body = await readJsonBody(req);
+        const rel = String(body.path || '');
+        let full;
+        try {
+          full = resolveSafe(workspace, rel);
+        } catch {
+          return sendError(res, 400, 'Некорректный путь к файлу');
+        }
+        if (!fs.existsSync(full) || !fs.statSync(full).isFile()) return sendError(res, 404, 'Файл не найден');
+        try {
+          const joined = joinNarrationParts(full, {
+            archiveDir: narrationArchiveDir(path.dirname(full)),
+          });
+          /* Файл в журнале проекта появляется не мгновенно: путь мог быть
+             скрыт до этого, а теперь существует — сообщаем об этом явно. */
+          return sendJson(res, 200, {
+            ok: true,
+            already: joined.already,
+            file: {
+              name: joined.name,
+              path: path.relative(workspace, joined.path).replace(/\\/g, '/'),
+              size: joined.size,
+              seconds: joined.seconds,
+              duration: humanDuration(joined.seconds),
+              parts: joined.parts.length || (joined.already ? 1 : 0),
+            },
+            archived: joined.archived,
+            warnings: joined.warnings,
+          });
+        } catch (error) {
+          return sendError(res, 409, error.message || 'Не удалось собрать части в один файл');
+        }
       }
       if (parts[3] === 'file-preview' && method === 'GET') {
         /* Просмотр файла прямо в приложении. Сервер отдаёт не «плоский текст»,
