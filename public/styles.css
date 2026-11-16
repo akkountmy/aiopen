@@ -3096,49 +3096,8 @@ html.kb-open .scroll-jump {
   white-space: nowrap;
 }
 
-/* Крестик закрытия: на широком экране закрывать нечего, поэтому кнопка
-   спрятана; в выезжающем ящике она появляется (см. медиазапрос ниже). */
-.files-close {
-  display: none;
-  align-items: center;
-  justify-content: center;
-  flex: none;
-  width: 36px;
-  height: 36px;
-  padding: 0;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  background: var(--layer-2);
-  color: var(--text-2);
-  cursor: pointer;
-  appearance: none;
-  -webkit-tap-highlight-color: transparent;
-  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
-}
-
-.files-close:hover {
-  background: var(--layer-hover);
-  border-color: var(--line-strong);
-  color: var(--text);
-}
-
-.files-close:active {
-  background: var(--layer-3);
-}
-
-.files-close:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-
-.files-close svg {
-  width: 18px;
-  height: 18px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.6;
-  stroke-linecap: round;
-}
+/* Крестика в шапке панели больше нет: шторку закрывают затемнение,
+   кнопка-папка в шапке приложения, свайп вправо и Escape. */
 
 /* Строки с путём над списком больше нет: папки раскрываются на месте, как в
    панели «Проекты», и путь никуда не ведёт — перехода «внутрь папки» нет. */
@@ -4776,12 +4735,6 @@ html.kb-open .scroll-jump {
     display: none;
   }
   .files-toggle {
-    display: inline-flex;
-  }
-  /* Ящик файлов закрывается крестиком: свайп вправо и тап по затемнению тоже
-     работают, но их надо знать, а белая панель на весь экран без выхода
-     выглядит как «окно, из которого не выйти». */
-  .files-close {
     display: inline-flex;
   }
 

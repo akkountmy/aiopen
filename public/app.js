@@ -14255,8 +14255,6 @@ $('#filesProjectTitle').addEventListener('click', () => {
   loadFiles();
 });
 $('#filesUploadBtn').addEventListener('click', () => $('#filesPanelInput').click());
-/* Крестик шторки: на широком экране кнопка скрыта, но обработчик безвреден. */
-$('#filesClose').addEventListener('click', () => closeFilesDrawer());
 $('#filesPanelInput').addEventListener('change', (event) => {
   uploadToProject(event.target.files);
   event.target.value = '';

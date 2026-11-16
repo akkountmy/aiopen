@@ -624,10 +624,11 @@ try {
   const lineIcons = headerIcons.filter((icon) => icon.id !== 'filesBtn');
   const lineStrokes = [...new Set(lineIcons.map((icon) => icon.stroke))];
   const lineScaling = [...new Set(lineIcons.map((icon) => icon.scaling))];
-  /* В шапке справа шесть значков: профиль, поддержка, дашборд, топ-новости,
-     тема и папка. Папка залитая, поэтому толщину штриха сверяем по пяти
+  /* В шапке справа пять значков: профиль, дашборд, топ-новости, тема и папка.
+     «Поддержка» на телефоне живёт в кабинете учётной записи, поэтому её значка
+     здесь нет. Папка залитая, поэтому толщину штриха сверяем по четырём
      контурным. */
-  headerIcons.length === 6 && iconSizes.length === 1 && lineIcons.length === 5 && lineStrokes.length === 1 &&
+  headerIcons.length === 5 && iconSizes.length === 1 && lineIcons.length === 4 && lineStrokes.length === 1 &&
   lineStrokes[0] === '2px' && lineScaling.length === 1 && lineScaling[0] === 'non-scaling-stroke'
     ? ok('значки шапки одного размера, контурные — одной толщины', `${headerIcons.map((icon) => `${icon.id}:${icon.size}`).join(' / ')}, штрих ${lineStrokes[0]} без масштабирования`)
     : fail('значки шапки разной толщины', JSON.stringify(headerIcons));
