@@ -44,7 +44,7 @@ Node-сервис (без сборки): `server.mjs` + ванильный SPA �
 
 ```powershell
 node test/deck.mjs                       # раскладка/подгонка деки
-node test/docs.mjs                       # документы (бюджет промпта — предупреждение)
+node test/docs.mjs                       # документы + бюджет промпта (падает, если промпт больше предела)
 node scripts/check.mjs --only ui-support # точечный прогон без живых наборов
 node scripts/check-deck-live.mjs "текст" # сквозная живая проверка деки (сам убирает проект)
 node scripts/deploy-diff.mjs --exit-1    # гейт «всё выложено?»: код 1, если есть невыложенное
