@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { CAPACITY, CONTEXT, ESCALATION, MODEL, REVIEW, SPLIT, costUsd } from './config.mjs';
+import { CAPACITY, CONTEXT, ESCALATION, MODEL, REVIEW, SPLIT, TOOLPLAN, costUsd } from './config.mjs';
 import { buildArtifacts, describeDesign, designView, specFromText, writeSpec } from './design.mjs';
 import { documentExcerpt, documentKind } from './doccheck.mjs';
 import { normalizeHistory, repairHistoryInPlace } from './history.mjs';
@@ -12,6 +12,7 @@ import { summaryPrompt, systemPrompt, titlePrompt } from './prompt.mjs';
 import { describeReview, needsReview, reviewAnswer } from './review.mjs';
 import { skillsPromptText } from './skills.mjs';
 import { continuePrompt, taskSummaryLine, updateTaskState } from './taskstate.mjs';
+import { describeToolStep, groupToolCalls, savedByParallel } from './toolplan.mjs';
 import { applyReference, availableToolDefs, TOOL_LABELS, executeTool, listTree, toolSummary } from './tools.mjs';
 import {
   compressHistory,
@@ -936,6 +937,8 @@ async function runTurnInner({
      свёрнутым блоком и не подмешивается в markdown. */
   let reasoningText = '';
   let steps = 0;
+  /* Счётчики хода: без них «ускорилось» — только ощущение. */
+  const timing = { modelMs: 0, modelCalls: 0, toolsMs: 0, toolBatchMs: 0, toolSavedMs: 0, toolCalls: 0 };
   let finished = false;
   /* Досборка чертежей даётся один раз за ход: повторные шаги не должны
      превращаться в цикл «сделай ещё раз». */
@@ -1113,6 +1116,7 @@ async function runTurnInner({
       console.log(`[model] ${describeStepRoute(stepRoute)}`);
     }
 
+    const modelStarted = Date.now();
     const result = await callModel(
       {
         model: stepRoute.model,
@@ -1133,6 +1137,9 @@ async function runTurnInner({
       },
       { fallbackModel: ESCALATION.flashModel },
     );
+
+    timing.modelMs += Date.now() - modelStarted;
+    timing.modelCalls += 1;
 
     if (reasoningGate) {
       const shownReasoning = await reasoningGate.finish();
@@ -1161,7 +1168,7 @@ async function runTurnInner({
           limitUsd: Math.round(Number(budget.limitUsd) * 100) / 100,
         };
         emit({ type: 'budget', ...budgetHit });
-        return { text: finalText, usage, tools: toolsUsed, steps, memory: chat.memory, budgetHit, trim: trimStats, route: { ...route, steps: stepRoutes }, reasoning: reasoningText };
+        return { text: finalText, usage, tools: toolsUsed, steps, memory: chat.memory, budgetHit, trim: trimStats, route: { ...route, steps: stepRoutes }, reasoning: reasoningText, timing };
       }
     }
 
@@ -1277,7 +1284,10 @@ async function runTurnInner({
     let stepChars = 0;
     let stepFailed = false;
 
-    for (const call of assistantMessage.tool_calls) {
+    /* Тело одного вызова. Возвращает результат, но ничего не пишет в историю:
+       записи делает внешний цикл строго в порядке tool_calls — иначе провайдер
+       отвергнет запрос («tool» сообщения обязаны идти за своими вызовами). */
+    const runOneTool = async (call) => {
       let args = {};
       let brokenArguments = false;
       try {
@@ -1383,16 +1393,48 @@ async function runTurnInner({
           });
         }
       }
-      toolsUsed.push({ id: toolId, name: call.function.name, label, summary, status, ...(toolPath ? { path: toolPath } : {}) });
-      chat.history.push({
-        role: 'tool',
-        tool_call_id: call.id,
-        content: content || 'Готово.',
-      });
-      stepChars += String(content || '').length;
-      if (status === 'error') stepFailed = true;
+      return {
+        call,
+        content,
+        status,
+        entry: { id: toolId, name: call.function.name, label, summary, status, ...(toolPath ? { path: toolPath } : {}) },
+        ms: Date.now() - started,
+      };
+    };
+
+    /* Чистые вызовы идут вместе, всё остальное — по одному. Записи в историю
+       делаются здесь, в исходном порядке: батч может выполняться параллельно,
+       но `tool` сообщения обязаны идти ровно за своими `tool_calls`. */
+    const stepBatches = groupToolCalls(assistantMessage.tool_calls, {
+      limit: TOOLPLAN.limit,
+      parallel: TOOLPLAN.enabled,
+    });
+    const toolSavedBefore = timing.toolSavedMs;
+    const toolWallStart = Date.now();
+    for (const batch of stepBatches) {
+      const outcomes =
+        batch.parallel && batch.calls.length > 1
+          ? await runLimited(batch.calls, batch.calls.length, (call) => runOneTool(call))
+          : [await runOneTool(batch.calls[0])];
+      const spent = outcomes.reduce((max, one) => Math.max(max, one.ms), 0);
+      timing.toolSavedMs += savedByParallel([{ parallel: batch.parallel, calls: outcomes.map((one) => ({ ms: one.ms })) }]);
+      timing.toolBatchMs += spent;
+      for (const one of outcomes) {
+        toolsUsed.push(one.entry);
+        chat.history.push({ role: 'tool', tool_call_id: one.call.id, content: one.content || 'Готово.' });
+        stepChars += String(one.content || '').length;
+        if (one.status === 'error') stepFailed = true;
+      }
       if (signal.aborted) throw Object.assign(new Error('aborted'), { name: 'AbortError' });
     }
+    timing.toolsMs += Date.now() - toolWallStart;
+    timing.toolCalls += assistantMessage.tool_calls.length;
+    const toolLine = describeToolStep({
+      calls: assistantMessage.tool_calls.length,
+      wallMs: Date.now() - toolWallStart,
+      savedMs: timing.toolSavedMs - toolSavedBefore,
+    });
+    if (toolLine) console.log(`[tools] шаг ${steps}: ${toolLine}`);
     /* Снимок шага для маршрутизации следующего. `mechanicalRun` — сколько
        механических шагов идёт подряд: после второго подряд разбор уже не нужен. */
     const stepTools = assistantMessage.tool_calls.map((call) => call.function.name);
@@ -1571,7 +1613,12 @@ async function runTurnInner({
     if (reviewLine) console.log(`[review] ${reviewLine}`);
   }
 
-  return { text: finalText, usage, tools: toolsUsed, steps, memory: chat.memory, trim: trimStats, route: { ...route, steps: stepRoutes }, review, reasoning: reasoningText, incomplete, incompleteNote };
+  console.log(
+    `[turn] шагов ${steps}, модель ${(timing.modelMs / 1000).toFixed(1)} с (${timing.modelCalls} вызовов), ` +
+      `инструменты ${(timing.toolsMs / 1000).toFixed(1)} с (${timing.toolCalls} вызовов, экономия ${(timing.toolSavedMs / 1000).toFixed(1)} с), ` +
+      `токены ${usage.tokensIn}/${usage.tokensOut}`,
+  );
+  return { text: finalText, usage, tools: toolsUsed, steps, memory: chat.memory, trim: trimStats, route: { ...route, steps: stepRoutes }, review, reasoning: reasoningText, incomplete, incompleteNote, timing };
 }
 
 /* Название диалога не должно зависеть от модели: если её ответ пустой,

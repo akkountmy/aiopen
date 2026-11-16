@@ -39,7 +39,9 @@
     "test:attach-shrink": "node test/attach-shrink.mjs",
     "test:reasoning": "node --test test/reasoning.mjs",
     "test:browser": "node test/browser.mjs",
-    "test:browser-engines": "node test/browser-engines.mjs"
+    "test:browser-engines": "node test/browser-engines.mjs",
+    "test:tool-parallel": "node test/tool-parallel.mjs",
+    "bench:tools": "node scripts/bench-tool-parallel.mjs"
   },
   "dependencies": {
     "@mozilla/readability": "^0.6.0",
