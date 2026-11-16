@@ -15,12 +15,14 @@ import { printHtml } from '../browser.mjs';
 
 const ASSETS = new URL('../../assets/deck/', import.meta.url);
 const THEMES = new Set(['gold', 'graphite', 'cobalt']);
-const LAYOUTS = new Set(['cover', 'rows', 'steps', 'list', 'kpi', 'quote', 'section', 'closing']);
+const LAYOUTS = new Set([
+  'cover', 'rows', 'steps', 'list', 'kpi', 'quote', 'section', 'closing', 'split', 'media',
+]);
 const MAX_SLIDES = 40;
 /* Вместимость макетов на поле 1600×900 — посчитана по рендеру, а не на глаз:
    пятая строка реестра уезжает под нижнее поле, шестой тезис наезжает на номер
    страницы. Лишнее отбрасываем и говорим об этом в warnings, а не молчим. */
-const CAPACITY = { rows: 4, steps: 4, list: 5, kpi: 4 };
+const CAPACITY = { rows: 4, steps: 4, list: 5, kpi: 4, split: 4 };
 
 /* 1600×900 CSS px → мм для Page.printToPDF: 1 px = 1/96 in = 25.4/96 мм. */
 export const PAGE_MM = {
@@ -85,7 +87,7 @@ function footers(slide, index, total, opts, dark = false) {
   return parts.join('');
 }
 
-function bullets(items) {
+function bullets(items, density = '') {
   const rows = list(items, CAPACITY.list).map((item, i) => {
     const row = item && typeof item === 'object' ? item : { title: item };
     const n = String(i + 1).padStart(2, '0');
@@ -96,17 +98,60 @@ function bullets(items) {
       (detail ? `<div class="d">${rich(detail)}</div>` : '') +
       '</div></div>';
   }).join('');
-  return rows ? `<div class="items">${rows}</div>` : '';
+  return rows ? `<div class="items${density}">${rows}</div>` : '';
+}
+
+/* —— оформление: рамка и световое пятно ——
+   Один и тот же декоративный слой на всех содержательных слайдах: пустое
+   поле с плоской заливкой читалось как «слайд не доделан», а рамка с
+   градиентным пятном даёт глубину, ничего не сдвигая (сетка та же: 92 px). */
+function decor({ frame = true, glow = 'tr' } = {}) {
+  const parts = [];
+  if (glow) parts.push(`<div class="glow glow-${glow}"></div>`);
+  if (frame) parts.push('<div class="frame"><i></i><i></i></div>');
+  if (!parts.length) return '';
+  /* Световое пятно специально шире слайда. Обёртка с overflow:hidden
+     подрезает его по полю: иначе перелив увеличивал scrollHeight слайда,
+     и замер раскладки честно ругался «содержимое выше поля». */
+  return `<div class="deco">${parts.join('')}</div>`;
+}
+
+/* Картинка приходит подготовленной: tools.mjs читает файл проекта и кладёт
+   base64 в imageData. Сама дека остаётся чистой функцией от спека и не ходит
+   на диск — иначе тест на «внешних ссылок нет» перестал бы что-то значить. */
+function imageData(slide) {
+  /* imageData — то, что положил слой инструментов (файл проекта, прочитанный
+     в base64). Если вызывающий уже дал готовый data:image, берём его: так деку
+     можно собрать напрямую из спека, без чтения диска. */
+  const data = typeof slide?.imageData === 'string' ? slide.imageData : typeof slide?.image === 'string' ? slide.image : '';
+  if (!data.startsWith('data:image/') || data.length < 200) return '';
+  if (data.length > 24 * 1024 * 1024) return '';
+  return data;
+}
+
+function shot(slide, cls = 'shot') {
+  const data = imageData(slide);
+  if (!data) return '';
+  return `<img class="${cls}" src="${data}" alt="${esc(text(slide.imageAlt || slide.caption || '', 90))}">`;
 }
 
 function slideCover(slide, ctx) {
   const action = slide.action || slide.pill || '';
-  const lines = String(slide.title || '').split(/\r?\n/).filter(Boolean);
+  const lines = String(slide.title || '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
   const first = text(lines[0] || slide.title || 'Презентация', 40);
-  const second = text(lines[1] || '', 22);
+  /* Вторую строку не обрезаем по 22 символам: длинный заголовок тогда
+     терял конец фразы («…за квартал»). Длинную строку уменьшаем классом. */
+  const second = text(lines.slice(1).join(' '), 64);
+  const secondClass = second.length > 34 ? ' xlong' : second.length > 18 ? ' long' : '';
   const kicker = text(slide.kicker || ctx.kicker || '', 60);
   const lead = text(slide.subtitle || slide.lead || ctx.subtitle || '', 320);
   const tag = text(slide.tag || '', 48);
+  /* Монограмма в углу обложки — только если её действительно задали: бренд
+     («ПАР») или инициалы. Плейсхолдер «Aa» был образцом шрифта из шаблона:
+     он ничего не сообщает, а на акцентном поле читался чёрной плитой в углу
+     (ровно та жалоба «чёрный прямоугольник справа-снизу»). Нет знака — нет
+     таблички: обложка держится на заголовке. */
+  const mark = text(slide.mark || '', 4);
   const items = list(slide.items, 3);
   const thumbs = items.map((item, i) => {
     const data = item && typeof item === 'object' ? item : { caption: item };
@@ -116,6 +161,42 @@ function slideCover(slide, ctx) {
       (caption ? `<div class="cap">${esc(caption)}</div>` : '') + '</div>';
   }).join('');
 
+  const copy = `<div class="cover-copy">
+    ${kicker ? `<div class="kicker">${esc(kicker)}</div>` : ''}
+    <h1 class="h1" style="margin-top:26px">
+      <span class="l1"><span>${rich(first)}</span><em></em></span>
+      ${second ? `<span class="l2${secondClass}">${rich(second)}</span>` : ''}
+    </h1>
+    ${lead ? `<p class="lead">${rich(lead)}</p>` : ''}
+    ${action ? `<div class="pill"><b>${esc(action)}</b><span style="font-size:16px">→</span></div>` : ''}
+  </div>`;
+
+  const specimen = mark || tag ? `<div class="specimen">
+    ${mark ? `<span class="big">${esc(mark)}</span>` : ''}
+    ${tag ? `<span class="tag">${esc(tag)}</span>` : ''}
+  </div>` : '';
+
+  /* Обложка с фотографией: кадр во всё поле, тёмный скрим под текстом и
+     та же типографика. Акцентное поле с «клином» остаётся вариантом по
+     умолчанию — оно не требует картинки и печатается одинаково на любом
+     принтере. */
+  const photo = shot(slide, 'shot');
+  if (photo) {
+    return `<section class="slide cover-photo">
+  ${photo}
+  <div class="scrim"></div>
+  <div class="vignette"></div>
+  <div class="frame"><i></i><i></i></div>
+  ${copy}
+  ${specimen}
+  ${thumbs ? `<div class="thumbs">${thumbs}</div>` : ''}
+  ${footers(slide, 1, 1, ctx, true)}
+</section>`;
+  }
+
+  /* Тёмное пятно-«контакт» в правом нижнем углу (.contact) убрано: на
+     акцентном поле оно читалось грязным разводом, а смысла не несло —
+     подпись сезона теперь печатает .specimen. */
   return `<section class="slide">
   <div class="cover-accent"><div class="sheen"></div></div>
   <svg class="blade" width="1600" height="900" viewBox="0 0 1600 900" preserveAspectRatio="none">
@@ -129,27 +210,16 @@ function slideCover(slide, ctx) {
     <path fill="url(#bk)" d="M0,0 L872,0 C 1006,128 1152,236 1104,424 C 1058,606 872,668 906,900 L0,900 Z"/>
   </svg>
   <div class="vignette"></div>
-  <div class="cover-copy">
-    ${kicker ? `<div class="kicker">${esc(kicker)}</div>` : ''}
-    <h1 class="h1" style="margin-top:26px">
-      <span class="l1"><span>${esc(first)}</span><em></em></span>
-      ${second ? `<span class="l2">${esc(second)}</span>` : ''}
-    </h1>
-    ${lead ? `<p class="lead">${rich(lead)}</p>` : ''}
-    ${action ? `<div class="pill"><b>${esc(action)}</b><span style="font-size:16px">→</span></div>` : ''}
-  </div>
-  <div class="contact"></div>
-  <div class="specimen">
-    <span class="big">Aa</span>
-    ${tag ? `<span class="tag">${esc(tag)}</span>` : ''}
-  </div>
+  ${copy}
+  ${specimen}
   ${thumbs ? `<div class="thumbs">${thumbs}</div>` : ''}
 </section>`;
 }
 
 function slideRows(slide, ctx, index, total) {
   const badge = slide.badge && typeof slide.badge === 'object' ? slide.badge : null;
-  const rows = list(slide.rows || slide.table, CAPACITY.rows).map((row, i) => {
+  const rowItems = list(slide.rows || slide.table, CAPACITY.rows);
+  const rows = rowItems.map((row, i) => {
     const data = row && typeof row === 'object' ? row : { name: row };
     const cells = Array.isArray(data.cells) ? data.cells : null;
     const name = text(cells ? cells[0] : data.name || data.title || '', 60);
@@ -160,8 +230,12 @@ function slideRows(slide, ctx, index, total) {
       `<div class="what">${rich(what)}</div><div class="meta">${esc(meta)}</div></div>`;
   }).join('');
 
+  /* Две-три строки на 340 px полотна оставляли внизу пустую половину слайда.
+     Плотность подгоняем классом по числу строк, а не «на глаз» в каждом спеке. */
+  const density = rowItems.length <= 2 ? ' rows-2' : rowItems.length === 3 ? ' rows-3' : '';
   return `<section class="slide">
   <div class="sheet"></div>
+  ${decor({ glow: 'tr' })}
   <div class="vignette"></div>
   <div class="claim">
     ${slide.kicker ? `<div class="kicker">${esc(text(slide.kicker, 60))}</div>` : ''}
@@ -170,7 +244,7 @@ function slideRows(slide, ctx, index, total) {
   </div>
   ${badge ? `<div class="badge"><div class="num">${esc(text(badge.value || badge.num || '', 12))}</div>` +
     `<div class="txt">${esc(text(badge.label || badge.text || '', 120))}</div></div>` : ''}
-  ${rows ? `<div class="grid">${rows}</div>` : ''}
+  ${rows ? `<div class="grid${density}">${rows}</div>` : ''}
   ${footers(slide, index, total, ctx)}
 </section>`;
 }
@@ -181,7 +255,7 @@ function slideSteps(slide, ctx, index, total) {
     const num = text(data.num || String(i + 1).padStart(2, '0'), 4);
     return `<div class="step"><div><div class="num">${esc(num)}</div>` +
       `<div class="t">${rich(text(data.title || data.name || '', 60))}</div>` +
-      `<div class="d">${rich(text(data.text || data.description || '', 160))}</div></div>` +
+      `<div class="d">${rich(text(data.text || data.description || data.detail || '', 160))}</div></div>` +
       (data.meta ? `<div class="meta">${esc(text(data.meta, 30))}</div>` : '') +
       '</div>';
   }).join('');
@@ -199,13 +273,17 @@ function slideSteps(slide, ctx, index, total) {
 }
 
 function slideList(slide, ctx, index, total) {
+  const items = list(slide.bullets || slide.items, CAPACITY.list);
+  const tight = items.length <= 2 ? ' tight-2' : items.length === 3 ? ' tight-3' : '';
   return `<section class="slide">
   <div class="sheet"></div>
+  ${decor({ glow: 'bl' })}
   <div class="vignette"></div>
   <div class="list">
     ${slide.kicker ? `<div class="kicker">${esc(text(slide.kicker, 60))}</div>` : ''}
     ${slide.title ? `<h2 class="h" style="margin-top:20px">${rich(slide.title)}</h2>` : ''}
-    ${bullets(slide.bullets || slide.items)}
+    ${slide.lead || slide.subtitle ? `<p class="lead" style="margin-top:22px;max-width:1060px">${rich(text(slide.lead || slide.subtitle, 320))}</p>` : ''}
+    ${bullets(slide.bullets || slide.items, tight)}
   </div>
   ${footers(slide, index, total, ctx)}
 </section>`;
@@ -217,12 +295,19 @@ function slideKpi(slide, ctx, index, total) {
     ? `<div class="kpi" style="grid-template-columns:repeat(${cells.length},1fr)">` +
       cells.map((cell) => {
         const data = cell && typeof cell === 'object' ? cell : { value: cell };
-        return `<div class="cell"><div class="v">${esc(text(data.value, 14))}</div>` +
+        const value = text(data.value, 14);
+        const unit = text(data.unit || '', 8);
+        /* «41,2 млн ₽» при 112 px не влезает в колонку и ломается на три
+           строки. Число и единицу разводим по кеглю, а не переносим. */
+        const sizeClass = value.length > 9 ? ' xlong' : value.length > 6 ? ' long' : '';
+        return `<div class="cell"><div class="v${sizeClass}">${esc(value)}` +
+          `${unit ? `<span class="u">${esc(unit)}</span>` : ''}</div>` +
           `<div class="l">${rich(text(data.label || data.text || '', 160))}</div></div>`;
       }).join('') + '</div>'
     : '';
   return `<section class="slide">
   <div class="sheet"></div>
+  ${decor({ glow: 'c' })}
   <div class="vignette"></div>
   <div class="claim">
     ${slide.kicker ? `<div class="kicker">${esc(text(slide.kicker, 60))}</div>` : ''}
@@ -236,9 +321,12 @@ function slideKpi(slide, ctx, index, total) {
 
 function slideQuote(slide, ctx, index, total) {
   const quote = text(slide.quote || slide.text || slide.title || '', 420);
-  const who = text(slide.author || slide.who || '', 80);
+  /* Автора модели часто кладут в lead/subtitle — принимаем и их, иначе
+     атрибуция молча исчезает со слайда. */
+  const who = text(slide.author || slide.who || slide.lead || slide.subtitle || '', 80);
   return `<section class="slide">
   <div class="sheet"></div>
+  ${decor({ glow: 'tr' })}
   <div class="vignette"></div>
   <div class="quote">
     <div class="q">${rich(quote)}</div>
@@ -252,6 +340,7 @@ function slideSection(slide, ctx, index, total) {
   const num = text(slide.num || '', 3);
   return `<section class="slide">
   <div class="section"></div>
+  <div class="deco"><div class="glow glow-bl"></div></div>
   <div class="section-body">
     ${slide.kicker ? `<div class="kicker">${esc(text(slide.kicker, 60))}</div>` : ''}
     ${num ? `<div class="num" style="margin-top:26px">${esc(num)}</div>` : ''}
@@ -262,16 +351,76 @@ function slideSection(slide, ctx, index, total) {
 </section>`;
 }
 
-function slideClosing(slide) {
+/* —— макет «текст + фото»: тезисы слева, кадр в карточке справа ——
+   Появился из-за пустого правого поля на слайдах «список» и «реестр»:
+   картинка из проекта занимает его и заодно даёт слайду образ. */
+function slideSplit(slide, ctx, index, total) {
+  const input = slide.bullets || slide.items || slide.rows;
+  const items = list(input, CAPACITY.list);
+  const photo = shot(slide, 'shot');
+  const caption = text(slide.caption || slide.tag || '', 70);
+  const rows = items.map((item, i) => {
+    const data = item && typeof item === 'object' ? item : { title: item };
+    const n = text(data.n || String(i + 1).padStart(2, '0'), 4);
+    const title = text(data.title || data.name || '', 90);
+    const detail = text(data.text || data.description || data.detail || data.what || '', 200);
+    return `<div class="item"><div class="n">${esc(n)}</div><div>` +
+      (title ? `<div class="t">${rich(title)}</div>` : '') +
+      (detail ? `<div class="d">${rich(detail)}</div>` : '') +
+      '</div></div>';
+  }).join('');
+
+  return `<section class="slide${photo ? '' : ' split-nar'}">
+  <div class="sheet"></div>
+  ${decor({ glow: 'bl' })}
+  <div class="vignette"></div>
+  ${photo
+    ? `<div class="shot-card">${photo}${caption ? `<div class="cap">${esc(caption)}</div>` : ''}</div>`
+    : `<div class="shot-card shot-empty"><div class="cap">${esc(caption || 'Кадр проекта')}</div></div>`}
+  <div class="claim split" style="width:720px">
+    ${slide.kicker ? `<div class="kicker">${esc(text(slide.kicker, 60))}</div>` : ''}
+    <h2 class="h" style="margin-top:20px">${rich(slide.title || '')}</h2>
+    ${slide.lead || slide.subtitle ? `<p class="lead" style="max-width:720px">${rich(text(slide.lead || slide.subtitle, 260))}</p>` : ''}
+    ${rows ? `<div class="items">${rows}</div>` : ''}
+  </div>
+  ${footers(slide, index, total, ctx)}
+</section>`;
+}
+
+/* —— макет «фото во весь слайд»: кадр, скрим, одно утверждение —— */
+function slideMedia(slide, ctx, index, total) {
+  const photo = shot(slide, 'shot');
+  const badge = slide.badge && typeof slide.badge === 'object' ? slide.badge : null;
+  const caption = text(slide.caption || '', 90);
+  return `<section class="slide media-slide">
+  ${photo}
+  <div class="scrim"></div>
+  ${decor({ glow: null })}
+  <div class="vignette"></div>
+  <div class="claim" style="width:880px">
+    ${slide.kicker ? `<div class="kicker">${esc(text(slide.kicker, 60))}</div>` : ''}
+    <h2 class="h" style="margin-top:20px">${rich(slide.title || '')}</h2>
+    ${slide.lead || slide.subtitle ? `<p class="lead" style="max-width:760px">${rich(text(slide.lead || slide.subtitle, 300))}</p>` : ''}
+    ${caption ? `<div class="cap-line">${esc(caption)}</div>` : ''}
+  </div>
+  ${badge ? `<div class="badge"><div class="num">${esc(text(badge.value || badge.num || '', 12))}</div>` +
+    `<div class="txt">${esc(text(badge.label || badge.text || '', 120))}</div></div>` : ''}
+  ${footers(slide, index, total, ctx)}
+</section>`;
+}
+
+function slideClosing(slide, ctx, index, total) {
   const action = slide.action || slide.pill || '';
-  return `<section class="slide">
+  return `<section class="slide closing-slide">
   <div class="closing"></div>
+  ${decor({ glow: null })}
   <div class="closing-body">
     ${slide.kicker ? `<div class="k">${esc(text(slide.kicker, 60))}</div>` : ''}
     <h2>${rich(slide.title || '')}</h2>
     ${slide.lead || slide.subtitle ? `<p class="lead">${rich(text(slide.lead || slide.subtitle, 320))}</p>` : ''}
     ${action ? `<div class="pill"><b>${esc(action)}</b><span style="font-size:16px">→</span></div>` : ''}
   </div>
+  ${footers(slide, index, total, ctx, true)}
 </section>`;
 }
 
@@ -281,6 +430,7 @@ const CAPACITY_SOURCE = {
   steps: (slide) => slide.steps || slide.items,
   list: (slide) => slide.bullets || slide.items,
   kpi: (slide) => slide.kpi,
+  split: (slide) => slide.bullets || slide.items || slide.rows,
 };
 
 /** Нормализует слайды: чинит неизвестные layout'ы и не даёт собрать пустой дек. */
@@ -325,7 +475,9 @@ export function deckHtml(spec = {}) {
       case 'kpi': return slideKpi(slide, ctx, index, total);
       case 'quote': return slideQuote(slide, ctx, index, total);
       case 'section': return slideSection(slide, ctx, index, total);
-      case 'closing': return slideClosing(slide);
+      case 'closing': return slideClosing(slide, ctx, index, total);
+      case 'split': return slideSplit(slide, ctx, index, total);
+      case 'media': return slideMedia(slide, ctx, index, total);
       default: return slideList(slide, ctx, index, total);
     }
   }).join('\n');
@@ -383,6 +535,26 @@ function deckLayoutProbe() {
         rect.right > box.right + 0.5 || rect.bottom > box.bottom + 0.5;
       if (outside) add(index, 'outside', label, 'текст выходит за поле слайда');
     });
+
+    /* Сноска и номер страницы — служебные элементы внизу поля: основной текст
+       не имеет права на них заезжать. Общее правило наложений считает долю
+       площади и такой «краешек» пропускает, а в файле это видно как текст
+       поверх сноски — поэтому здесь любое касание считается дефектом. */
+    const guards = Array.from(slide.querySelectorAll('.footnote, .pageno'))
+      .map((el) => ({ el, rect: el.getBoundingClientRect() }))
+      .filter(({ rect }) => rect.width > 1 && rect.height > 1);
+    if (guards.length) {
+      for (const block of blocks) {
+        for (const guard of guards) {
+          if (guard.el === block.el || guard.el.contains(block.el) || block.el.contains(guard.el)) continue;
+          const ox = Math.min(block.rect.right, guard.rect.right) - Math.max(block.rect.left, guard.rect.left);
+          const oy = Math.min(block.rect.bottom, guard.rect.bottom) - Math.max(block.rect.top, guard.rect.top);
+          if (ox <= 2 || oy <= 1) continue;
+          add(index, 'clash', block.label, `текст налезает на ${guard.el.classList.contains('pageno') ? 'номер страницы' : 'сноску'}`);
+          break;
+        }
+      }
+    }
 
     for (let i = 0; i < blocks.length; i += 1) {
       for (let j = i + 1; j < blocks.length; j += 1) {
@@ -469,11 +641,129 @@ function layoutIssueText(issue) {
 function layoutReport(result) {
   const probe = result && result.probe;
   if (!probe) {
-    return { ok: null, issues: [], missingFonts: [], note: (result && result.probeError) || 'замер раскладки не выполнен' };
+    return { ok: null, issues: [], missingFonts: [], note: (result && result.probeError) || 'замер раскладки не выполнен', raw: [] };
   }
   const issues = (Array.isArray(probe.issues) ? probe.issues : []).map(layoutIssueText);
   const missingFonts = Array.isArray(probe.missingFonts) ? probe.missingFonts : [];
-  return { ok: issues.length === 0 && missingFonts.length === 0, issues, missingFonts, note: '' };
+  return {
+    ok: issues.length === 0 && missingFonts.length === 0,
+    issues,
+    missingFonts,
+    note: '',
+    /* Сырые замечания нужны подгонке: по ним видно номер слайда и вид дефекта,
+       а не только готовая строка для отчёта. */
+    raw: Array.isArray(probe.issues) ? probe.issues : [],
+  };
+}
+
+/* —— подгонка раскладки ——
+   Замер честно ругается, но модель не всегда правит текст: дека уезжала в
+   файл, где последняя строка лежала на сноске. Подгонка не уменьшает шрифт
+   и не выкидывает содержание — она перестраивает слайд: переполненный
+   список делится на два, сноска уходит, лишние миниатюры обложки — тоже. */
+const FIT_ROUNDS = 3;
+const SPLITTABLE = new Set(['list', 'rows', 'steps', 'split']);
+const ITEM_KEYS = ['bullets', 'rows', 'steps', 'items', 'table'];
+
+function packItems(slide) {
+  const key = ITEM_KEYS.find((name) => Array.isArray(slide[name]) && slide[name].length);
+  return key ? { key, items: slide[key] } : null;
+}
+
+/* Заголовок второго (продолжающего) слайда: длинный заголовок обрезаем по
+   слову, иначе «— продолжение» съедает ещё две строки и слайд снова тесен. */
+function continuationTitle(title) {
+  const base = text(title, 220);
+  const short = base.length > 56 ? `${base.slice(0, 56).replace(/[\s,.;:—–-]+\S*$/, '')}…` : base;
+  return short ? `${short} — продолжение` : 'Продолжение';
+}
+
+/** Возвращает новый спек с перестроенными слайдами или null, если править нечего. */
+function repairDeck(spec, rawIssues) {
+  const { slides } = normalizeDeck(spec);
+  const broken = new Set(
+    rawIssues.map((issue) => Number(issue && issue.slide)).filter((n) => Number.isFinite(n) && n > 0),
+  );
+  if (!broken.size) return null;
+  const notes = [];
+  const out = [];
+  let changed = false;
+
+  slides.forEach((slide, i) => {
+    const number = i + 1;
+    if (!broken.has(number)) {
+      out.push(slide);
+      return;
+    }
+    const pack = packItems(slide);
+    /* Сначала снимаем вступление: лид — пояснительная строка под заголовком,
+       и чаще всего именно его высоты не хватает пунктам. Пункты при этом
+       остаются все — потерять строку-подпись честнее, чем разложить меню по
+       двум слайдам. Если и после этого тесно, работает следующий круг. */
+    if (slide.lead && slide.layout !== 'cover') {
+      out.push({ ...slide, lead: '' });
+      notes.push(`слайд ${number}: убран подзаголовок, чтобы текст не теснил сноску`);
+      changed = true;
+      return;
+    }
+    const splittable = Boolean(pack) && SPLITTABLE.has(slide.layout)
+      && pack.items.length >= 3 && slides.length < MAX_SLIDES;
+    if (splittable) {
+      const half = Math.ceil(pack.items.length / 2);
+      const head = { ...slide, [pack.key]: pack.items.slice(0, half), footnote: '' };
+      const tail = {
+        ...slide,
+        [pack.key]: pack.items.slice(half),
+        title: continuationTitle(slide.title),
+        kicker: text(slide.kicker, 60),
+        /* Лид — вступление к первому слайду: на продолжении он повторяется и
+           отбирает место у пунктов. Сноска наоборот остаётся здесь. */
+        lead: '',
+        footnote: slide.footnote || '',
+      };
+      out.push(head, tail);
+      notes.push(`слайд ${number}: разложен на два слайда (было пунктов: ${pack.items.length})`);
+      changed = true;
+      return;
+    }
+    if (slide.footnote) {
+      out.push({ ...slide, footnote: '' });
+      notes.push(`слайд ${number}: убрана сноска, чтобы не наезжала на текст`);
+      changed = true;
+      return;
+    }
+    if (pack && slide.layout === 'cover' && pack.items.length > 2) {
+      out.push({ ...slide, [pack.key]: pack.items.slice(0, 2) });
+      notes.push(`слайд ${number}: оставлены две миниатюры из ${pack.items.length}`);
+      changed = true;
+      return;
+    }
+    out.push(slide);
+  });
+
+  if (!changed) return null;
+  return { spec: { ...spec, slides: out }, notes };
+}
+
+/**
+ * Печать с подгонкой: сначала пробуем как есть, а если замер нашёл
+ * переполнение или наложение — перестраиваем проблемные слайды и печатаем
+ * заново. Дека выходит чистой без второго круга правок от модели.
+ */
+export async function makeFittedDeckPdf(spec = {}, options = {}) {
+  let current = spec;
+  let result = await makeDeckPdf(current, options);
+  const fixes = [];
+  for (let round = 0; round < FIT_ROUNDS; round += 1) {
+    const raw = Array.isArray(result.layout?.raw) ? result.layout.raw : [];
+    if (!raw.length) break;
+    const repair = repairDeck(current, raw);
+    if (!repair) break;
+    current = repair.spec;
+    fixes.push(...repair.notes);
+    result = await makeDeckPdf(current, options);
+  }
+  return { ...result, spec: current, fixes };
 }
 
 export const DECK_LAYOUTS = [...LAYOUTS];

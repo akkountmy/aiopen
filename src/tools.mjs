@@ -29,7 +29,7 @@ import { buildScorecard, formatCompanyRating, formatScorecard, rateCompany } fro
 import { createDocumentPdf, createPresentationPdf } from './pdf.mjs';
 import { createDrawing } from './drawing.mjs';
 import { docEngines, docIssues, makePdf, makePresentation, makeWord, makeWorkbook } from './doc/index.mjs';
-import { deckHtml, makeDeckPdf, normalizeDeck } from './doc/deck.mjs';
+import { DECK_LAYOUTS, deckHtml, makeFittedDeckPdf, normalizeDeck } from './doc/deck.mjs';
 import { imageInfo } from './doc/image-info.mjs';
 import { describeImage } from './vision.mjs';
 import { fetchUrl, webSearch, readPage, fetchMany, crawlSite, searchMany, scrapePage } from './search.mjs';
@@ -770,6 +770,271 @@ function pdfSpecFromArgs(args) {
   if (layout === 'slides' && !spec.slides.length) throw new Error('Для PDF-презентации нужен хотя бы один слайд с заголовком или содержимым');
   if (layout === 'document' && !spec.sections.length) throw new Error('Для PDF-документа нужен хотя бы один раздел или абзац');
   return spec;
+}
+
+/* ---------------------- презентация = дизайн-дека ----------------------
+   Раньше PDF-презентация уходила в отдельный наборщик на pdfkit: белые
+   листы, коралловый акцент, свой кегль. Из-за этого одна и та же просьба
+   «сделай презентацию» давала два разных стиля — в зависимости от того,
+   звал агент create_deck или create_pdf со слайдами. Теперь презентация
+   всегда печатается одной дизайн-декой (HTML → Chromium → PDF), а
+   create_pdf отвечает только за документ A4. Здесь — мост для старых
+   вызовов: разбор «слайдов» pdf-спека в макеты деки без потери данных. */
+
+const DECK_LAYOUT_NAMES = new Set(DECK_LAYOUTS);
+
+/** Таблица pdf-спека → строки реестра деки (первая колонка — имя строки). */
+function deckRowsOfTable(table) {
+  const headers = Array.isArray(table?.headers) ? table.headers.map((cell) => String(cell ?? '')) : [];
+  const rows = Array.isArray(table?.rows) ? table.rows : [];
+  const hasHead = headers.filter((cell) => cell.trim()).length > 0;
+  return rows.map((row, i) => {
+    const cells = (Array.isArray(row) ? row : []).map((cell) => String(cell ?? '').trim());
+    const name = cells[0] || (hasHead ? String(headers[0] || '') : `Строка ${i + 1}`);
+    const rest = cells.slice(1).filter(Boolean);
+    return { name, what: rest.join(' · ') };
+  });
+}
+
+/** Диаграмма pdf-спека → строки: категория и значения рядов. Данные не теряем. */
+function deckRowsOfChart(chart) {
+  const categories = Array.isArray(chart?.categories) ? chart.categories.map((item) => String(item)) : [];
+  const series = Array.isArray(chart?.series) ? chart.series : [];
+  return categories.map((category, i) => ({
+    name: category,
+    what: series.map((row) => {
+      const value = Array.isArray(row.values) ? row.values[i] : '';
+      return `${row.name || 'значение'}: ${value ?? ''}`;
+    }).join(' · '),
+  }));
+}
+
+/** pdf-спек со слайдами → спек дизайн-деки. */
+function deckSpecFromPdfSpec(spec = {}) {
+  const slides = [];
+  const push = (slide) => {
+    if (slide && slides.length < 40) slides.push(slide);
+  };
+  const title = String(spec.title || '').trim();
+  if (spec.cover && title) {
+    push({
+      layout: 'cover',
+      kicker: spec.kicker,
+      title,
+      subtitle: spec.subtitle,
+      tag: [spec.author, spec.date].filter(Boolean).join(' · '),
+    });
+  }
+  for (const slide of Array.isArray(spec.slides) ? spec.slides : []) {
+    const kicker = slide.kicker || '';
+    const head = String(slide.title || '').trim();
+    const lead = String(slide.subtitle || '').trim();
+    /* Слайд уже собран в понятиях деки (rows/steps/kpi/…) — проводим как есть. */
+    if (DECK_LAYOUT_NAMES.has(String(slide.layout || ''))) {
+      push({ ...slide, layout: String(slide.layout) });
+      continue;
+    }
+    if (slide.table) {
+      push({ layout: 'rows', kicker, title: head, lead, rows: deckRowsOfTable(slide.table) });
+      continue;
+    }
+    if (slide.chart) {
+      push({
+        layout: 'rows',
+        kicker,
+        title: head || slide.chart.title || 'Данные',
+        lead,
+        rows: deckRowsOfChart(slide.chart),
+        footnote: slide.chart.title || 'Значения по категориям',
+      });
+      continue;
+    }
+    if (slide.kpi?.length) {
+      push({ layout: 'kpi', kicker, title: head, lead, kpi: slide.kpi });
+      continue;
+    }
+    const paragraphs = Array.isArray(slide.paragraphs) ? slide.paragraphs : [];
+    const bullets = Array.isArray(slide.bullets) ? slide.bullets : [];
+    if (bullets.length) {
+      push({
+        layout: 'list',
+        kicker,
+        title: head || bullets[0],
+        lead,
+        bullets: bullets.map((text) => ({ title: text })),
+      });
+      continue;
+    }
+    if (paragraphs.length) {
+      const [first, ...rest] = paragraphs;
+      push({
+        layout: rest.length ? 'list' : 'quote',
+        kicker,
+        title: head,
+        quote: rest.length ? undefined : first,
+        lead: first,
+        bullets: rest.map((text) => ({ title: text })),
+        author: spec.author,
+      });
+      continue;
+    }
+    if (head) push({ layout: 'section', kicker, title: head, lead });
+  }
+  if (!slides.length && title) push({ layout: 'cover', kicker: spec.kicker, title, subtitle: spec.subtitle });
+  if (!slides.length) throw new Error('Для PDF-презентации нужен хотя бы один слайд с заголовком или содержимым');
+  return {
+    theme: spec.theme,
+    title,
+    kicker: spec.kicker,
+    subtitle: spec.subtitle,
+    footerText: spec.footerText,
+    slides,
+  };
+}
+
+/* Картинка для деки: файл проекта читаем здесь и кладём base64, чтобы HTML
+   оставался самостоятельным (никаких внешних путей в PDF). */
+const DECK_IMAGE_TYPES = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
+  '.gif': 'image/gif',
+};
+const DECK_IMAGE_LIMIT = 8 * 1024 * 1024;
+
+function inlineDeckImages(slides, root) {
+  const notes = [];
+  for (const [index, slide] of (Array.isArray(slides) ? slides : []).entries()) {
+    const raw = String(slide?.image || '').trim();
+    if (!raw) continue;
+    if (raw.startsWith('data:image/')) {
+      slide.imageData = raw;
+      continue;
+    }
+    const ext = path.extname(raw).toLowerCase();
+    const type = DECK_IMAGE_TYPES[ext];
+    if (!type) {
+      notes.push(`слайд ${index + 1}: формат картинки ${ext || 'без расширения'} не поддержан (png, jpg, webp, gif)`);
+      continue;
+    }
+    let full;
+    try {
+      full = assertInside(root, resolveSafe(root, raw));
+    } catch {
+      notes.push(`слайд ${index + 1}: картинка вне проекта — ${raw}`);
+      continue;
+    }
+    let stat;
+    try {
+      stat = fs.statSync(full);
+    } catch {
+      notes.push(`слайд ${index + 1}: файл картинки не найден — ${raw}`);
+      continue;
+    }
+    if (stat.size > DECK_IMAGE_LIMIT) {
+      notes.push(`слайд ${index + 1}: картинка больше 8 МБ — ${raw}`);
+      continue;
+    }
+    slide.imageData = `data:${type};base64,${fs.readFileSync(full).toString('base64')}`;
+  }
+  return notes;
+}
+
+/* Сборка PDF-деки в файл: одна и та же дорога для create_deck и для
+   create_pdf со слайдами. Печать идёт во временный файл рядом с целевым и
+   подменяется одним rename — иначе повторная сборка (модель часто
+   переделывает деку после замечания) перезаписывает PDF, пока его уже
+   открыли: в просмотре остаётся старая версия, а скачивание отдаёт новую. */
+async function buildDeckFile({ root, rel, spec, imageNotes = [], origin = 'deka' }) {
+  ensureFreeSpace(LIMITS.minFreeBytes);
+  if (!normalizeDeck(spec).slides.length) throw new Error('Нужен хотя бы один слайд');
+  const full = assertInside(root, resolveSafe(root, rel));
+  ensureDirFor(full);
+  const tmp = path.join(
+    path.dirname(full),
+    `.${path.basename(full)}.${process.pid}.${Date.now()}.tmp.pdf`,
+  );
+  let out;
+  try {
+    /* Печать деки поднимает Chromium. Без общего слота она могла идти
+       одновременно с Python или run_js — на 500 МБ это OOM. */
+    out = await withHeavySlot(() => makeFittedDeckPdf(spec, { pdfPath: tmp }));
+  } catch (error) {
+    /* Отказ по памяти — не повод молча отдавать HTML: пользователь ждёт
+       PDF, а «занято» должно дойти до него честно. */
+    const message = String(error?.message || error);
+    try { fs.rmSync(tmp, { force: true }); } catch { /* временный файл мог не появиться */ }
+    if (/^Сейчас занято/.test(message)) throw error;
+    /* Без браузера дека всё равно полезна: отдаём HTML и честную причину. */
+    const htmlRel = rel.replace(/\.pdf$/i, '.html');
+    const htmlFull = assertInside(root, resolveSafe(root, htmlRel));
+    ensureDirFor(htmlFull);
+    fs.writeFileSync(htmlFull, deckHtml(spec), 'utf8');
+    const fallbackSlides = normalizeDeck(spec).slides.length;
+    return {
+      text: `PDF не напечатан: ${message}. Деку собрал как HTML — ${htmlRel}, слайдов: ${fallbackSlides}. Открой в браузере и напечатай в PDF (Ctrl+P, поля 0, фон включить, размер 1600×900 px).`,
+      meta: { path: htmlRel, created: true, engine: 'html', slides: fallbackSlides, theme: spec.theme || 'gold', fallback: true, origin },
+    };
+  }
+  const check = await checkDocument(tmp);
+  if (!check.ok) {
+    try { fs.rmSync(tmp, { force: true }); } catch { /* уже удалён */ }
+    throw new Error(`PDF собрался с ошибкой проверки: ${check.errors.slice(0, 3).join('; ') || 'файл повреждён'}`);
+  }
+  try {
+    fs.renameSync(tmp, full);
+  } catch (error) {
+    /* На Windows rename поверх открытого файла может не пройти. На Linux
+       (Amvera) это атомарная подмена; запасной путь нужен для локали. */
+    if (error?.code !== 'EEXIST' && error?.code !== 'EPERM') throw error;
+    fs.rmSync(full, { force: true });
+    fs.renameSync(tmp, full);
+  }
+  const slides = Number(out.slideCount) || normalizeDeck(out.spec || spec).slides.length;
+  const theme = normalizeDeck(out.spec || spec).theme;
+  const overflow = Array.isArray(out.warnings) ? out.warnings : [];
+  const layout = out.layout || { ok: null, issues: [], missingFonts: [], note: '' };
+  /* Подгонка перестраивает проблемные слайды до печати: модель не всегда
+     возвращается к замечаниям, а строка на сноске в файле — брак. */
+  const fixes = Array.isArray(out.fixes) ? out.fixes : [];
+  const fitNote = fixes.length ? `Подгонка: ${fixes.join('; ')}.` : '';
+  /* Замер раскладки — главный сторож деки: переполнение видно до печати,
+     поэтому замечание идёт сразу после заголовка, а не в конце отчёта. */
+  const layoutBad = layout.issues.length
+    ? `Раскладка: ${layout.issues.length} замечани${layout.issues.length === 1 ? 'е' : 'я'} — ${layout.issues.slice(0, 4).join('; ')}${layout.issues.length > 4 ? `; ещё ${layout.issues.length - 4}` : ''}. Поправьте текст на этих слайдах и соберите заново.`
+    : '';
+  const layoutFont = !layoutBad && layout.missingFonts.length
+    ? `Раскладка: шрифт не подгрузился — ${layout.missingFonts.join(', ')}. Проверьте assets/deck/fonts.`
+    : '';
+  const layoutGood = !layoutBad && !layoutFont && layout.ok === true
+    ? 'Раскладка: чисто (текст в поле, блоки не наложились).'
+    : '';
+  const textLines = [
+    `Дека создана: ${rel} (слайдов: ${slides}, палитра ${theme}, ${Math.max(1, Math.round(out.buffer.length / 1024))} КБ)`,
+    layoutBad || layoutFont,
+    formatCheckReport(check),
+    overflow.length ? `Не вошло: ${overflow.join('; ')}` : '',
+    imageNotes.length ? `Картинки: ${imageNotes.join('; ')}` : '',
+    fitNote,
+    layoutGood,
+  ].filter(Boolean);
+  return {
+    text: textLines.join('\n'),
+    meta: {
+      path: rel,
+      created: true,
+      engine: out.engine,
+      slides,
+      theme,
+      origin,
+      warnings: overflow,
+      imageNotes,
+      layout,
+      fit: fixes,
+      check: { ok: check.ok, errors: check.errors, warnings: check.warnings },
+    },
+  };
 }
 
 /* ------------------------------ инструменты ------------------------------ */
@@ -1588,7 +1853,7 @@ export const TOOL_DEFS = [
     function: {
       name: 'create_pdf',
       description:
-        'Создать настоящий PDF (.pdf). Презентация: layout «slides» — страница на слайд 16:9, поддерживает KPI, диаграммы (столбцы/линии), таблицы и заметки. Документ: layout «document» — A4 с обложкой, заголовками, абзацами, списками, KPI и таблицами. Используй для любой просьбы «сделай PDF». Не делай PDF-копию того, что уже отдано в Word или Excel: один результат — один файл, второй формат — только по просьбе.',
+        'Создать настоящий PDF (.pdf). Документ: layout «document» — A4 с обложкой, заголовками, абзацами, списками, KPI и таблицами; KPI и таблицы поддерживаются. Презентация: layout «slides» печатается той же дизайн-декой, что и create_deck (тёмный стиль, палитры gold/graphite/cobalt), поэтому для слайдов лучше сразу звать create_deck — там макеты, картинки и замер раскладки. Используй для любой просьбы «сделай PDF» про документ; не делай PDF-копию того, что уже отдано в Word или Excel: один результат — один файл, второй формат — только по просьбе.',
       parameters: {
         type: 'object',
         properties: {
@@ -1662,7 +1927,7 @@ export const TOOL_DEFS = [
     function: {
       name: 'create_deck',
       description:
-        'Создать дизайнерский дек 16:9 (.pdf) на типографике и палитре харнесса: обложка на акцентном поле с «клином» и образцом шрифта (Aa), тезис + таблица-реестр, план на акцентном поле, список тезисов, KPI-строка, цитата, разделитель, финал. Используй, когда нужна презентация «красиво, как дизайнер», для показа людям. Для правок в PowerPoint рядом есть create_pptx — это отдельный файл, а не копия деки.',
+        'Создать дизайнерский дек 16:9 (.pdf) на типографике и палитре харнесса: обложка на акцентном поле с «клином» и образцом шрифта (или фото во весь слайд), тезис + таблица-реестр в рамке, план на акцентном поле, список тезисов, KPI-строка, цитата, разделитель, финал, а также слайды с фотографией («split» — текст и кадр рядом, «media» — фото во весь слайд). Используй, когда нужна презентация «красиво, как дизайнер», для показа людям. Для правок в PowerPoint рядом есть create_pptx — это отдельный файл, а не копия деки.',
       parameters: {
         type: 'object',
         properties: {
@@ -1679,7 +1944,7 @@ export const TOOL_DEFS = [
             items: {
               type: 'object',
               properties: {
-                layout: { type: 'string', enum: ['cover', 'rows', 'steps', 'list', 'kpi', 'quote', 'section', 'closing'], description: 'cover — обложка, rows — тезис и таблица-реестр, steps — план на акцентном поле, list — утверждение и тезисы, kpi — цифры, quote — цитата, section — разделитель, closing — финал.' },
+                layout: { type: 'string', enum: ['cover', 'rows', 'steps', 'list', 'kpi', 'quote', 'section', 'closing', 'split', 'media'], description: 'cover — обложка, rows — тезис и таблица-реестр, steps — план на акцентном поле, list — утверждение и тезисы, kpi — цифры, quote — цитата, section — разделитель, closing — финал, split — текст и фото рядом, media — фото во весь слайд.' },
                 kicker: { type: 'string', description: 'Надзаголовок слайда, 2–4 слова.' },
                 title: { type: 'string', description: 'Заголовок-утверждение; перевод строки — перенос, **слово** выделяется акцентом.' },
                 lead: { type: 'string', description: 'Пояснение в 2–3 строки.' },
@@ -1687,8 +1952,11 @@ export const TOOL_DEFS = [
                 action: { type: 'string', description: 'Кнопка на обложке и финале, 2–3 слова.' },
                 tag: { type: 'string', description: 'Подпись у образца шрифта на обложке.' },
                 num: { type: 'string', description: 'Номер части для layout section.' },
+                image: { type: 'string', description: 'Картинка слайда: путь к файлу внутри проекта (png, jpg, webp, gif), до 8 МБ. На обложке делают фото во весь слайд, в split — кадр справа, в media — фон под текстом.' },
+                caption: { type: 'string', description: 'Подпись под картинкой (до 8 слов).' },
                 items: { type: 'array', description: 'Плашки на обложке: {label, caption}.' },
                 badge: { type: 'object', description: 'Одна цифра-якорь с расшифровкой: {value, label}.' },
+                mark: { type: 'string', description: 'Крупный знак на обложке: монограмма бренда или номер квартала, 1–3 символа. По умолчанию «Aa».' },
                 rows: {
                   type: 'array',
                   description: 'Строки таблицы-реестра, 3–4.',
@@ -1726,7 +1994,14 @@ export const TOOL_DEFS = [
                 kpi: {
                   type: 'array',
                   description: 'Цифры, 2–4.',
-                  items: { type: 'object', properties: { value: { type: 'string' }, label: { type: 'string' } } },
+                  items: {
+                    type: 'object',
+                    properties: {
+                      value: { type: 'string', description: 'Число без единицы: «41,2», «+34».' },
+                      unit: { type: 'string', description: 'Единица мелким кеглем: «млн ₽», «%», «мин».' },
+                      label: { type: 'string' },
+                    },
+                  },
                 },
                 quote: { type: 'string', description: 'Текст цитаты.' },
                 author: { type: 'string', description: 'Атрибуция цитаты.' },
@@ -3412,13 +3687,18 @@ async function executeToolInner(name, args, ctx) {
       return { text: parts.join('\n\n'), meta: { code: result.code, killed: result.killed } };
     }
     case 'run_js': {
-      const result = await runJavascript({
-        code: args.code,
-        root,
-        timeoutMs: args.timeout_ms,
-        signal: ctx.signal,
-        writeRoot: ctx.writeRoot,
-      });
+      /* run_js — полноценный рабочий поток с кучей и буферами. Без общего
+         счётчика он мог стартовать одновременно с Chromium и Python: три
+         тяжёлые работы на 500 МБ — это гарантированный OOM. */
+      const result = await withHeavySlot(() =>
+        runJavascript({
+          code: args.code,
+          root,
+          timeoutMs: args.timeout_ms,
+          signal: ctx.signal,
+          writeRoot: ctx.writeRoot,
+        }),
+      );
       const parts = [];
       if (result.output.trim()) parts.push(`Вывод:\n${truncate(result.output.trim(), 16000)}`);
       if (result.files.length) parts.push(`Файлы сохранены: ${result.files.join(', ')}`);
@@ -3508,7 +3788,6 @@ async function executeToolInner(name, args, ctx) {
     case 'create_deck': {
       const rel = String(args.path || 'Презентация.pdf');
       if (!rel.toLowerCase().endsWith('.pdf')) throw new Error('Имя файла должно заканчиваться на .pdf');
-      ensureFreeSpace(LIMITS.minFreeBytes);
       const spec = {
         theme: args.theme,
         title: args.title,
@@ -3516,68 +3795,47 @@ async function executeToolInner(name, args, ctx) {
         kicker: args.kicker,
         footerText: args.footerText,
         pageNumbers: args.pageNumbers,
-        slides: Array.isArray(args.slides) ? args.slides : [],
+        slides: Array.isArray(args.slides) ? args.slides.map((slide) => ({ ...slide })) : [],
       };
-      const slides = normalizeDeck(spec).slides.length;
-      if (!slides) throw new Error('Нужен хотя бы один слайд');
-      const full = assertInside(root, resolveSafe(root, rel));
-      ensureDirFor(full);
-      let out;
-      try {
-        out = await makeDeckPdf(spec, { pdfPath: full });
-      } catch (error) {
-        /* Без браузера дека всё равно полезна: отдаём HTML и честную причину. */
-        const message = String(error?.message || error);
-        const htmlRel = rel.replace(/\.pdf$/i, '.html');
-        const htmlFull = assertInside(root, resolveSafe(root, htmlRel));
-        ensureDirFor(htmlFull);
-        fs.writeFileSync(htmlFull, deckHtml(spec), 'utf8');
-        return {
-          text: `PDF не напечатан: ${message}. Деку собрал как HTML — ${htmlRel}, слайдов: ${slides}. Открой в браузере и напечатай в PDF (Ctrl+P, поля 0, фон включить, размер 1600×900 px).`,
-          meta: { path: htmlRel, created: true, engine: 'html', slides, theme: spec.theme || 'gold', fallback: true },
-        };
-      }
-      const check = await checkDocument(full);
-      const theme = normalizeDeck(spec).theme;
-      const overflow = Array.isArray(out.warnings) ? out.warnings : [];
-      const layout = out.layout || { ok: null, issues: [], missingFonts: [], note: '' };
-      /* Замер раскладки — главный сторож деки: переполнение видно до печати,
-         поэтому замечание идёт сразу после заголовка, а не в конце отчёта. */
-      const layoutBad = layout.issues.length
-        ? `Раскладка: ${layout.issues.length} замечани${layout.issues.length === 1 ? 'е' : 'я'} — ${layout.issues.slice(0, 4).join('; ')}${layout.issues.length > 4 ? `; ещё ${layout.issues.length - 4}` : ''}. Поправьте текст на этих слайдах и соберите заново.`
-        : '';
-      const layoutFont = !layoutBad && layout.missingFonts.length
-        ? `Раскладка: шрифт не подгрузился — ${layout.missingFonts.join(', ')}. Проверьте assets/deck/fonts.`
-        : '';
-      const layoutGood = !layoutBad && !layoutFont && layout.ok === true
-        ? 'Раскладка: чисто (текст в поле, блоки не наложились).'
-        : '';
-      const textLines = [
-        `Дека создана: ${rel} (слайдов: ${slides}, палитра ${theme}, ${Math.max(1, Math.round(out.buffer.length / 1024))} КБ)`,
-        layoutBad || layoutFont,
-        formatCheckReport(check),
-        overflow.length ? `Не вошло: ${overflow.join('; ')}` : '',
-        layoutGood,
-      ].filter(Boolean);
-      return {
-        text: textLines.join('\n'),
-        meta: {
-          path: rel,
-          created: true,
-          engine: out.engine,
-          slides,
-          theme,
-          warnings: overflow,
-          layout,
-          check: { ok: check.ok, errors: check.errors, warnings: check.warnings },
-        },
-      };
+      /* Картинку модель задаёт путём внутри проекта: файл читаем здесь и
+         вкладываем base64, иначе HTML собрал бы ссылку и PDF уехал бы без фото. */
+      const imageNotes = inlineDeckImages(spec.slides, root);
+      return await buildDeckFile({ root, rel, spec, imageNotes, origin: 'create_deck' });
     }
     case 'create_pdf': {
       const rel = String(args.path || 'document.pdf');
       if (!rel.toLowerCase().endsWith('.pdf')) throw new Error('Имя файла должно заканчиваться на .pdf');
       ensureFreeSpace(LIMITS.minFreeBytes);
       const spec = pdfSpecFromArgs(args);
+      /* Презентация идёт той же дизайн-декой, что и create_deck: иначе одна
+         и та же просьба давала два разных стиля — светлые листы pdfkit
+         против тёмной деки, и в просмотре с скачиванием было «две
+         презентации». Документ A4 по-прежнему собирает pdfkit. */
+      if (spec.layout === 'slides') {
+        const rawSlides = (Array.isArray(args.slides) ? args.slides : []).filter(Boolean);
+        const deckShaped = rawSlides.some((slide) => DECK_LAYOUT_NAMES.has(String(slide.layout || '')));
+        const deckSpec = deckShaped
+          ? {
+              theme: args.theme,
+              title: args.title,
+              subtitle: args.subtitle,
+              kicker: args.kicker,
+              footerText: args.footerText,
+              slides: rawSlides.map((slide) => ({
+                ...slide,
+                layout: DECK_LAYOUT_NAMES.has(String(slide.layout || '')) ? String(slide.layout) : 'list',
+              })),
+            }
+          : deckSpecFromPdfSpec(spec);
+        const built = await buildDeckFile({
+          root,
+          rel,
+          spec: deckSpec,
+          imageNotes: inlineDeckImages(deckSpec.slides, root),
+          origin: 'create_pdf',
+        });
+        return { ...built, text: built.text.replace(/^Дека создана/, 'Презентация создана') };
+      }
       const { buffer: buf, engine, layout } = await makePdf(spec, { document: createDocumentPdf, slides: createPresentationPdf });
       if (!buf.length) throw new Error('Не удалось собрать PDF: нет содержимого');
       const full = assertInside(root, resolveSafe(root, rel));

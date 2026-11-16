@@ -107,19 +107,28 @@ async function upload(rels, label) {
 /** Ждём, пока платформа соберёт и поднимет проект. */
 async function waitBuild(limitMinutes = 12) {
   const started = Date.now();
+  /* Сборку отдаёт buildStatus/buildStatusTime: status у проекта остаётся
+     RUNNING и во время пересборки, а statusMessage чаще всего пустой — по
+     прежней проверке скрипт «не дожидался» уже готовой сборки. */
+  const startedAtSeconds = started / 1000;
   let previous = '';
   while (Date.now() - started < limitMinutes * 60_000) {
     const project = await getProject(SLUG);
-    const line = `${project.status} — ${project.statusMessage || ''}`;
+    const line = `${project.status}/${project.buildStatus || '?'} — ${project.statusMessage || project.buildStatusMessage || ''}`;
     if (line !== previous) {
       const seconds = Math.round((Date.now() - started) / 1000);
       console.log(`[${String(seconds).padStart(3)} с] ${line}`);
       previous = line;
     }
-    if (project.status === 'RUNNING' && /success|deployed|успеш/i.test(project.statusMessage || '') && Date.now() - started > 20_000) {
+    const buildTime = Number(project.buildStatusTime || 0);
+    if (
+      project.status === 'RUNNING'
+      && Date.now() - started > 20_000
+      && (project.buildStatus === 'SUCCEEDED' ? buildTime >= startedAtSeconds - 60 : /success|deployed|успеш/i.test(project.statusMessage || ''))
+    ) {
       return project;
     }
-    if (/ERROR|FAILED|BUILD_FAILED/i.test(project.status)) {
+    if (/ERROR|FAILED|BUILD_FAILED/i.test(project.status) || /ERROR|FAILED/i.test(project.buildStatus || '')) {
       throw new Error('сборка завершилась ошибкой: ' + line);
     }
     await new Promise((resolve) => setTimeout(resolve, 8_000));
@@ -130,9 +139,11 @@ async function waitBuild(limitMinutes = 12) {
 if (mode === 'status') {
   const project = await getProject(SLUG);
   console.log('==== Проект ====');
-  for (const key of ['name', 'slug', 'status', 'statusMessage', 'instances', 'namespace']) {
+  for (const key of ['name', 'slug', 'status', 'statusMessage', 'buildStatus', 'buildStatusMessage', 'instances', 'namespace']) {
     console.log(`  ${key}: ${project[key]}`);
   }
+  const builtAt = Number(project.buildStatusTime || 0);
+  if (builtAt) console.log(`  buildStatusTime: ${new Date(builtAt * 1000).toISOString()}`);
   console.log('\n==== Файлы в корне ====');
   const root = await listFiles(SLUG, '/');
   console.log('  ' + root.map((entry) => entry.name + (entry.isFolder ? '/' : '')).join(' '));

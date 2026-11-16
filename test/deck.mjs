@@ -60,6 +60,49 @@ test('HTML самостоятельный: слайды 1600×900, шрифты 
   assert.ok(!/src="http/.test(html), 'в HTML осталась внешняя картинка');
 });
 
+test('на обложке нет плейсхолдера «Aa»: знак печатается только заданный', () => {
+  /* Жалоба «чёрный прямоугольник справа-снизу»: в углу печаталась табличка с
+     образцом шрифта «Aa», которую никто не просил. Теперь нет знака — нет
+     таблички; заданный бренд печатается словами. */
+  const bare = deckHtml({ slides: [{ layout: 'cover', title: 'Только заголовок' }] });
+  assert.ok(!bare.includes('class="specimen"'), 'плейсхолдер «Aa» вернулся на обложку');
+  assert.ok(!bare.includes('>Aa<'), 'на обложке снова образец шрифта «Aa»');
+  assert.ok(!bare.includes('class="contact"'), 'тёмное пятно .contact вернулось');
+
+  const brand = deckHtml({ slides: [{ layout: 'cover', title: 'Бренд', mark: 'ПАР', tag: 'сезон 2026/27' }] });
+  assert.match(brand, /class="specimen"[\s\S]*?<span class="big">ПАР<\/span>/);
+  assert.match(brand, /<span class="tag">сезон 2026\/27<\/span>/);
+});
+
+test('фото вставляется файлом проекта: data-URI внутри HTML, макетов с кадром два', async () => {
+  /* Фотографию нельзя «нарисовать» разметкой — это единственный реальный
+     рычаг оформления. Проверяем весь путь: файл → base64 → HTML → PDF. */
+  const proj = fs.mkdtempSync(path.join(os.tmpdir(), 'dshow-deck-photo-'));
+  const png = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76LAAAAHElEQVQoz2P8z8Dwn4EIwESMolGF'
+    + 'o1IHVSEAhLIDAfz0Y7YAAAAASUVORK5CYII=',
+    'base64',
+  );
+  fs.writeFileSync(path.join(proj, 'зал.png'), png);
+  const result = await executeTool('create_deck', {
+    path: 'Фото.pdf',
+    slides: [
+      { layout: 'cover', title: 'Кадр', mark: 'ПАР', image: 'зал.png' },
+      { layout: 'media', title: 'Кадр во весь слайд', image: 'зал.png', caption: 'подпись' },
+      { layout: 'split', title: 'Кадр справа', bullets: [{ title: 'Пункт', text: 'текст' }], image: 'зал.png' },
+    ],
+  }, { workspace: proj });
+  const file = path.join(proj, result.meta.path);
+  const html = fs.existsSync(path.join(proj, 'Фото.html'))
+    ? fs.readFileSync(path.join(proj, 'Фото.html'), 'utf8')
+    : null;
+  if (html) assert.ok(html.includes('data:image/png;base64,'), 'картинка не вложена в HTML');
+  if (result.meta.fallback) return;
+  const buf = fs.readFileSync(file);
+  assert.equal(buf.subarray(0, 5).toString('latin1'), '%PDF-');
+  assert.equal(result.meta.slides, 3);
+});
+
 test('текст экранируется, выделение **…** превращается в акцент', () => {
   const html = deckHtml({ slides: [{ layout: 'list', title: '<script>alert(1)</script>', bullets: ['a & <b>'] }] });
   assert.ok(!html.includes('<script>alert'), 'заголовок не экранирован');
@@ -107,9 +150,10 @@ test('дека печатается: PDF на все слайды (или чес
   assert.match(result.text, /Раскладка: чисто/);
 });
 
-test('переполнение видно до печати: замер раскладки ругается, а не молчит', async () => {
+test('переполнение видно до печати и лечится подгонкой, а не уезжает в файл', async () => {
   /* Четыре длинных строки + сноска: описание упирается в сноску и последнюю строку,
-     а суммарная высота вылезает за 900 px. Такой макет раньше уезжал в PDF молча. */
+     а суммарная высота вылезает за 900 px. Такой макет раньше уезжал в PDF молча;
+     теперь замер ловит дефект, а сборка раскладывает строки на два слайда. */
   const what = 'Длинное описание строки, которое тянется почти до самого края отведённой колонки и переносится на две строки целиком';
   const crowded = {
     path: 'Переполнение.pdf',
@@ -130,10 +174,47 @@ test('переполнение видно до печати: замер раск
   };
   const result = await executeTool('create_deck', crowded, ctx);
   if (result.meta.fallback) return; // без браузера замера нет — проверять нечего
-  assert.equal(result.meta.layout.ok, false, 'переполнение не заметили');
-  assert.ok(result.meta.layout.issues.length > 0);
-  assert.match(result.text, /Раскладка: \d+ замечани/);
-  assert.match(result.text, /слайд 1/);
+  /* Главное: файл вышел без наложений. Значит замер их увидел (иначе подгонки
+     не было бы) и сборка успела перестроить слайд до печати. */
+  assert.equal(result.meta.layout.ok, true, `раскладка после подгонки: ${JSON.stringify(result.meta.layout)}`);
+  assert.equal(result.meta.slides, 2, 'переполненный слайд не разделён');
+  assert.ok(result.meta.fit.length > 0, 'о подгонке не сказано в meta');
+  assert.match(result.text, /Подгонка: слайд 1/);
+  assert.match(result.text, /Раскладка: чисто/);
+});
+
+test('текст поверх сноски считается дефектом, даже если это «краешек»', async () => {
+  /* Живой случай: строка меню задевает сноску на пару пикселей по высоте.
+     Общее правило наложений считает долю площади и такой край пропускало —
+     в файле это видно как текст, наехавший на сноску. Отдельное правило
+     должно поймать касание и перестроить слайд. */
+  const menu = {
+    path: 'Сноска.pdf',
+    slides: [
+      {
+        layout: 'list',
+        kicker: 'меню',
+        title: 'Кофе на четыре голоса: эспрессо, фильтр, сезон и еда под чашку',
+        lead: 'Четыре направления — от классики до сезонных экспериментов. Всё варим здесь, при вас.',
+        bullets: [
+          { title: 'Эспрессо-бар', text: 'Двойной эспрессо, флэт-уайт, капучино. Зерно светлой обжарки, помол под каждый напиток. От 5 ₽.' },
+          { title: 'Фильтр и ручная заварка', text: 'V60, аэропресс и кемекс — способ выбираете вы, остальное делаем мы. От 6 ₽.' },
+          { title: 'Сезонная карта', text: 'Напитки, которые живут три месяца: осенью — пряности, летом — цитрус и тоник. От 7 ₽.' },
+          { title: 'Еда под кофе', text: 'Сырники, круассаны, сэндвичи — сытно, но не заглушает вкус чашки. От 6 ₽.' },
+        ],
+        footnote: 'Цены ориентировочные',
+      },
+    ],
+  };
+  const result = await executeTool('create_deck', menu, ctx);
+  if (result.meta.fallback) return; // без браузера замера нет — проверять нечего
+  assert.equal(result.meta.layout.ok, true, `раскладка после подгонки: ${JSON.stringify(result.meta.layout)}`);
+  assert.ok(result.meta.fit.length > 0, 'о подгонке не сказано в meta');
+  /* Пункты не потеряны: подгонка снимает подзаголовок, а не пункты меню,
+     поэтому слайд остаётся один. */
+  assert.equal(result.meta.slides, 1, 'пункты меню разложены по двум слайдам вместо снятия лида');
+  assert.match(result.text, /Подгонка: слайд 1/);
+  assert.match(result.text, /Раскладка: чисто/);
 });
 
 test('расширение обязательное, слайды нужны, путь не выходит из проекта', async () => {
