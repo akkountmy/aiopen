@@ -311,7 +311,11 @@ const report = {
   failed: results.filter((item) => item.error),
   results,
 };
-const out = path.join(root, `.skill-matrix-${new Date().toISOString().slice(0, 10)}.json`);
+/* Дамп — рабочий артефакт, а не исходник: пишем в tmp/ (правило 11 в AGENTS.md),
+   иначе очередной прогон снова засоряет корень репозитория. */
+const outDir = path.join(root, 'tmp');
+fs.mkdirSync(outDir, { recursive: true });
+const out = path.join(outDir, `.skill-matrix-${new Date().toISOString().slice(0, 10)}.json`);
 fs.writeFileSync(out, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
 console.log(
   `\nнавык открыт: ${report.fired}/${report.total}, тот самый: ${report.right}/${report.total}, ` +

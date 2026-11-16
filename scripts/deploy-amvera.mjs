@@ -13,6 +13,7 @@
 // кешируется в %TEMP%\amvera-token.json и обновляется сам.
 import fs from 'node:fs';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import {
   getProject,
   listFiles,
@@ -104,7 +105,25 @@ async function upload(rels, label) {
   }
 }
 
-/** Ждём, пока платформа соберёт и поднимет проект. */
+/** Отметка «что реально уехало»: HEAD на момент подтверждённой сборки.
+ *  Без неё deploy-diff.mjs по чистому дереву не видит, что коммиты не выложены, —
+ *  ровно та дырка, из-за которой «выложил всё?» отвечалось «да» при пустом дереве. */
+function recordDeployed() {
+  try {
+    const commit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: ROOT, encoding: 'utf8' }).trim();
+    const out = path.join(ROOT, 'tmp', 'deploy-state.json');
+    fs.mkdirSync(path.dirname(out), { recursive: true });
+    fs.writeFileSync(out, JSON.stringify({ commit, at: new Date().toISOString() }, null, 2) + '\n', 'utf8');
+    console.log(`отметка деплоя: ${commit.slice(0, 8)} → tmp/deploy-state.json`);
+  } catch {
+    /* git может быть недоступен: отметка полезна, но не обязательна для сборки. */
+  }
+}
+
+/** Ждём, пока платформа соберёт и поднимет проект.
+ *  По тайм-ауту НЕ бросаем: двенадцать минут ожидания плюс падение — это ещё
+ *  столько же разбирательств. Возвращаем {ok:false}: деплой подтверждается
+ *  фактом (/api/health, маркер, ?v=), а не сообщением сборки. */
 async function waitBuild(limitMinutes = 12) {
   const started = Date.now();
   /* Сборку отдаёт buildStatus/buildStatusTime: status у проекта остаётся
@@ -126,14 +145,17 @@ async function waitBuild(limitMinutes = 12) {
       && Date.now() - started > 20_000
       && (project.buildStatus === 'SUCCEEDED' ? buildTime >= startedAtSeconds - 60 : /success|deployed|успеш/i.test(project.statusMessage || ''))
     ) {
-      return project;
+      recordDeployed();
+      return { ok: true, project };
     }
     if (/ERROR|FAILED|BUILD_FAILED/i.test(project.status) || /ERROR|FAILED/i.test(project.buildStatus || '')) {
       throw new Error('сборка завершилась ошибкой: ' + line);
     }
     await new Promise((resolve) => setTimeout(resolve, 8_000));
   }
-  throw new Error('за ' + limitMinutes + ' мин сборка не завершилась');
+  console.log(`\nСборка не подтвердилась за ${limitMinutes} мин (последнее состояние: ${previous}).`);
+  console.log('Это не приговор: проверь https://dshopen-vladimir00177.msk1.amvera.tech/api/health и маркер ?v=.');
+  return { ok: false, project: await getProject(SLUG).catch(() => null) };
 }
 
 if (mode === 'status') {
@@ -158,16 +180,20 @@ if (mode === 'status') {
   if (mode === 'deploy') {
     console.log('\n==== Пересборка ====');
     console.log(JSON.stringify(await rebuildProject(SLUG)).slice(0, 300));
-    await waitBuild();
-    console.log('\nГотово: проект собран и запущен.');
+    const result = await waitBuild();
+    console.log(result.ok ? '\nГотово: проект собран и запущен.' : '\nГотово с оговоркой: сборка не подтвердилась, проверь health и маркеры.');
   }
 } else if (mode === 'build') {
   console.log('Запускаю пересборку: ' + JSON.stringify(await rebuildProject(SLUG)).slice(0, 300));
 } else if (mode === 'restart') {
   console.log('Перезапуск без сборки: ' + JSON.stringify(await restartProject(SLUG)).slice(0, 300));
 } else if (mode === 'wait') {
-  const project = await waitBuild();
-  console.log('\nИтог: ' + project.status + ' — ' + project.statusMessage);
+  const result = await waitBuild();
+  if (result.ok) {
+    console.log('\nИтог: ' + result.project.status + ' — ' + result.project.statusMessage);
+  } else {
+    console.log('\nИтог: сборка не подтверждена. Дальше факт: /api/health → 200, маркер в /styles.css, ?v= в /index.html.');
+  }
 } else if (mode === 'env') {
   /* Переменные уже настроены в кабинете; REST-путь для них не подтверждён,
      поэтому режим только напоминает состав и ничего не меняет. */
