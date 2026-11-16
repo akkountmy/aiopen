@@ -9489,6 +9489,12 @@ function userMenuHead() {
 
 function openUserMenu(event) {
   const isAdmin = state.user?.role === 'admin';
+  /* На телефоне кнопки «Поддержка» в шапке нет — тот же вход живёт здесь, в
+     кабинете учётной записи, рядом с «Сменить пароль» и «Что сервис помнит».
+     Проверяем ширину в момент открытия меню: повернули телефон или открыли его
+     в ярлыке-приложении — пункт появляется сам, на компьютере его не дублируем
+     кнопкой в шапке. */
+  const supportInCabinet = window.matchMedia('(max-width: 860px)').matches;
   const items = [
     {
       label: 'Сменить пароль',
@@ -9501,6 +9507,14 @@ function openUserMenu(event) {
       action: () => memoryModal(),
     },
   ];
+  if (supportInCabinet) {
+    items.push({
+      label: 'Поддержка',
+      icon: ICONS.support,
+      badge: isAdmin ? state.supportUnread : 0,
+      action: () => openSupportModal(),
+    });
+  }
   if (isAdmin) {
     items.push(
       { sep: true },
@@ -10206,19 +10220,29 @@ function renderSupportHistory(holder, messages) {
 }
 
 /* Цифра на кнопке «Поддержка»: у администратора — сколько обращений ещё не
-   читали. Остальным счётчик не нужен и не показывается даже при нуле. */
+   читали. Остальным счётчик не нужен и не показывается даже при нуле.
+   На телефоне самой кнопки в шапке нет (она ушла в кабинет профиля), поэтому
+   тот же признак ставится атрибутом на значок профиля: CSS рисует по нему
+   точку — обращение видно, не открывая меню, а число показывается уже в меню. */
 function applySupportBadge(count) {
   const value = Math.max(0, Number(count) || 0);
   state.supportUnread = value;
-  const badge = $('#supportBadge');
-  if (!badge) return;
   const isAdmin = state.user?.role === 'admin';
-  badge.hidden = !isAdmin || value === 0;
-  badge.textContent = value > 99 ? '99+' : String(value);
+  const badge = $('#supportBadge');
+  if (badge) {
+    badge.hidden = !isAdmin || value === 0;
+    badge.textContent = value > 99 ? '99+' : String(value);
+  }
   const button = $('#supportBtn');
-  if (!button) return;
-  const base = 'Поддержка: сообщить о проблеме или предложить идею';
-  button.title = isAdmin && value ? `${base} · новых обращений: ${value}` : base;
+  if (button) {
+    const base = 'Поддержка: сообщить о проблеме или предложить идею';
+    button.title = isAdmin && value ? `${base} · новых обращений: ${value}` : base;
+  }
+  const chip = $('#userChip');
+  if (chip) {
+    if (isAdmin && value) chip.dataset.support = value > 99 ? '99+' : String(value);
+    else delete chip.dataset.support;
+  }
 }
 
 /* Тихий опрос: администратор может держать кабинет закрытым, но цифра на кнопке

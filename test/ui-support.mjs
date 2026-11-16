@@ -323,12 +323,18 @@ try {
       text: badge.textContent,
       title: btn.title,
       onButton: rect.width > 0 && rect.right <= btn.getBoundingClientRect().right + 6,
+      /* Тот же признак у значка профиля: на телефоне кнопки в шапке нет, и точку
+         непрочитанных рисует он (см. шаг 11). */
+      chipAttr: document.getElementById('userChip').dataset.support || '',
     };
   })()`);
   badge ? ok('у администратора появилась цифра непрочитанных', badgeView.text) : fail('счётчик', json(badgeView));
   /новых обращений/.test(badgeView.title)
     ? ok('подсказка кнопки говорит о новых обращениях', badgeView.title)
     : fail('подсказка кнопки', badgeView.title);
+  badgeView.chipAttr === badgeView.text
+    ? ok('тот же счётчик стоит на значке профиля', `data-support=${badgeView.chipAttr}`)
+    : fail('признак на значке профиля', json(badgeView));
 
   /* 7. Пуш приходит в открытую вкладку строкой-плашкой: воркер системное
         уведомление не показывает, окно само говорит о новом обращении. */
@@ -359,6 +365,14 @@ try {
   menuItem && menuItem.badge === menuItem.now && menuItem.badge !== ''
     ? ok('в меню профиля есть пункт с той же цифрой', `${menuItem.text} · ${menuItem.badge}`)
     : fail('пункт меню', json(menuItem));
+  /* Кнопка шапки на компьютере остаётся на месте — второй такой же пункт в меню
+     только запутал бы: он появляется там лишь на телефоне (см. шаг 11). */
+  const desktopDup = await evaluate(
+    `[...document.querySelectorAll('.menu button')].some((b) => b.textContent.trim().startsWith('Поддержка'))`,
+  );
+  desktopDup
+    ? fail('дубль в меню профиля', 'на компьютере появился пункт «Поддержка»')
+    : ok('на компьютере пункт «Поддержка» в меню не дублируется');
   await shot('support-menu.png');
 
   /* 8. Кабинет открывается сразу на блоке обращений. */
@@ -407,10 +421,14 @@ try {
     status: document.querySelector('.support-admin .support-status')?.textContent || '',
     badgeHidden: document.getElementById('supportBadge').hidden,
     title: document.getElementById('supportBtn').title,
+    chipAttr: document.getElementById('userChip').dataset.support || '',
   }))()`);
   read.status === 'Прочитано' && read.badgeHidden
     ? ok('«Прочитано» снимает цифру с кнопки')
     : fail('отметка «Прочитано»', json(read));
+  read.chipAttr === ''
+    ? ok('признак на значке профиля снялся вместе с цифрой')
+    : fail('признак на значке профиля', json(read));
 
   await evaluate(`[...document.querySelectorAll('.support-admin .approval.support-row .btn')].find((b) => b.textContent.trim() === 'Решено').click()`);
   await waitFor(`[...document.querySelectorAll('.support-admin .support-status')].some((s) => s.textContent.trim() === 'Решено')`, 8000);
@@ -430,13 +448,76 @@ try {
     ? ok('ссылка ?support=admin открывает блок обращений и чистит адрес')
     : fail('ссылка из уведомления', json({ deep, clean }));
 
-  /* 11. Телефон: окно целиком в экране, без горизонтальной прокрутки. */
+  /* 11. Телефон: «Поддержка» ушла из шапки в кабинет профиля. Кнопки в ряду
+         значков больше нет, на значке профиля горит точка непрочитанных, а само
+         окно открывается пунктом меню — целиком в экране, без горизонтальной
+         прокрутки. */
+  /* Точку проверяем на живом сигнале: оставляем новое обращение — после
+     перезагрузки телефона её рисует тот же счётчик, что цифру на кнопке.
+     Уборка (шаг 12) удалит его вместе с основным. */
+  const extra = await evaluate(`fetch('/api/support', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ kind: 'problem', text: 'Проверка точки непрочитанных на телефоне', page: 'Главный экран' }),
+  }).then((r) => r.status)`);
+  console.log(`  --  новое обращение для точки на профиле: ${extra}\n`);
+
   for (const [width, height] of [[390, 844], [320, 640]]) {
     await cdp.send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 2, mobile: true });
     await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 });
     await goto(BASE + '/');
     await waitFor(`!!document.getElementById('supportBtn')`);
-    await evaluate(`document.getElementById('supportBtn').click()`);
+    const phoneTop = await evaluate(`(() => {
+      const btn = document.getElementById('supportBtn');
+      const rect = btn.getBoundingClientRect();
+      const chip = document.getElementById('userChip');
+      return {
+        gone: getComputedStyle(btn).display === 'none' && rect.width === 0,
+        chipWidth: Math.round(chip.getBoundingClientRect().width),
+      };
+    })()`);
+    phoneTop.gone && phoneTop.chipWidth > 0
+      ? ok(`кнопки «Поддержка» в шапке нет при ${width}px, значок профиля на месте`, `${phoneTop.chipWidth}px`)
+      : fail(`шапка при ${width}px`, json(phoneTop));
+
+    /* Точка на профиле — тот же признак, что цифра на кнопке: она должна быть
+       нарисована и лежать внутри коробки значка, иначе на узком экране появилась
+       бы горизонтальная прокрутка. */
+    await waitFor(`(document.getElementById('userChip').dataset.support || '') !== ''`, 8000);
+    const dot = await evaluate(`(() => {
+      const chip = document.getElementById('userChip');
+      const after = getComputedStyle(chip, '::after');
+      const box = chip.getBoundingClientRect();
+      return {
+        attr: chip.dataset.support || '',
+        drawn: after.content !== 'none' && parseFloat(after.width) > 0,
+        inside: box.right <= window.innerWidth + 1,
+        overflow: document.documentElement.scrollWidth - window.innerWidth,
+      };
+    })()`);
+    Number(dot.attr) >= 1 && dot.drawn && dot.inside
+      ? ok(`на значке профиля точка непрочитанных при ${width}px`, `счётчик ${dot.attr}`)
+      : fail(`точка непрочитанных при ${width}px`, json(dot));
+
+    /* Тот же вход, что раньше был кнопкой: профиль → «Поддержка». */
+    await evaluate(`document.getElementById('userChip').click()`);
+    const menuEntry = await waitFor(
+      `[...document.querySelectorAll('.menu button')].some((b) => b.textContent.trim().startsWith('Поддержка'))`,
+      5000,
+    );
+    const menuItemPhone = menuEntry
+      ? await evaluate(`(() => {
+          const button = [...document.querySelectorAll('.menu button')].find((b) => b.textContent.trim().startsWith('Поддержка'));
+          return { text: button.textContent.trim(), badge: button.querySelector('.menu-badge')?.textContent || '' };
+        })()`)
+      : null;
+    menuItemPhone && menuItemPhone.badge !== '' && Number(menuItemPhone.badge) >= 1
+      ? ok(`в кабинете профиля пункт «Поддержка» с той же цифрой при ${width}px`, `цифра ${menuItemPhone.badge}`)
+      : fail(`пункт «Поддержка» в кабинете при ${width}px`, json(menuItemPhone));
+    await shot(`support-menu-${width}.png`);
+    if (menuEntry) {
+      await evaluate(`[...document.querySelectorAll('.menu button')].find((b) => b.textContent.trim().startsWith('Поддержка')).click()`);
+    }
     const openedMobile = await waitFor(`!!document.querySelector('#modalRoot .modal.support-modal')`, 8000);
     if (!openedMobile) {
       fail(`окно поддержки при ${width}px`, 'не открылось');
@@ -485,23 +566,36 @@ try {
   await evaluate(`document.querySelector('#modalRoot .support-admin-link').click()`);
   await waitFor(`!!document.querySelector('.support-admin .approval.support-row')`, 10000);
   const shotUrl = await evaluate(`document.querySelector('.support-admin .support-row-shot img')?.src || ''`);
-  const removal = await evaluate(`(async () => {
-    const button = [...document.querySelectorAll('.support-admin .approval.support-row .btn')].find((b) => b.textContent.trim() === 'Удалить');
-    if (!button) return 'no-button';
-    button.click();
-    await new Promise((r) => setTimeout(r, 500));
-    const confirm = document.querySelector('.popover .btn-danger') || [...document.querySelectorAll('.popover .btn')].find((b) => b.textContent.trim() === 'Удалить');
-    if (!confirm) return 'no-confirm';
-    confirm.click();
-    return 'clicked';
-  })()`);
-  const gone = removal === 'clicked' ? await waitFor(`!document.querySelector('.support-admin .approval.support-row')`, 8000) : false;
+  /* Обращений к этому шагу два: основное со скриншотом и добавленное ради точки
+     на профиле. Удаляем по одному, дожидаясь, пока строка уйдёт из списка. */
+  const deleteOne = () =>
+    evaluate(`(async () => {
+      const button = [...document.querySelectorAll('.support-admin .approval.support-row .btn')].find((b) => b.textContent.trim() === 'Удалить');
+      if (!button) return 'no-button';
+      button.click();
+      await new Promise((r) => setTimeout(r, 500));
+      const confirm = document.querySelector('.popover .btn-danger') || [...document.querySelectorAll('.popover .btn')].find((b) => b.textContent.trim() === 'Удалить');
+      if (!confirm) return 'no-confirm';
+      confirm.click();
+      return 'clicked';
+    })()`);
+  let removal = 'no-button';
+  let deleted = 0;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const rows = await evaluate(`document.querySelectorAll('.support-admin .approval.support-row').length`);
+    if (!rows) break;
+    removal = await deleteOne();
+    if (removal !== 'clicked') break;
+    deleted++;
+    await waitFor(`document.querySelectorAll('.support-admin .approval.support-row').length < ${rows}`, 8000);
+  }
+  const gone = deleted > 0 && (await waitFor(`!document.querySelector('.support-admin .approval.support-row')`, 8000));
   const fileGone = shotUrl
     ? await evaluate(`fetch(${json(shotUrl)}).then((r) => r.status)`)
     : 404;
   gone && fileGone === 404
-    ? ok('удаление обращения убирает и скриншот', `скриншот: ${fileGone}`)
-    : fail('удаление обращения', json({ removal, gone, fileGone }));
+    ? ok('удаление обращений убирает и скриншот', `скриншот: ${fileGone}, удалено: ${deleted}`)
+    : fail('удаление обращения', json({ removal, gone, fileGone, deleted }));
 } finally {
   chrome.kill();
   await sleep(400);
