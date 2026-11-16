@@ -3834,7 +3834,14 @@ async function executeToolInner(name, args, ctx) {
           imageNotes: inlineDeckImages(deckSpec.slides, root),
           origin: 'create_pdf',
         });
-        return { ...built, text: built.text.replace(/^Дека создана/, 'Презентация создана') };
+        /* У деки страниц ровно столько, сколько слайдов, но поле называется
+           slides. create_pdf обещает meta.pages — без него ломаются старые
+           проверки и внешние вызовы, которые считают страницы PDF. */
+        return {
+          ...built,
+          text: built.text.replace(/^Дека создана/, 'Презентация создана'),
+          meta: { ...built.meta, pages: built.meta.slides },
+        };
       }
       const { buffer: buf, engine, layout } = await makePdf(spec, { document: createDocumentPdf, slides: createPresentationPdf });
       if (!buf.length) throw new Error('Не удалось собрать PDF: нет содержимого');
