@@ -95,14 +95,27 @@ await test('html-теги и сущности', async () => {
   check('слова те же', sameWords('Абзац текста и ещё', after), after);
 });
 
-await test('диалоговое тире и настоящие числа не ломаются', async () => {
+await test('диалоговое тире убрано, настоящие числа и имена не ломаются', async () => {
   const before = '— Здравствуйте!\n— 2 * 3 = 6, а snake_case — это имя.\nЦена 1 500 руб.';
   const after = speechText(before);
-  check('тире диалога на месте', after.startsWith('— Здравствуйте!'), after.split('\n')[0]);
+  check('тире диалога нет', !/[—–]/.test(after), after.replace(/\n/g, ' / '));
+  check('реплика на месте', after.startsWith('Здравствуйте!'), after.split('\n')[0]);
   check('умножение цело', after.includes('2 * 3 = 6'), after.replace(/\n/g, ' / '));
   check('snake_case цел', after.includes('snake_case'), after.replace(/\n/g, ' / '));
   check('число цело', after.includes('1 500'), after.replace(/\n/g, ' / '));
   check('слова те же', sameWords(before, after));
+});
+
+await test('служебные знаки, номер, параграф, адреса', async () => {
+  const before = '## Итог № 5: § 3, смотри https://example.com/x и mail@test.ru.\n— Главное: 25% и 3/4.';
+  const after = speechText(before);
+  check('решёток нет', !after.includes('#'), after.replace(/\n/g, ' / '));
+  check('номер словом', after.includes('номер 5'), after.replace(/\n/g, ' / '));
+  check('параграф словом', after.includes('параграф 3'), after.replace(/\n/g, ' / '));
+  check('адресов и почты нет', !after.includes('http') && !after.includes('@'), after.replace(/\n/g, ' / '));
+  check('тире нет', !/[—–]/.test(after), after.replace(/\n/g, ' / '));
+  check('проценты и дробь целы', after.includes('25%') && after.includes('3/4'), after.replace(/\n/g, ' / '));
+  check('слова на месте', after.includes('Итог') && after.includes('Главное'), after.replace(/\n/g, ' / '));
 });
 
 await test('большой текст: ни одно слово не пропало', async () => {
