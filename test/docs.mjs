@@ -286,15 +286,19 @@ test('PDF-документ: A4, обложка, KPI, таблица', async () =
 });
 
 test('PDF-презентация: 16:9 и KPI-строка', async () => {
+  /* create_pdf с layout:'slides' печатается дизайн-системой деки (HTML→PDF),
+     а не pdfkit: иначе та же презентация выглядела двумя разными файлами. */
   const result = await executeTool(
     'create_pdf',
     { path: 'Презентация.pdf', layout: 'slides', cover: true, title: 'Рост выручки', slides: [{ kicker: 'Итоги', title: 'Выручка растёт', bullets: ['Средний чек +12%.'], kpi: [{ value: '184,6 млн ₽', label: 'Выручка' }] }] },
     ctx,
   );
-  assert.equal(result.meta.layout, 'slides');
-  assert.ok(result.meta.pages >= 2);
+  assert.equal(result.meta.origin, 'create_pdf');
+  assert.ok(result.meta.slides >= 2);
+  assert.equal(result.meta.layout.ok, true, `раскладка презентации: ${JSON.stringify(result.meta.layout)}`);
   const buffer = read('Презентация.pdf');
-  assert.match(buffer.toString('latin1'), /\/MediaBox \[0 0 95[0-9.]+ 540\]/);
+  assert.match(buffer.toString('latin1'), /\/MediaBox \[0 0 1200\.9[0-9]* 676\.0[0-9]*\]/);
+  assert.match(result.text, /Презентация создана/);
 });
 
 test('ошибки: неверное расширение и выход из проекта', async () => {

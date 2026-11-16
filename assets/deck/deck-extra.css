@@ -21,11 +21,25 @@
 /* —— KPI: три-четыре цифры под тезисом —— */
 .kpi{position:absolute;left:92px;right:92px;top:452px;display:grid;gap:30px}
 .kpi .cell{border-top:2px solid var(--accent);padding-top:24px}
-.kpi .v{font-weight:800;font-size:112px;line-height:.86;letter-spacing:-.045em;color:var(--accent-hi)}
+.kpi .v{font-weight:800;font-size:112px;line-height:.86;letter-spacing:-.045em;color:var(--accent-hi);white-space:nowrap}
+.kpi .v .u{font-size:34px;font-weight:600;letter-spacing:-.01em;margin-left:18px;color:var(--muted)}
+.kpi .v.long{font-size:78px}
+.kpi .v.xlong{font-size:52px}
 .kpi .l{margin-top:16px;font-weight:500;font-size:14.5px;line-height:1.55;color:var(--muted)}
+
+/* Длинная вторая строка обложки: не обрезаем смысл, а уменьшаем кегль. */
+.h1 .l2.long{font-size:74px}
+.h1 .l2.xlong{font-size:58px}
+
+/* На тёмных карточках плана текст был 13,5 px и терялся на светлом слайде. */
+.step .d{font-size:15px;line-height:1.55;color:rgba(255,255,255,.72)}
+.step .meta{color:rgba(255,255,255,.52)}
 
 /* —— цитата: крупный текст и подпись с чертой —— */
 .quote{position:absolute;left:92px;top:50%;transform:translateY(-54%);width:1240px}
+/* акцентная засечка над цитатой: держит тот же язык, что рамка на других слайдах */
+.quote::before{content:'';position:absolute;left:0;top:-64px;width:104px;height:3px;
+  background:var(--accent)}
 .quote .q{font-weight:700;font-size:64px;line-height:1.14;letter-spacing:-.025em;color:var(--text)}
 .quote .q em{color:var(--accent-hi);font-style:normal}
 .quote .who{margin-top:44px;display:flex;align-items:center;gap:20px;
@@ -37,17 +51,26 @@
    Фон и текст — соседи, а не родитель с ребёнком: абсолютный фон красится
    ПОВЕРХ обычного блока в потоке, поэтому телу нужен свой z-index. */
 .section{position:absolute;inset:0;background:linear-gradient(160deg,var(--bg-2),var(--bg) 70%)}
-.section-body{position:absolute;left:92px;top:206px;width:1100px;z-index:2}
+/* Разделитель — это пауза в деке, а не пустая страница: тело стоит по
+   центру поля, сверху акцентная засечка, номер части крупным кеглем. */
+.section-body{position:absolute;left:92px;top:50%;transform:translateY(-52%);width:1100px;z-index:2}
+.section-body::before{content:'';position:absolute;left:0;top:-46px;width:104px;height:3px;
+  background:var(--accent)}
 .section-body .num{font-weight:800;font-size:190px;line-height:.8;letter-spacing:-.05em;
   color:var(--accent-hi);opacity:.92}
 .section-body h2{margin-top:24px;font-weight:800;font-size:84px;line-height:.98;
   letter-spacing:-.03em;text-transform:uppercase;color:var(--text)}
-.section-body .lead{margin-top:26px;max-width:640px}
+.section-body .lead{margin-top:26px;max-width:700px;font-size:18px;line-height:1.6;
+  color:rgba(255,255,255,.64)}
 
 /* —— финал: утверждение на акцентном поле —— */
 .closing{position:absolute;inset:0;
   background:linear-gradient(120deg,var(--accent-hi),var(--accent) 45%,var(--accent-deep));
   background:radial-gradient(90% 120% at 82% 12%,var(--accent-hi) 0%,var(--accent) 42%,var(--accent-deep) 100%)}
+/* Тихое поле справа: два концентрических кольца, чтобы финал не выглядел
+   пустой заливкой. Это геометрия, а не текст — замер раскладки её не видит. */
+.closing::after{content:'';position:absolute;right:-140px;top:-220px;width:880px;height:880px;
+  border-radius:50%;border:1px solid rgba(0,0,0,.10);box-shadow:0 0 0 120px rgba(0,0,0,.035)}
 .closing-body{position:absolute;left:92px;top:50%;transform:translateY(-50%);width:1180px;z-index:2}
 .closing-body .k{font-family:var(--cond);font-weight:500;font-size:13px;letter-spacing:.24em;
   text-transform:uppercase;color:var(--on-accent);opacity:.66}
@@ -56,8 +79,112 @@
 .closing-body .lead{margin-top:30px;max-width:640px;color:var(--on-accent);opacity:.72}
 .closing-body .pill{margin-top:38px;background:var(--on-accent);color:var(--accent-hi)}
 body[data-theme="cobalt"] .closing .pill{color:var(--accent-deep)}
+/* Финал держит ту же рамку, что и остальные слайды, но в тёмной краске:
+   акцентная линия на акцентном поле не видна. */
+.closing-slide .frame{border-color:rgba(0,0,0,.20)}
+.closing-slide .frame::before,.closing-slide .frame::after,.closing-slide .frame i{opacity:.30}
+body[data-theme="cobalt"] .closing-slide .frame{border-color:rgba(255,255,255,.26)}
 
 /* —— подвал на акцентном поле: белый текст там не читается —— */
 .footnote.dark{color:var(--on-accent);opacity:.52}
 /* —— план без подписей времени: карточки держим высокими, текст по центру —— */
 .steps.no-meta .step{justify-content:center}
+
+/* ==========================================================================
+   ОФОРМЛЕНИЕ: рамка, световое пятно, картинки, монограмма-табличка.
+   Всё это декоративный слой: он не сдвигает сетку (поля 92 px, верх 128 px),
+   поэтому замер раскладки продолжает работать как раньше.
+   ========================================================================== */
+
+/* —— слой оформления: подрезает градиент по полю слайда —— */
+.deco{position:absolute;inset:0;overflow:hidden;pointer-events:none}
+
+/* —— рамка: тонкая линия по полю и четыре уголка —— */
+.frame{position:absolute;inset:38px;border:1px solid var(--line);border-radius:2px;
+  pointer-events:none}
+.frame::before,.frame::after{content:'';position:absolute;width:44px;height:44px;
+  border:0 solid var(--accent-hi);opacity:.55}
+.frame::before{left:-1px;top:-1px;border-left-width:2px;border-top-width:2px}
+.frame::after{right:-1px;bottom:-1px;border-right-width:2px;border-bottom-width:2px}
+.frame i{position:absolute;width:44px;height:44px;border:0 solid var(--accent-hi);opacity:.55}
+.frame i:nth-child(1){right:-1px;top:-1px;border-right-width:2px;border-top-width:2px}
+.frame i:nth-child(2){left:-1px;bottom:-1px;border-left-width:2px;border-bottom-width:2px}
+
+/* —— световое пятно: градиент акцента в фоне, вместо плоской заливки —— */
+.glow{position:absolute;pointer-events:none;border-radius:50%;
+  background:radial-gradient(closest-side,var(--accent) 0%,rgba(0,0,0,0) 72%);
+  opacity:.16;filter:blur(24px)}
+.glow-tr{right:-260px;top:-320px;width:1100px;height:1100px}
+.glow-bl{left:-320px;bottom:-420px;width:1000px;height:1000px;opacity:.12}
+.glow-c{left:50%;top:50%;width:1200px;height:1200px;transform:translate(-50%,-50%);opacity:.10}
+
+/* —— монограмма: скромный знак в углу, а не плита на пол-слайда ——
+   Было две беды. Сначала .big печатался кеглем 350 px: на золоте «СВ»
+   сливалось в сплошной чёрный прямоугольник в углу. Потом появилась карточка
+   с рамкой — и в ней всё равно стоял огромный плейсхолдер «Aa», который
+   выглядел как случайно вклеенный блок. Теперь знак печатается словами:
+   волосяная линейка, монограмма 72 px, подпись. Нет знака — нет таблички. */
+.specimen{right:88px;bottom:150px;text-align:right;line-height:1}
+.specimen::before{content:'';display:block;margin:0 0 14px auto;width:64px;height:2px;
+  background:var(--on-accent);opacity:.42}
+.specimen .big{display:block;font-weight:800;font-size:72px;letter-spacing:-.035em;
+  color:var(--on-accent);opacity:.95;text-shadow:none}
+.specimen .tag{position:static;display:block;margin-bottom:12px;
+  font-family:var(--cond);font-size:11px;letter-spacing:.2em;text-transform:uppercase;
+  color:var(--on-accent);opacity:.66}
+body[data-theme="cobalt"] .specimen .big{color:var(--on-accent)}
+
+/* —— фото: карточка с рамкой и мягкой тенью —— */
+.shot-card{position:absolute;right:92px;top:128px;width:604px;bottom:150px;
+  overflow:hidden;border-radius:3px;border:1px solid var(--line);
+  box-shadow:0 30px 70px rgba(0,0,0,.45)}
+.shot-card img{width:100%;height:100%;object-fit:cover;display:block}
+.shot-card::after{content:'';position:absolute;inset:0;
+  background:linear-gradient(200deg,rgba(0,0,0,0) 55%,rgba(0,0,0,.42))}
+.shot-card .cap{position:absolute;left:24px;right:24px;bottom:20px;z-index:2;
+  font-family:var(--cond);font-size:11px;letter-spacing:.18em;text-transform:uppercase;
+  color:rgba(255,255,255,.80)}
+
+/* —— макет «текст + фото»: текст слева, картинка справа —— */
+.split .claim{width:720px}
+.shot-empty{background:linear-gradient(155deg,var(--bg-2),var(--bg) 62%);display:flex;
+  align-items:flex-end;justify-content:flex-start}
+.shot-empty::before{content:'';position:absolute;inset:26px;border:1px dashed var(--line)}
+.shot-empty::after{background:linear-gradient(200deg,rgba(0,0,0,0),rgba(0,0,0,.28))}
+.split .items{margin-top:38px;border-top:1px solid var(--line);max-width:720px}
+.split .item{display:grid;grid-template-columns:52px 1fr;gap:22px;align-items:baseline;
+  padding:20px 0;border-bottom:1px solid var(--line)}
+.split .item .n{font-family:var(--cond);font-size:14px;letter-spacing:.14em;color:var(--accent-hi)}
+.split .item .t{font-weight:700;font-size:20px;line-height:1.28;color:var(--text)}
+.split .item .d{margin-top:6px;font-weight:500;font-size:14.5px;line-height:1.56;color:var(--muted)}
+
+/* —— макет «фото во весь слайд»: затемнение под текстом —— */
+.media-slide .shot{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.media-slide .scrim{position:absolute;inset:0;
+  background:linear-gradient(100deg,rgba(8,8,10,.94) 0%,rgba(8,8,10,.82) 46%,rgba(8,8,10,.35) 100%)}
+.media-slide .claim{top:auto;left:92px;right:92px;bottom:158px;width:auto;max-width:1040px}
+.media-slide .claim .h{font-size:88px;line-height:1.02}
+.media-slide .claim .lead{margin-top:26px;max-width:720px;font-size:20px;line-height:1.62;
+  color:rgba(255,255,255,.80)}
+.media-slide .cap-line{margin-top:26px;font-family:var(--cond);font-size:12px;letter-spacing:.2em;
+  text-transform:uppercase;color:rgba(255,255,255,.52)}
+.media-slide .badge{z-index:2}
+.media-slide .pageno{z-index:2}
+
+/* —— обложка с фотографией: тёмное поле, рамка, свет слева —— */
+.cover-photo .shot{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.cover-photo .scrim{position:absolute;inset:0;
+  background:linear-gradient(97deg,rgba(10,10,12,.96) 0%,rgba(10,10,12,.86) 42%,rgba(10,10,12,.28) 78%,rgba(10,10,12,.55) 100%)}
+.cover-photo .cover-copy{z-index:2}
+.cover-photo .h1 .l2{color:var(--accent-hi)}
+.cover-photo .specimen{right:88px;bottom:132px}
+.cover-photo .specimen::before{background:var(--accent-hi);opacity:.6}
+.cover-photo .specimen .big{font-size:64px;color:var(--accent-hi);opacity:1}
+.cover-photo .specimen .tag{color:var(--text);opacity:.62}
+.cover-photo .vignette{z-index:1}
+
+/* —— реестр/список: чем меньше строк, тем выше строка — воздух распределяем —— */
+.grid.rows-2 .row{padding:74px 0}
+.grid.rows-3 .row{padding:48px 0}
+.list .items.tight-2 .item{padding:34px 0}
+.list .items.tight-3 .item{padding:27px 0}

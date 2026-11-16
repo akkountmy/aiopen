@@ -153,7 +153,10 @@ export function parseCMaps(streams) {
 
     for (const block of blockRanges(text, 'beginbfchar', 'endbfchar')) {
       let i = 0;
+      let guard = 0;
       while (i < block.length) {
+        /* Страховка от вечного цикла: каждая итерация обязана съесть символ. */
+        if (++guard > block.length + 8) break;
         const open = block.indexOf('<', i);
         if (open < 0) break;
         const close = block.indexOf('>', open);
@@ -173,7 +176,11 @@ export function parseCMaps(streams) {
 
     for (const block of blockRanges(text, 'beginbfrange', 'endbfrange')) {
       let i = 0;
+      let guard = 0;
       while (i < block.length) {
+        /* Тот же предохранитель: индексы в PDF бывают относительными,
+           и ошибка в них раньше замораживала разбор на одном месте. */
+        if (++guard > block.length + 8) break;
         const open = block.indexOf('<', i);
         if (open < 0) break;
         const close = block.indexOf('>', open);
@@ -229,7 +236,7 @@ export function parseCMaps(streams) {
             const decoded = utf16Text(target);
             if (decoded) map.set(`${low.length}:${first + step}`, decoded);
           }
-          i = targetClose + 1;
+          i = highClose + 1 + targetClose + 1;
           continue;
         }
         i = highClose + 1;

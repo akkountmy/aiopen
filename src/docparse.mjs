@@ -308,28 +308,72 @@ const MAX_PARSE_BYTES = 64 * 1024 * 1024;
  * Смысл тот же, что у страниц: jsdom и разборщики офисных форматов — обычный
  * синхронный код, и в главном потоке они на секунды останавливают HTTP,
  * сторожевой таймер и журнал. Небольшие файлы (до 512 КБ) разбираются на месте:
- * это быстрее, чем поднимать поток. Любая неудача потока — не повод терять
- * файл: разбираем на месте, как раньше.
+ * это быстрее, чем поднимать поток. Исключение — PDF: даже 234 КБ с Chromium-
+ * вёрсткой содержали такой CMap, что разбор завис навсегда. PDF — недоверенный
+ * ввод, поэтому всегда уходит в поток с таймаутом; неудача не повторяется в
+ * главном потоке, иначе зависание повторится уже без права на ошибку.
  */
 export async function extractDocumentTextOffThread(buf, name, mime = '', limits = {}) {
+  const kind = detectKind(name, mime);
+  const isPdf = kind === 'pdf';
   if (buf.length > MAX_PARSE_BYTES) {
     return {
-      kind: detectKind(name, mime),
+      kind,
       text: '',
       warnings: [`Файл больше ${Math.round(MAX_PARSE_BYTES / 1024 / 1024)} МБ — разобрать его внутри сервиса нельзя.`],
     };
   }
-  if (buf.length <= 512 * 1024 || !parseThreadEnabled()) {
+  if ((buf.length <= 512 * 1024 && !isPdf) || !parseThreadEnabled()) {
     return extractDocumentText(buf, name, mime, limits);
   }
   try {
     const copy = Buffer.from(buf);
+    /* Маленький Buffer живёт в общем пуле, и его ArrayBuffer нельзя передать
+       потоку (Node: Cannot transfer object of unsupported type). Передаём
+       только собственный, неразделяемый буфер; иначе поток получает копию. */
+    const own = copy.byteOffset === 0 && copy.byteLength === copy.buffer.byteLength;
     return await parseOffThread(
       { kind: 'document', buf: copy, name, mime, limits },
-      { timeoutMs: 60000, transfer: [copy.buffer] },
+      { timeoutMs: 60000, transfer: own ? [copy.buffer] : [] },
     );
   } catch (error) {
-    console.warn(`[docparse] ${name}: разбор в потоке не удался (${String(error?.message || error)}) — разбираю на месте`);
+    const reason = String(error?.message || error);
+    console.warn(`[docparse] ${name}: разбор в потоке не удался (${reason}) — проверяю запасной путь`);
+    /* PDF в главном потоке не повторяем ни при какой ошибке: именно там
+       бесконечный CMap заморозил HTTP на 240 секунд. Пусть лучше не будет
+       текстового слоя — сам файл по-прежнему открывается в просмотрщике. */
+    if (isPdf) {
+      return {
+        kind,
+        text: '',
+        warnings: [
+          'PDF слишком сложный для разбора на этом тарифе: текстовый слой не извлечён. ' +
+            'Сам файл можно открыть и скачать — он не повреждён.',
+        ],
+      };
+    }
+    /* Если поток убит собственной памятью, разбор в главном потоке — верный
+       способ уронить весь сервис: тот же документ потребует те же сотни
+       мегабайт, только уже без права на ошибку. Лучше честное предупреждение. */
+    if (/памят|memory|heap|ERR_WORKER_OUT_OF_MEMORY/i.test(reason)) {
+      return {
+        kind,
+        text: '',
+        warnings: [
+          `Документ слишком тяжёлый для разбора на этом тарифе (поток не поместился в память). ` +
+            'Пришлите фрагмент или файл меньшего размера.',
+        ],
+      };
+    }
+    /* Большой файл после таймаута тоже не разбираем на месте: синхронный
+       разбор снова займёт поток HTTP-сервера. */
+    if (buf.length > 4 * 1024 * 1024) {
+      return {
+        kind,
+        text: '',
+        warnings: ['Разбор в отдельном потоке не удался, а файл больше 4 МБ — разбирать его в основном потоке рискованно.'],
+      };
+    }
     return extractDocumentText(buf, name, mime, limits);
   }
 }

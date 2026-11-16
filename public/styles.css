@@ -3096,9 +3096,49 @@ html.kb-open .scroll-jump {
   white-space: nowrap;
 }
 
-/* Крестика закрытия в панели нет: на широком экране закрывать нечего, а в
-   выезжающем ящике панель закрывают затемнением, кнопкой-папкой в шапке и
-   Escape. */
+/* Крестик закрытия: на широком экране закрывать нечего, поэтому кнопка
+   спрятана; в выезжающем ящике она появляется (см. медиазапрос ниже). */
+.files-close {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--layer-2);
+  color: var(--text-2);
+  cursor: pointer;
+  appearance: none;
+  -webkit-tap-highlight-color: transparent;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.files-close:hover {
+  background: var(--layer-hover);
+  border-color: var(--line-strong);
+  color: var(--text);
+}
+
+.files-close:active {
+  background: var(--layer-3);
+}
+
+.files-close:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.files-close svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+}
 
 /* Строки с путём над списком больше нет: папки раскрываются на месте, как в
    панели «Проекты», и путь никуда не ведёт — перехода «внутрь папки» нет. */
@@ -3124,6 +3164,21 @@ html.kb-open .scroll-jump {
   padding: 2px 8px 14px;
   scrollbar-width: thin;
   scrollbar-color: var(--layer-3) transparent;
+}
+
+/* Пустой список держит карточку по центру высоты панели: иначе объяснение
+   висело в верхней трети, а ниже оставалось белое поле — та самая «пустая
+   белая шторка», на которую жаловались. */
+.files-list-empty {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding-bottom: 72px;
+}
+
+.files-list-empty .files-empty-card {
+  margin: 0 auto;
+  max-width: 300px;
 }
 
 /* -------------------- прослушивание MP3 в панели файлов --------------------
@@ -3660,6 +3715,54 @@ html.kb-open .scroll-jump {
 .files-empty {
   padding: 28px 14px;
   text-align: center;
+  color: var(--text-4);
+  font-size: var(--fs-13);
+  line-height: var(--lh-20);
+}
+
+/* Пустой и загружающийся список — это не белое поле на весь экран, а
+   оформленный блок: иконка, заголовок и подсказка. Раньше здесь стояла одна
+   строка мелкого текста, и шторка на телефоне выглядела пустым белым окном. */
+.files-empty-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 34px 18px 30px;
+  text-align: center;
+}
+
+.files-empty-card .files-empty-ico {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 46px;
+  height: 46px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--layer-2);
+  color: var(--text-3);
+}
+
+.files-empty-card .files-empty-ico svg {
+  width: 22px;
+  height: 22px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.4;
+  stroke-linejoin: round;
+}
+
+.files-empty-card b {
+  color: var(--text);
+  font-size: var(--fs-14);
+  font-weight: 600;
+  line-height: var(--lh-20);
+}
+
+.files-empty-card p {
+  max-width: 240px;
+  margin: 0;
   color: var(--text-4);
   font-size: var(--fs-13);
   line-height: var(--lh-20);
@@ -4673,6 +4776,12 @@ html.kb-open .scroll-jump {
     display: none;
   }
   .files-toggle {
+    display: inline-flex;
+  }
+  /* Ящик файлов закрывается крестиком: свайп вправо и тап по затемнению тоже
+     работают, но их надо знать, а белая панель на весь экран без выхода
+     выглядит как «окно, из которого не выйти». */
+  .files-close {
     display: inline-flex;
   }
 
@@ -8002,6 +8111,16 @@ html.kb-open .scroll-jump {
   font-variant-numeric: tabular-nums;
   color: var(--text-2);
   font-size: var(--fs-14);
+}
+
+/* Перерисовка открытого файла: дека пересобрана, а окно просмотра показывало
+   прошлую версию. Кнопка стоит справа от счётчика страниц и говорит словами,
+   что она делает. */
+.pdf-refresh {
+  margin-left: 8px;
+  height: 32px;
+  padding: 0 12px;
+  font-size: var(--fs-13);
 }
 
 .preview-status {

@@ -230,9 +230,10 @@ const loopMonitor = createLoopMonitor({
 const watchdog = startWatchdog({
   hangMs: CAPACITY.watchdogSec * 1000,
   onBeat: () => {
-    const memory = memoryStats();
+    const memory = memoryPressure();
     const capacity = runGate.stats();
-    console.log(`[beat] прогонов ${capacity.active}, ждут ${capacity.waiting ?? 0}, память ${memory.rssMb} МБ, очередь ${loopMonitor.stats().loopLagMs} мс`);
+    const container = memory.containerMb == null ? '—' : `${memory.containerMb} МБ`;
+    console.log(`[beat] прогонов ${capacity.active}, ждут ${capacity.waiting ?? 0}, память ${memory.rssMb} МБ (процесс ${memory.processRssMb}, контейнер ${container}), очередь ${loopMonitor.stats().loopLagMs} мс`);
   },
   onHang: ({ blockedMs, at }) => {
     const seconds = Math.round(blockedMs / 1000);
@@ -280,11 +281,13 @@ async function acquireRunSlotOrReject(res) {
      который убивает весь сервис вместе с чужими диалогами. */
   const pressure = memoryPressure();
   if (pressure.over) {
-    console.log(`[capacity] память ${pressure.rssMb} MB выше потолка ${pressure.limitMb} MB — задача отклонена`);
+    const total = pressure.containerLimitMb ? `${pressure.rssMb} из ${pressure.containerLimitMb} МБ` : `${pressure.rssMb} МБ`;
+    const where = pressure.containerLimitMb ? `, контейнер ${total}` : '';
+    console.log(`[capacity] память ${pressure.rssMb} MB выше потолка ${pressure.limitMb} MB${where} — задача отклонена`);
     sendError(
       res,
       503,
-      `Сервис сейчас на пределе памяти (${pressure.rssMb} из ${pressure.limitMb} MB). Это временно: текущие ответы допишутся, память освободится. Повторите через минуту.`,
+      `Сервис сейчас на пределе памяти (${total}). Это временно: текущие ответы допишутся, память освободится. Повторите через минуту.`,
       { 'Retry-After': '60' },
     );
     return { slot: null, rejected: true };
@@ -668,7 +671,11 @@ function finishRun(run, status) {
    Предел попыток нужен, чтобы задача, которая сама роняет процесс, не
    перезапускалась бесконечно. После исчерпания попыток в диалоге остаётся
    честное сообщение — и только тогда человека просят продолжить вручную. */
-const RESUME_MAX_ATTEMPTS = 10;
+/* Две попытки, а не десять. Если задача дважды убила контейнер, третья
+   попытка с теми же входными данными почти наверняка сделает то же самое:
+   на 500 МБ это повторные OOM и 503 у всех. После двух сбоев честно
+   останавливаемся и просим разбить задачу на части. */
+const RESUME_MAX_ATTEMPTS = 2;
 /* Контекст не истекает по возрасту: пометку о перезапуске поднимаем, сколько бы
    времени ни прошло. Раньше здесь стоял недельный предел — из-за него работа
    человека пропадала из-за одной даты, хотя всё сделанное лежало на диске.
@@ -871,7 +878,7 @@ function resumeChat(meta, user, source = 'startup') {
     chat.messages.push({
       role: 'assistant',
       content: '',
-      error: `Задача прерывалась уже ${RESUME_MAX_ATTEMPTS} раза подряд. Автоматически продолжать её не буду, чтобы не зациклиться. Напишите «продолжи» — и я подхвачу её с сохранённого места.`,
+      error: `Задача прерывалась уже ${RESUME_MAX_ATTEMPTS} раза подряд. Автоматически продолжать её не буду, чтобы не зациклиться. Частая причина на этом тарифе — нехватка памяти: разбейте задачу на части или упростите её. Напишите «продолжи» — и я подхвачу её с сохранённого места.`,
       interrupted: true,
       resumeFailed: true,
       at: nowIso(),
@@ -4161,7 +4168,7 @@ async function route(req, res) {
             runMaxMinutes: Math.round(CAPACITY.runMaxMs / 60000),
             modelTimeoutSeconds: Math.round(CAPACITY.modelTimeoutMs / 1000),
             maxRssMb: CAPACITY.maxRssMb,
-            rssMb: memoryStats().rssMb,
+            rssMb: memoryPressure().rssMb,
             maxWaitingRuns: CAPACITY.maxWaiting,
             /* Что дал тариф: по этим числам видно, честно ли выставлены пределы.
                Вне Linux-контейнера не читается — тогда null, а не выдумка. */

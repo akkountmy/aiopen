@@ -12,6 +12,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { extractDocumentText, detectKind, kindLabel } from '../src/docparse.mjs';
+import { parseCMaps } from '../src/pdf-text.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(here, '..');
@@ -85,6 +86,19 @@ test('обычный PDF из demo/ разбирается быстро', () => 
   const { value, ms } = time(() => extractDocumentText(buf, 'Психологическая-сессия.pdf'));
   assert.equal(value.kind, 'pdf');
   assert.ok(ms < 1500, `разбор PDF на ${buf.length} байт занял ${ms.toFixed(0)} мс`);
+});
+
+test('CMap с одной целью bfrange не зацикливается', () => {
+  /* Chromium печатает короткие диапазоны как <lo> <hi> <target> — без массива
+     целей. Индекс цели здесь относительный, и ошибка в нём однажды заморозила
+     просмотр PDF на 240 секунд. Проверяем и скорость, и сами символы. */
+  const cmap = '/CIDInit /ProcSet findresource begin\nbegincmap\n1 begincodespacerange <0000> <FFFF> endcodespacerange\n1 beginbfrange\n<0025> <0026> <0418>\nendbfrange\nendcmap';
+  const { value, ms } = time(() => parseCMaps([cmap]));
+  assert.equal(value.length, 1);
+  assert.equal(value[0].width, 2);
+  assert.equal(value[0].map.get('2:37'), 'И');
+  assert.equal(value[0].map.get('2:38'), 'Й');
+  assert.ok(ms < 500, `разбор CMap занял ${ms.toFixed(0)} мс`);
 });
 
 test('злой PDF: тысячи скобок и массивов не вешают разбор', () => {

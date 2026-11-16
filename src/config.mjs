@@ -253,6 +253,18 @@ function defaultMaxRssMb() {
   return Math.min(1536, Math.max(256, Math.round((container * 0.75) / 8) * 8));
 }
 
+/** Сколько тяжёлых работ (браузер, Python, распаковка) пускать одновременно.
+ *  На тарифе 500 МБ даже один Chromium съедает почти половину памяти, поэтому
+ *  по умолчанию там ровно одно место. На ноутбуке и на больших тарифах
+ *  оставляем прежние три. */
+function defaultHeavyTools() {
+  const container = containerMemoryMb();
+  if (!container) return 3;
+  if (container <= 640) return 1;
+  if (container <= 1024) return 2;
+  return 3;
+}
+
 /** Целое из окружения: не задано или мусор — берём запасное значение.
  *  Отдельная функция, потому что нужна выше, чем общий count (он объявлен
  *  ниже и до этого места ещё не существует). */
@@ -341,8 +353,9 @@ export const CAPACITY = {
    *  напишет, а «нажму сорок раз» перестаёт топить остальных. */
   messagesPerUser: envCount(process.env.DSHOW_MESSAGES_PER_10MIN, 60),
   /** Сколько одновременно тяжёлых инструментов (браузер, Python, распаковка)
-   *  может работать в процессе. Один Chromium на десять задач — это OOM. */
-  heavyTools: envCount(process.env.DSHOW_HEAVY_TOOLS, 3),
+   *  может работать в процессе. Один Chromium на десять задач — это OOM.
+   *  По умолчанию зависит от памяти контейнера: на 500 МБ — одно место. */
+  heavyTools: envCount(process.env.DSHOW_HEAVY_TOOLS, defaultHeavyTools()),
   /** Сколько страниц одновременно тянет краулер внутри одного вызова. */
   crawlConcurrency: envCount(process.env.DSHOW_CRAWL_CONCURRENCY, 2),
   /** Потолок времени на один сетевой инструмент (краулер, обход сайта):

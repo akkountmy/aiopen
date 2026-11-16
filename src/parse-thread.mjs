@@ -19,15 +19,21 @@
  */
 import { Worker } from 'node:worker_threads';
 import { fileURLToPath } from 'node:url';
+import { heavyPressure } from './capacity.mjs';
 
 const WORKER_FILE = fileURLToPath(new URL('./parse-worker.mjs', import.meta.url));
 
-/* Пределы подобраны под контейнер 500 МБ / 0.25 ядра: heap потока 224 МБ —
-   это уже много, но главный поток при этом остаётся живым и отвечает. */
-const MAX_OLD_MB = envNumber('DSHOW_PARSE_THREAD_HEAP_MB', 224);
-const MAX_YOUNG_MB = 32;
-const IDLE_EXIT_MS = 45000;
-const QUEUE_LIMIT = 3;
+/* Пределы подобраны под контейнер 500 МБ / 0.25 ядра. 224 МБ оказалось
+   слишком много: вместе с главным потоком (~130 МБ) и Chromium (~220 МБ)
+   контейнер упирался в 500 МБ и платформа убивала сервис. 96 МБ, наоборот,
+   не хватало обычной странице книги на 350 КБ — она уходила в regex-разбор.
+   144 МБ проходят этот тест, а тяжёлые инструменты в это время не стартуют:
+   их порог в capacity.mjs ниже суммы «главный поток + разборщик». Поток
+   гасим через 8 секунд простоя: память возвращается до запуска браузера. */
+const MAX_OLD_MB = envNumber('DSHOW_PARSE_THREAD_HEAP_MB', 144);
+const MAX_YOUNG_MB = 16;
+const IDLE_EXIT_MS = 8000;
+const QUEUE_LIMIT = 2;
 const DEFAULT_TIMEOUT_MS = 45000;
 
 function envNumber(name, fallback) {
@@ -168,6 +174,23 @@ export function parseOffThread(task, { timeoutMs = DEFAULT_TIMEOUT_MS, transfer 
     return Promise.reject(
       Object.assign(new Error('разборщик занят: слишком много страниц сразу'), { name: 'ParseBusyError' }),
     );
+  }
+  /* Если разборщик ещё не запущен, а память уже занята браузером или Python,
+     новый поток добил бы контейнер. Живой поток переиспользуем: он уже учтён
+     в памяти. */
+  if (!slot || slot.dead) {
+    const pressure = heavyPressure();
+    if (pressure.over) {
+      return Promise.reject(
+        Object.assign(
+          new Error(
+            `память занята тяжёлым инструментом (${pressure.rssMb} МБ, порог ${pressure.heavyLimitMb} МБ) — ` +
+              'разбор отложен до его завершения',
+          ),
+          { name: 'ParseBusyError' },
+        ),
+      );
+    }
   }
   stats.tasks += 1;
   return new Promise((resolve, reject) => {

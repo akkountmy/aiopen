@@ -4084,6 +4084,7 @@ function readFilesUi() {
 
 function restoreFilesUi(saved = readFilesUi()) {
   if (!saved || !saved.drawer) return false;
+  if (!state.user) return false;
   if (!filesNarrow() || !state.activeProjectId) return false;
   if (saved.projectId && saved.projectId !== filesProjectId()) return false;
   if (state.filesDrawerOpen) return false;
@@ -4118,6 +4119,9 @@ function syncFilesPanel({ reload = false } = {}) {
 
 function openFilesDrawer({ reload = true } = {}) {
   if (!filesNarrow() || state.filesDrawerOpen) return;
+  /* Пока не загрузились проекты, шторка открылась бы пустой белой полосой на
+     пол-экрана: списку нечего показать, а заголовок ещё не знает проекта. */
+  if (!state.user) return;
   state.filesDrawerOpen = true;
   syncFilesPanel({ reload });
   hideSwipeHint();
@@ -4156,7 +4160,22 @@ let filesSeq = 0;
    переписке. */
 async function loadFiles({ widenWhenEmpty = false } = {}) {
   const projectId = filesProjectId();
-  if (!projectId) return;
+  if (!projectId) {
+    /* Списка не будет — вместо вечного спиннера объясняем, что показать нечего. */
+    const list = $('#filesList');
+    if (list) {
+      list.innerHTML = '';
+      markFilesListEmpty(list, true);
+      list.appendChild(
+        filesEmptyCard({
+          icon: 'project',
+          title: 'Сначала выберите проект',
+          hint: 'Файлы живут в проекте: выберите его в панели «Проекты».',
+        }),
+      );
+    }
+    return;
+  }
   /* Диалог мог смениться, пока шёл запрос: ответ от прошлого вида не должен
      перерисовать список уже выбранного. */
   const scopeChatId = state.filesAll ? '' : filesChatId();
@@ -4168,7 +4187,9 @@ async function loadFiles({ widenWhenEmpty = false } = {}) {
      рисует только последний запрос. */
   const seq = ++filesSeq;
   const list = $('#filesList');
-  list.innerHTML = '<div class="files-empty"><div class="spin-lg"></div></div>';
+  list.innerHTML = '';
+  markFilesListEmpty(list, true);
+  list.appendChild(filesLoadingCard());
   state.filesLoading = true;
   try {
     const query = new URLSearchParams({ path: '.', depth: '6' });
@@ -4207,7 +4228,10 @@ async function loadFiles({ widenWhenEmpty = false } = {}) {
     if (seq !== filesSeq) return;
     if (projectId !== filesProjectId() || scopeChatId !== currentScope()) return;
     list.innerHTML = '';
-    list.appendChild(el('div', 'files-empty', error.message));
+    markFilesListEmpty(list, true);
+    list.appendChild(
+      filesEmptyCard({ icon: 'alert', title: 'Не удалось загрузить список', hint: error.message }),
+    );
   } finally {
     if (seq === filesSeq && projectId === filesProjectId() && scopeChatId === currentScope()) state.filesLoading = false;
   }
@@ -4235,9 +4259,45 @@ function pruneFilesExpanded() {
   for (const path of [...state.filesLoaded]) if (path !== '.' && !dirs.has(path)) state.filesLoaded.delete(path);
 }
 
-/* Дерево панели: папка — такая же строка с треугольником, как проект в левой
-   панели, а её документы лежат вложенным списком с отступом. Никаких переходов
-   «внутрь папки» и «Наверх» здесь нет: раскрыл — увидел, свернул — спрятал. */
+/* Компактный набор иконок для пустого списка: контурные, в той же сетке 20,
+   что и иконки кнопок панели. */
+const FILES_EMPTY_ICONS = {
+  folder: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 6.4A1.4 1.4 0 014.4 5h3.1l1.7 1.9h6.4A1.4 1.4 0 0117 8.3v6.3a1.4 1.4 0 01-1.4 1.4H4.4A1.4 1.4 0 013 14.6z"/></svg>',
+  chat: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3.2 6.1A1.9 1.9 0 015.1 4.2h9.8a1.9 1.9 0 011.9 1.9v5.4a1.9 1.9 0 01-1.9 1.9H9.2l-3.6 2.7v-2.7h-.5a1.9 1.9 0 01-1.9-1.9z"/></svg>',
+  project: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 5.6h5.2v5.2H3zM11.8 5.6H17v5.2h-5.2zM3 14.4h5.2V17H3zM11.8 14.4H17V17h-5.2z"/></svg>',
+  alert: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3.6l6.5 11.3a1 1 0 01-.87 1.5H4.37a1 1 0 01-.87-1.5z"/><path d="M10 7.7v3.6M10 13.8v.5"/></svg>',
+};
+
+function filesEmptyIcon(name) {
+  const holder = el('span', 'files-empty-ico');
+  holder.innerHTML = FILES_EMPTY_ICONS[name] || FILES_EMPTY_ICONS.folder;
+  return holder;
+}
+
+/* Пустой список — оформленный блок, а не белое поле: иконка, заголовок,
+   подсказка. Шторка на телефоне почти во весь экран, поэтому «Пока пусто»
+   одной мелкой строкой читалось как пустое белое окно. */
+function filesEmptyCard({ icon = 'folder', title = 'Пока пусто', hint = '' } = {}) {
+  const card = el('div', 'files-empty files-empty-card');
+  card.appendChild(filesEmptyIcon(icon));
+  card.appendChild(el('b', '', title));
+  if (hint) card.appendChild(el('p', '', hint));
+  return card;
+}
+
+function filesLoadingCard(text = 'Загружаем файлы…') {
+  const card = el('div', 'files-empty files-empty-card');
+  card.appendChild(el('div', 'spin-lg'));
+  card.appendChild(el('b', '', text));
+  return card;
+}
+
+/* Пустой список держим по центру высоты панели: карточка объяснения не должна
+   висеть в верхней трети, оставляя внизу белое поле. */
+function markFilesListEmpty(list, on) {
+  if (list) list.classList.toggle('files-list-empty', Boolean(on));
+}
+
 function renderFiles() {
   const list = $('#filesList');
   if (!list) return;
@@ -4245,15 +4305,27 @@ function renderFiles() {
   const scrollTop = list.scrollTop;
   list.innerHTML = '';
   if (!(state.files || []).length) {
+    markFilesListEmpty(list, true);
     const chat = filesChat();
     /* Отдельной кнопки «Показать файлы проекта» здесь нет: если в диалоге
        файлов нет, панель сама показывает файлы проекта, а переключает виды
        заголовок блока. */
     list.appendChild(
-      el('div', 'files-empty', chat && !state.filesAll ? 'В этом диалоге пока нет файлов.' : 'Пока пусто. Загрузите файл кнопкой выше.'),
+      chat && !state.filesAll
+        ? filesEmptyCard({
+            icon: 'chat',
+            title: 'В этом диалоге файлов нет',
+            hint: 'Нажмите «Файлы проекта» в заголовке — покажем файлы всего проекта.',
+          })
+        : filesEmptyCard({
+            icon: 'folder',
+            title: 'Пока пусто',
+            hint: 'Загрузите файл кнопкой «Загрузить файлы» — он появится здесь.',
+          }),
     );
     return;
   }
+  markFilesListEmpty(list, false);
   for (const node of filesTreeNodes('.')) list.appendChild(node);
   list.scrollTop = scrollTop;
   markFilesAudioRow();
@@ -6246,10 +6318,17 @@ async function mountPdfPreview(container, url) {
     const pager = el('div', 'pdf-pager');
     const prev = el('button', 'btn btn-quiet', '‹');
     const next = el('button', 'btn btn-quiet', '›');
+    /* «Обновить» — на случай, когда файл пересобрали, пока окно просмотра
+       открыто. Раньше человек видел старые страницы, а «Скачать» отдавал уже
+       новую версию: одна и та же дека выглядела двумя разными презентациями.
+       Кнопка перерисовывает окно из свежих байт, не закрывая его. */
+    const again = el('button', 'btn btn-quiet pdf-refresh', 'Обновить');
+    again.type = 'button';
+    again.title = 'Показать свежую версию файла';
     const label = el('span', 'pdf-page', '');
     prev.type = 'button';
     next.type = 'button';
-    pager.append(prev, label, next);
+    pager.append(prev, label, next, again);
     container.append(holder, pager);
 
     let pageNo = 1;
@@ -6278,6 +6357,12 @@ async function mountPdfPreview(container, url) {
     };
     prev.addEventListener('click', () => go(-1));
     next.addEventListener('click', () => go(1));
+    again.addEventListener('click', () => {
+      if (!document.body.contains(container)) return;
+      again.disabled = true;
+      container.replaceChildren();
+      mountPdfPreview(container, url).catch(() => {});
+    });
     /* Свайп влево-вправо листает страницы: на телефоне это привычнее кнопок. */
     let touchX = 0;
     holder.addEventListener('touchstart', (event) => {
@@ -6287,7 +6372,11 @@ async function mountPdfPreview(container, url) {
       const dx = (event.changedTouches[0]?.clientX || 0) - touchX;
       if (Math.abs(dx) > 50) go(dx < 0 ? 1 : -1);
     });
-    if (doc.numPages === 1) pager.classList.add('hidden');
+    /* Одностраничный файл — листать нечего, но «Обновить» остаётся на месте. */
+    if (doc.numPages === 1) {
+      prev.classList.add('hidden');
+      next.classList.add('hidden');
+    }
     /* Телефон повернули — страница должна занять новую ширину. Слушатель снимает
        себя сам, когда окно просмотра закрыли. */
     const onResize = () => {
@@ -14166,6 +14255,8 @@ $('#filesProjectTitle').addEventListener('click', () => {
   loadFiles();
 });
 $('#filesUploadBtn').addEventListener('click', () => $('#filesPanelInput').click());
+/* Крестик шторки: на широком экране кнопка скрыта, но обработчик безвреден. */
+$('#filesClose').addEventListener('click', () => closeFilesDrawer());
 $('#filesPanelInput').addEventListener('change', (event) => {
   uploadToProject(event.target.files);
   event.target.value = '';

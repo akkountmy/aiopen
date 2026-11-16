@@ -15,13 +15,18 @@ import { Worker, isMainThread, parentPort, workerData } from 'node:worker_thread
    выполнения сервис переставал отвечать всем пользователям. Теперь хозяйский
    поток свободен, а зависший код убивается вместе с потоком. */
 
-const MAX_READ_BYTES = 64 * 1024 * 1024;
+const MAX_READ_BYTES = 24 * 1024 * 1024;
 const MAX_WRITE_FILES = 40;
 const MAX_WRITE_BYTES = 16 * 1024 * 1024;
 const MAX_OUTPUT_CHARS = 20000;
 const MAX_OUTPUT_LINES = 400;
 const DEFAULT_TIMEOUT_MS = 8000;
 const MAX_TIMEOUT_MS = 20000;
+/* Потолок кучи рабочего потока. 384 МБ были больше, чем весь контейнер:
+   один run_js с большим массивом утягивал сервис в OOM. 96 МБ хватает
+   расчётам и разбору CSV; всё, что больше, должно идти через файлы. */
+const MAX_HEAP_MB = 96;
+const MAX_YOUNG_MB = 16;
 
 /** Функция-мост без прототипа: внутри песочницы у неё нет .constructor,
  *  через который можно дотянуться до Function хоста. */
@@ -347,7 +352,7 @@ export async function runJavascript({ code, root, timeoutMs = DEFAULT_TIMEOUT_MS
       workerData: { dshowSandbox: true, code: source, root, writeRoot, timeoutMs: limit },
       /* Потолок памяти на поток: код, который надувает массив в гигабайт,
          падает сам, не утягивая за собой сервис. */
-      resourceLimits: { maxOldGenerationSizeMb: 384, maxYoungGenerationSizeMb: 32 },
+      resourceLimits: { maxOldGenerationSizeMb: MAX_HEAP_MB, maxYoungGenerationSizeMb: MAX_YOUNG_MB },
       stdout: false,
       stderr: false,
     });

@@ -66,6 +66,12 @@ const TURNDOWN_MAX_CHARS = 400000;
    текста страницы, остальное отбрасываем по границе. */
 const CHEAP_MAX_CHARS = 2000000;
 
+/** Поток разбора убит собственной памятью — повторять тот же разбор в главном
+ *  потоке нельзя: он потребует те же сотни мегабайт и уронит весь сервис. */
+function isMemoryFailure(error) {
+  return /памят|memory|heap|ERR_WORKER_OUT_OF_MEMORY/i.test(String(error?.message || error));
+}
+
 /** Вырезать служебные блоки до разбора: линейно, миллисекунды. */
 export function stripJunkHtml(html) {
   return String(html || '')
@@ -758,7 +764,14 @@ export async function extractFields(html, baseUrl, selectors) {
         { timeoutMs: 45000 },
       );
     } catch (error) {
-      console.warn(`[parse] выборка полей в потоке не удалась (${String(error?.message || error)})`);
+      const message = String(error?.message || error);
+      console.warn(`[parse] выборка полей в потоке не удалась (${message})`);
+      if (isMemoryFailure(error)) {
+        throw new Error(
+          'Страница слишком тяжёлая для разбора на этом тарифе: поток не поместился в память. ' +
+            'Возьмите страницу меньшего размера или укажите более узкие селекторы.',
+        );
+      }
       return extractFieldsLocal(raw.slice(0, MAX_DOM_CHARS), baseUrl, selectors);
     }
   }

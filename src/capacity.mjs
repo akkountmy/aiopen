@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import { CAPACITY } from './config.mjs';
 
 /* Пределы одновременной работы сервиса.
@@ -167,11 +168,71 @@ export function createLoopMonitor({ intervalMs = 1000, stallMs = 700, onStall = 
   };
 }
 
+/** Память всего контейнера, а не только Node: Chromium и рабочие потоки живут
+ *  в той же cgroup, но в process.memoryUsage() их не видно. Именно поэтому
+ *  прежний потолок 376 МБ не спасал: процесс показывал 130 МБ, а контейнер в
+ *  этот момент добивал браузер. Читаем cgroup v2, затем v1. */
+export function containerStats() {
+  const read = (file) => {
+    try {
+      return fs.readFileSync(file, 'utf8').trim();
+    } catch {
+      return '';
+    }
+  };
+  const mb = (bytes) => Math.round((bytes / (1024 * 1024)) * 10) / 10;
+
+  const v2Max = read('/sys/fs/cgroup/memory.max');
+  const v2Current = read('/sys/fs/cgroup/memory.current');
+  if (/^\d+$/.test(v2Max) && /^\d+$/.test(v2Current)) {
+    const limit = Number(v2Max);
+    if (limit > 0 && limit < 1024 * 1024 * 1024 * 1024) {
+      /* anon — реальная память процесса и его детей. Файловый кэш ядро
+         освобождает само, и считать его занятым нельзя: иначе один скачанный
+         PDF навсегда закрывает тяжёлые инструменты. */
+      let used = Number(v2Current);
+      const stat = read('/sys/fs/cgroup/memory.stat');
+      const anon = /(?:^|\n)anon\s+(\d+)/.exec(stat);
+      if (anon) used = Number(anon[1]);
+      else {
+        const inactive = /(?:^|\n)inactive_file\s+(\d+)/.exec(stat);
+        if (inactive) used = Math.max(0, used - Number(inactive[1]));
+      }
+      return { usedMb: mb(used), limitMb: mb(limit) };
+    }
+  }
+
+  const v1Max = read('/sys/fs/cgroup/memory/memory.limit_in_bytes');
+  const v1Current = read('/sys/fs/cgroup/memory/memory.usage_in_bytes');
+  if (/^\d+$/.test(v1Max) && /^\d+$/.test(v1Current)) {
+    const limit = Number(v1Max);
+    if (limit > 0 && limit < 1024 * 1024 * 1024 * 1024) {
+      let used = Number(v1Current);
+      const stat = read('/sys/fs/cgroup/memory/memory.stat');
+      const rss = /(?:^|\n)total_rss\s+(\d+)/.exec(stat);
+      if (rss) used = Number(rss[1]);
+      else {
+        const inactive = /(?:^|\n)total_inactive_file\s+(\d+)/.exec(stat);
+        if (inactive) used = Math.max(0, used - Number(inactive[1]));
+      }
+      return { usedMb: mb(used), limitMb: mb(limit) };
+    }
+  }
+  return null;
+}
+
 /** Память процесса в мегабайтах — без внешних зависимостей. */
 export function memoryStats() {
   const usage = process.memoryUsage();
   const mb = (bytes) => Math.round((bytes / (1024 * 1024)) * 10) / 10;
-  return { rssMb: mb(usage.rss), heapUsedMb: mb(usage.heapUsed), externalMb: mb(usage.external) };
+  const container = containerStats();
+  return {
+    rssMb: mb(usage.rss),
+    heapUsedMb: mb(usage.heapUsed),
+    externalMb: mb(usage.external),
+    containerMb: container ? container.usedMb : null,
+    containerLimitMb: container ? container.limitMb : null,
+  };
 }
 
 /**
@@ -181,11 +242,36 @@ export function memoryStats() {
  * уже идущими ответами. Поэтому место под задачу выдаём только пока память ниже
  * потолка, а остальным честно говорим «занято, попробуйте через минуту».
  * Потолок задаётся DSHOW_MAX_RSS_MB; 0 — не ограничивать.
+ *
+ * Считаем max(process RSS, память cgroup): второй вариант ловит Chromium,
+ * Python и рабочие потоки, которых не видно в process.memoryUsage().
  */
 export function memoryPressure({ limitMb = CAPACITY.maxRssMb } = {}) {
-  const { rssMb } = memoryStats();
+  const stats = memoryStats();
+  const observed = Math.max(stats.rssMb, Number(stats.containerMb) || 0);
   const limit = Number(limitMb) || 0;
-  return { rssMb, limitMb: limit, over: limit > 0 && rssMb >= limit };
+  return {
+    ...stats,
+    rssMb: observed,
+    processRssMb: stats.rssMb,
+    limitMb: limit,
+    over: limit > 0 && observed >= limit,
+  };
+}
+
+/** Отдельный, более строгий порог для Chromium/Python: им нужно не меньше
+ *  200 МБ свободных, иначе один запуск добивает 500-мегабайтный контейнер. */
+export function heavyPressure({ limitMb = CAPACITY.maxRssMb } = {}) {
+  const pressure = memoryPressure({ limitMb });
+  const containerLimit = Number(pressure.containerLimitMb) || pressure.limitMb;
+  if (!containerLimit) return { ...pressure, heavyLimitMb: 0, over: false };
+  const reserve = Math.max(220, Math.round(containerLimit * 0.55));
+  const heavyLimit = Math.max(128, Math.min(pressure.limitMb || containerLimit, containerLimit - reserve));
+  return {
+    ...pressure,
+    heavyLimitMb: heavyLimit,
+    over: pressure.over || (heavyLimit > 0 && pressure.rssMb >= heavyLimit),
+  };
 }
 
 /* Тяжёлые инструменты: Chromium, движок анти-бота, Python, распаковка архивов.
@@ -206,13 +292,17 @@ export const heavyGate = createGate({
 export async function withHeavySlot(fn, { waitMs = null, signal } = {}) {
   /* Тяжёлый инструмент на пределе памяти — это и есть смерть контейнера:
      Chromium добавляет сотни мегабайт. Лучше понятный отказ, чем OOM. */
-  const pressure = memoryPressure();
-  if (pressure.over) {
-    throw new Error(
-      `Сейчас занято: память сервиса на пределе (${pressure.rssMb} из ${pressure.limitMb} MB). ` +
-        'Тяжёлый инструмент (браузер, Python, распаковка) запустить нельзя — повтори через минуту.',
+  const check = () => {
+    const pressure = heavyPressure();
+    if (!pressure.over) return null;
+    return (
+      `Сейчас занято: память сервиса на пределе для тяжёлого запуска (${pressure.rssMb} МБ занято, ` +
+      `нужно не больше ${pressure.heavyLimitMb} МБ). ` +
+      'Браузер, Python или распаковку запустить нельзя — повтори через минуту.'
     );
-  }
+  };
+  const initial = check();
+  if (initial) throw new Error(initial);
   let release;
   try {
     release = await heavyGate.acquire({ signal, waitMs });
@@ -224,6 +314,10 @@ export async function withHeavySlot(fn, { waitMs = null, signal } = {}) {
     );
   }
   try {
+    /* Пока ждали место, другой инструмент мог уже занять память. Проверяем
+       ещё раз непосредственно перед запуском. */
+    const late = check();
+    if (late) throw new Error(late);
     return await fn();
   } finally {
     release();

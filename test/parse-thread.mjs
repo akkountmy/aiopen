@@ -134,7 +134,11 @@ test('разбор документа идёт через поток и нахо
   for (const offset of offsets) out += `${String(offset).padStart(10, '0')} 00000 n \n`;
   out += `trailer\n<< /Size ${objects.length + 1} /Root 5 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
   const buf = Buffer.from(out, 'latin1');
+  /* Даже маленький PDF идёт через поток: именно на 234 КБ Chromium-дека
+     главный поток завис на разборе CMap. */
+  const before = parseThreadStats().tasks;
   const parsed = await extractDocumentTextOffThread(buf, 'book.pdf', 'application/pdf');
+  assert.ok(parseThreadStats().tasks > before, 'PDF должен разбираться в отдельном потоке');
   assert.match(parsed.text, /Human brain/, `текст не найден: ${JSON.stringify(parsed.text.slice(0, 120))}`);
 });
 
