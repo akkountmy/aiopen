@@ -1,6 +1,6 @@
 import dns from 'node:dns/promises';
 import net from 'node:net';
-import { extractDocumentText } from './docparse.mjs';
+import { extractDocumentTextOffThread } from './docparse.mjs';
 import { extractReadable, extractFields } from './extract.mjs';
 import { truncate } from './util.mjs';
 import { withHeavySlot, CAPACITY } from './capacity.mjs';
@@ -405,7 +405,9 @@ async function requestPage(rawUrl, { method = 'GET', headers = {}, body = null, 
     let text;
     let kind = 'text';
     if (contentType.includes('pdf') || url.pathname.toLowerCase().endsWith('.pdf')) {
-      text = extractDocumentText(buffer, 'download.pdf', 'application/pdf').text;
+      /* Разбор PDF — синхронная работа: большой файл в главном потоке
+         останавливает сервис. Поэтому через поток разбора. */
+      text = (await extractDocumentTextOffThread(buffer, 'download.pdf', 'application/pdf')).text;
       kind = 'pdf';
     } else if (contentType.includes('json')) {
       text = decodeBody(buffer, contentType);

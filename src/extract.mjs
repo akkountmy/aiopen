@@ -14,6 +14,11 @@
    тянулся и в server.mjs через search.mjs → extract.mjs, поэтому сервис
    поднимался ~14 с. Разбор статьи нужен только в момент, когда статью реально
    достают, — грузим набор по требованию и один раз на процесс. */
+/* Тяжёлый разбор идёт в отдельном потоке (см. parse-thread.mjs): в главном
+   потоке он останавливал HTTP, сторожевой таймер и журнал. */
+import { isMainThread } from 'node:worker_threads';
+import { parseOffThread, parseThreadEnabled } from './parse-thread.mjs';
+
 let parsersPromise = null;
 
 function loadParsers() {
@@ -42,6 +47,69 @@ function loadParsers() {
 
 const MAX_MARKDOWN = 300000;
 const FALLBACK_URL = 'https://example.invalid/';
+
+/* Пределы размера страницы для тяжёлого разбора (jsdom + Readability + Turndown).
+   Замер 16.11.2026 на этом коде: 0.55 МБ HTML → 8.6 с и 503 МБ RSS, 1 МБ → 18 с,
+   2 МБ → 44 с, 4 МБ → нехватка памяти. Основная стоимость — Readability (10 с на
+   контейнер в 287 КБ): она клонирует документ и склонна к квадратичной работе.
+   В контейнере 0.25 ядра те же страницы идут в 3–5 раз дольше, поэтому здесь
+   работают три предохранителя вместо одного:
+     – служебные блоки (скрипты, стили, svg) вырезаются до jsdom: на живых
+       страницах это половина и больше веса;
+     – выше CLEAN_LIMIT_CHARS работает дешёвый разбор по регуляркам;
+     – выше READABILITY_MAX_CHARS Readability не запускается вовсе, остаётся
+       смысловой контейнер — он даёт почти тот же текст за секунды вместо минут. */
+const MAX_DOM_CHARS = 700000;
+const READABILITY_MAX_CHARS = 200000;
+const TURNDOWN_MAX_CHARS = 400000;
+/* Верхняя граница дешёвого разбора: держим в памяти не больше двух мегабайт
+   текста страницы, остальное отбрасываем по границе. */
+const CHEAP_MAX_CHARS = 2000000;
+
+/** Вырезать служебные блоки до разбора: линейно, миллисекунды. */
+export function stripJunkHtml(html) {
+  return String(html || '')
+    .replace(/<!--[\s\S]*?-->/g, ' ')
+    .replace(/<script\b[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style\b[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<noscript\b[\s\S]*?<\/noscript>/gi, ' ')
+    .replace(/<template\b[\s\S]*?<\/template>/gi, ' ')
+    .replace(/<svg\b[\s\S]*?<\/svg>/gi, ' ')
+    .replace(/<canvas\b[\s\S]*?<\/canvas>/gi, ' ')
+    .replace(/<iframe\b[\s\S]*?<\/iframe>/gi, ' ');
+}
+
+/**
+ * Вырезать смысловой блок страницы регулярками.
+ *
+ * Нужно, чтобы большая страница (книжная глава, статья с комментариями) всё же
+ * прошла через полноценный разбор: обычно текст лежит в одном <article>/<main>,
+ * и его одного хватает. Если блока нет, возвращается пустая строка.
+ */
+export function sliceMainContainer(html) {
+  const source = String(html || '');
+  if (!source) return '';
+  const pairs = [
+    [/<article\b[^>]*>/i, /<\/article\s*>/gi],
+    [/<main\b[^>]*>/i, /<\/main\s*>/gi],
+    [/<(div|section)\b[^>]*(?:entry-content|post-content|article-body|article-content|content-body|book-text|chapter)[^>]*>/i, /<\/div\s*>/gi],
+    [/<div\b[^>]*\bid=["'](?:content|main|text)["'][^>]*>/i, /<\/div\s*>/gi],
+  ];
+  let best = '';
+  for (const [openRe, closeRe] of pairs) {
+    const openMatch = openRe.exec(source);
+    if (!openMatch) continue;
+    const start = openMatch.index;
+    let end = -1;
+    closeRe.lastIndex = start;
+    for (let match = closeRe.exec(source); match; match = closeRe.exec(source)) end = match.index;
+    if (end > start) {
+      const slice = source.slice(start, end);
+      if (slice.length > best.length) best = slice;
+    }
+  }
+  return best;
+}
 
 const CONTAINER_SELECTORS = [
   'article',
@@ -312,8 +380,11 @@ function linkDensity(text, links) {
 
 /**
  * Разбирает HTML в статью. Всегда возвращает результат, даже на битой разметке.
+ *
+ * Это «тяжёлый» вариант: jsdom + Readability + Turndown. Вызывать его можно
+ * только в отдельном потоке разбора — в главном он останавливает сервис.
  */
-export async function extractReadable(html, baseUrl, { maxChars = 0 } = {}) {
+export async function extractReadableLocal(html, baseUrl, { maxChars = 0 } = {}) {
   const raw = String(html || '');
   const limit = Number(maxChars) > 0 ? Math.min(Number(maxChars), MAX_MARKDOWN) : 0;
   const { JSDOM, Readability, TurndownService, gfm } = await loadParsers();
@@ -337,7 +408,11 @@ export async function extractReadable(html, baseUrl, { maxChars = 0 } = {}) {
     const mainHtml = container.innerHTML;
     full = {
       text: blockText(container),
-      markdown: turndown().turndown(mainHtml),
+      /* Turndown на мегабайтном контейнере добавляет секунды и память, а модели
+         нужен прежде всего текст. Markdown для больших страниц собирается из
+         текста — ниже. */
+      markdown:
+        mainHtml.length > TURNDOWN_MAX_CHARS ? '' : turndown().turndown(mainHtml),
       headings: headingsFrom(container),
       tables: tablesFrom(container),
       links: linksFrom(container, docBase),
@@ -346,17 +421,24 @@ export async function extractReadable(html, baseUrl, { maxChars = 0 } = {}) {
     full = null;
   }
 
-  /* Вариант Readability — на клоне, чтобы не портить исходный документ. */
+  /* Readability — на клоне, чтобы не портить исходный документ. На больших
+     контейнерах её не запускаем: замер 16.11.2026 — 10 с и 383 МБ heap на
+     контейнер в 287 КБ, и это ещё без клона документа. Смысловой контейнер
+     даёт почти тот же текст за секунды. */
+  const containerChars = full ? full.text.length : 0;
+  const allowReadability = raw.length <= READABILITY_MAX_CHARS && containerChars <= READABILITY_MAX_CHARS;
   let article = null;
-  try {
-    article = new Readability(document.cloneNode(true), {
-      charThreshold: 250,
-      keepClasses: false,
-      disableJSONLD: false,
-      nbTopCandidates: 6,
-    }).parse();
-  } catch {
-    article = null;
+  if (allowReadability) {
+    try {
+      article = new Readability(document.cloneNode(true), {
+        charThreshold: 250,
+        keepClasses: false,
+        disableJSONLD: false,
+        nbTopCandidates: 6,
+      }).parse();
+    } catch {
+      article = null;
+    }
   }
 
   let chosen = null;
@@ -448,12 +530,243 @@ function empty(engine) {
   };
 }
 
+/* --- Дешёвый разбор: регулярки вместо DOM --- */
+
+const ENTITIES = {
+  nbsp: ' ',
+  amp: '&',
+  lt: '<',
+  gt: '>',
+  quot: '"',
+  apos: "'",
+  laquo: '«',
+  raquo: '»',
+  mdash: '—',
+  ndash: '–',
+  hellip: '…',
+  copy: '©',
+  reg: '®',
+  trade: '™',
+};
+
+function decodeEntitiesBasic(value) {
+  return String(value || '').replace(/&(#x?[0-9a-fA-F]+|[a-zA-Z]+);/g, (match, body) => {
+    if (body[0] === '#') {
+      const code = body[1] === 'x' || body[1] === 'X' ? parseInt(body.slice(2), 16) : parseInt(body.slice(1), 10);
+      return Number.isFinite(code) && code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : match;
+    }
+    const named = ENTITIES[body.toLowerCase()];
+    return named === undefined ? match : named;
+  });
+}
+
+/**
+ * Разбор без DOM: чистим разметку регулярками и берём текст.
+ *
+ * Нужен для больших страниц (интернет-магазины, книги, архивы), где jsdom
+ * съедает десятки секунд или падает по памяти. Текст выходит грубее — вместе
+ * с меню и подписями, — зато страница не останавливает сервис.
+ */
+export function cheapReadable(html, baseUrl, { maxChars = 0 } = {}) {
+  const limit = Number(maxChars) > 0 ? Math.min(Number(maxChars), MAX_MARKDOWN) : 0;
+  let raw = String(html || '').slice(0, CHEAP_MAX_CHARS);
+  if (!raw) return empty('regex-big');
+
+  const meta = {
+    title: '',
+    description: '',
+    author: '',
+    siteName: '',
+    publishedTime: '',
+    lang: '',
+  };
+  for (const [key, patterns] of [
+    ['title', [/<meta[^>]+property=["']og:title["'][^>]*content=["']([^"']*)["']/i, /<meta[^>]+name=["']twitter:title["'][^>]*content=["']([^"']*)["']/i]],
+    [
+      'description',
+      [
+        /<meta[^>]+name=["']description["'][^>]*content=["']([^"']*)["']/i,
+        /<meta[^>]+property=["']og:description["'][^>]*content=["']([^"']*)["']/i,
+      ],
+    ],
+    [
+      'author',
+      [/<meta[^>]+name=["']author["'][^>]*content=["']([^"']*)["']/i, /<meta[^>]+property=["']article:author["'][^>]*content=["']([^"']*)["']/i],
+    ],
+    ['siteName', [/<meta[^>]+property=["']og:site_name["'][^>]*content=["']([^"']*)["']/i]],
+    ['publishedTime', [/<meta[^>]+property=["']article:published_time["'][^>]*content=["']([^"']*)["']/i]],
+  ]) {
+    for (const pattern of patterns) {
+      const found = raw.match(pattern);
+      if (found) {
+        meta[key] = decodeEntitiesBasic(found[1]).trim();
+        break;
+      }
+    }
+  }
+  const langMatch = raw.match(/<html[^>]+lang=["']([^"']+)["']/i);
+
+  /* Служебные блоки вырезаем целиком: в них больше всего мусора. */
+  const cleaned = stripJunkHtml(raw);
+
+  const title =
+    meta.title ||
+    (cleaned.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] ?? '') ||
+    (cleaned.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i)?.[1] ?? '');
+
+  const headings = [];
+  const seen = new Set();
+  for (const match of cleaned.matchAll(/<h([1-4])[^>]*>([\s\S]*?)<\/h\1>/gi)) {
+    const text = cleanText(decodeEntitiesBasic(match[2].replace(/<[^>]+>/g, ' '))).slice(0, 200);
+    if (!text) continue;
+    const level = Number(match[1]) || 2;
+    const key = `${level}:${text.toLowerCase()}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    headings.push({ level, text });
+    if (headings.length >= 80) break;
+  }
+
+  const links = [];
+  const seenLinks = new Set();
+  for (const match of cleaned.matchAll(/<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi)) {
+    const href = linkUrl(decodeEntitiesBasic(match[1]), baseUrl);
+    if (!href || seenLinks.has(href)) continue;
+    seenLinks.add(href);
+    links.push({ href, text: cleanText(decodeEntitiesBasic(match[2].replace(/<[^>]+>/g, ' '))).slice(0, 160) });
+    if (links.length >= 120) break;
+  }
+
+  const text = cleanText(
+    decodeEntitiesBasic(
+      cleaned
+        .replace(/<\/(p|div|li|tr|h[1-6]|section|article|blockquote|pre|table|ul|ol|figure)>/gi, '\n')
+        .replace(/<br\s*\/?>/gi, '\n')
+        .replace(/<[^>]+>/g, ' '),
+    ),
+  );
+
+  let outText = text;
+  let markdown = text;
+  if (limit) {
+    if (outText.length > limit) outText = outText.slice(0, limit);
+    if (markdown.length > limit) markdown = markdown.slice(0, limit);
+  }
+
+  return {
+    engine: 'regex-big',
+    title: cleanText(decodeEntitiesBasic(title)).slice(0, 300),
+    description: cleanText(meta.description).slice(0, 600),
+    byline: cleanText(meta.author || meta.siteName).slice(0, 200),
+    siteName: cleanText(meta.siteName),
+    publishedTime: cleanText(meta.publishedTime),
+    lang: String(langMatch?.[1] || '').slice(0, 12),
+    text: outText,
+    markdown,
+    headings,
+    tables: [],
+    links,
+    chars: outText.length,
+    markdownChars: markdown.length,
+  };
+}
+
+/**
+ * Публичный разбор страницы: выбирает место работы так, чтобы главный поток
+ * никогда не вставал на секунды.
+ *
+ *  1. Служебные блоки (скрипты, стили, svg) вырезаются регулярками — это
+ *     миллисекунды и часто половина веса страницы.
+ *  2. Если после очистки осталось больше MAX_DOM_CHARS — дешёвый разбор по
+ *     регуляркам (линейный, доли секунды).
+ *  3. Иначе страница уходит в отдельный поток разбора.
+ *  4. Внутри потока разбора — тяжёлый разбор на месте (иначе бесконечная
+ *     рекурсия), но с отключённой Readability на больших контейнерах.
+ *
+ * Любая неудача потока (время, память, падение) не роняет задачу: страница
+ * разбирается дешёвым способом, а причина уходит в журнал.
+ */
+export async function extractReadable(html, baseUrl, options = {}) {
+  const raw = String(html || '');
+  if (!raw) return empty('empty');
+  const cleaned = stripJunkHtml(raw);
+  /* Большая страница: пробуем вырезать смысловой блок и разобрать только его —
+     так сохраняется качество Readability. Если блока нет, работает дешёвый
+     разбор по регуляркам. */
+  let target = cleaned;
+  if (cleaned.length > MAX_DOM_CHARS) {
+    const core = sliceMainContainer(cleaned);
+    if (core.length > 2000 && core.length <= MAX_DOM_CHARS) {
+      target = core;
+      console.log(
+        `[parse] страница ${(raw.length / 1024 / 1024).toFixed(1)} МБ: взят смысловой блок ` +
+          `${(core.length / 1024).toFixed(0)} КБ и разбирается с DOM`,
+      );
+    } else {
+      const started = Date.now();
+      const result = cheapReadable(cleaned, baseUrl, options);
+      console.log(
+        `[parse] страница ${(raw.length / 1024 / 1024).toFixed(1)} МБ (без служебных блоков ` +
+          `${(cleaned.length / 1024).toFixed(0)} КБ) — быстрый разбор без DOM, ` +
+          `${Date.now() - started} мс, текста ${result.chars}`,
+      );
+      return result;
+    }
+  }
+  if (!isMainThread || !parseThreadEnabled()) return extractReadableLocal(target, baseUrl, options);
+  const startedAt = Date.now();
+  try {
+    const result = await parseOffThread(
+      { kind: 'readable', html: target, baseUrl, options },
+      { timeoutMs: 45000 },
+    );
+    const spent = Date.now() - startedAt;
+    if (result.chars < 500 && target !== cleaned) {
+      console.warn('[parse] в смысловом блоке почти нет текста — разбираю страницу без DOM');
+      return cheapReadable(cleaned, baseUrl, options);
+    }
+    if (spent > 3000) {
+      console.log(
+        `[parse] страница ${(target.length / 1024).toFixed(0)} КБ разобрана в потоке за ${spent} мс ` +
+          `(${result.engine}, текста ${result.chars})`,
+      );
+    }
+    return result;
+  } catch (error) {
+    console.warn(
+      `[parse] разбор в потоке не удался (${String(error?.message || error)}) — беру быстрый разбор, ` +
+        `страница ${(raw.length / 1024).toFixed(0)} КБ`,
+    );
+    return cheapReadable(cleaned, baseUrl, options);
+  }
+}
+
 /**
  * Поля по CSS-селекторам: `{ price: ".price", link: "a.buy@href" }`.
  * `@attr` в конце селектора берёт атрибут вместо текста.
  * Несколько совпадений — массив, одно — строка.
+ *
+ * Публичная версия: большую страницу разбираем в отдельном потоке, иначе
+ * выборка полей вставала бы в главном потоке так же, как разбор статьи.
  */
 export async function extractFields(html, baseUrl, selectors) {
+  const raw = stripJunkHtml(String(html || ''));
+  if (raw.length > 200000 && isMainThread && parseThreadEnabled()) {
+    try {
+      return await parseOffThread(
+        { kind: 'fields', html: raw, baseUrl, selectors },
+        { timeoutMs: 45000 },
+      );
+    } catch (error) {
+      console.warn(`[parse] выборка полей в потоке не удалась (${String(error?.message || error)})`);
+      return extractFieldsLocal(raw.slice(0, MAX_DOM_CHARS), baseUrl, selectors);
+    }
+  }
+  return extractFieldsLocal(raw.slice(0, MAX_DOM_CHARS), baseUrl, selectors);
+}
+
+/** Тяжёлый вариант выборки полей — только в потоке разбора. */
+export async function extractFieldsLocal(html, baseUrl, selectors) {
   const { JSDOM } = await loadParsers();
   const dom = new JSDOM(String(html || ''), { url: baseUrl || FALLBACK_URL });
   const document = dom.window.document;

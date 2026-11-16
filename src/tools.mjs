@@ -6,7 +6,7 @@ import { withHeavySlot } from './capacity.mjs';
 import { checkDocument, formatCheckReport } from './doccheck.mjs';
 import { memoryToolReply } from './memory.mjs';
 import { skillBody, skillFile, skillFiles, skillIds } from './skills.mjs';
-import { detectKind, extractDocumentText } from './docparse.mjs';
+import { detectKind, extractDocumentTextOffThread } from './docparse.mjs';
 import {
   CHARS_PER_MINUTE,
   DEFAULT_RATE,
@@ -2957,7 +2957,7 @@ async function executeToolInner(name, args, ctx) {
       if (stat.size > LIMITS.maxParseBytes) {
         throw new Error(`Файл ${formatBytes(stat.size)} больше предела разбора (${formatBytes(LIMITS.maxParseBytes)}).`);
       }
-      const parsed = extractDocumentText(fs.readFileSync(full), args.path, '', { maxChars: MAX_TTS_CHARS + 1 });
+      const parsed = await extractDocumentTextOffThread(fs.readFileSync(full), args.path, '', { maxChars: MAX_TTS_CHARS + 1 });
       const text = String(parsed.text || '').trim();
       if (text.replace(/\s/g, '').length < 40) {
         return {
@@ -3096,7 +3096,7 @@ async function executeToolInner(name, args, ctx) {
         );
       }
       const buf = fs.readFileSync(full);
-      const parsed = extractDocumentText(buf, args.path, '', { maxChars: LIMITS.maxFileTextChars });
+      const parsed = await extractDocumentTextOffThread(buf, args.path, '', { maxChars: LIMITS.maxFileTextChars });
       if (!parsed.text) {
         return { text: `Не удалось извлечь текст. ${parsed.warnings.join(' ')}`, meta: { path: args.path } };
       }
@@ -3994,7 +3994,7 @@ async function executeToolInner(name, args, ctx) {
         const ext = path.extname(full).toLowerCase();
         const text = ['.txt', '.md', '.html', '.htm', '.csv', '.json'].includes(ext)
           ? fs.readFileSync(full, 'utf8')
-          : extractDocumentText(fs.readFileSync(full), rel, '', { maxChars: LIMITS.maxFileTextChars }).text || '';
+          : (await extractDocumentTextOffThread(fs.readFileSync(full), rel, '', { maxChars: LIMITS.maxFileTextChars })).text || '';
         urls = linksFromText(text);
       }
       if (!urls.length) throw new Error('Не нашёл ссылок: передай urls или укажи файл со ссылками');

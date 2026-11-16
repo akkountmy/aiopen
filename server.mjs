@@ -59,7 +59,8 @@ import {
   startNarration,
   voiceCatalog,
 } from './src/tts.mjs';
-import { detectKind, extractDocumentText, kindLabel } from './src/docparse.mjs';
+import { detectKind, extractDocumentTextOffThread, kindLabel } from './src/docparse.mjs';
+import { parseThreadStats } from './src/parse-thread.mjs';
 import { claimNarrationFiles, planNarrationFiles } from './src/narration-plan.mjs';
 import { joinNarrationParts, listNarrationParts, narrationArchiveDir } from './src/narration-join.mjs';
 import { writeNarrationWord } from './src/narration-word.mjs';
@@ -778,12 +779,13 @@ function resumableTurn(chat) {
 /* Подсказка для продолжения: напоминаем цель, уже сделанное и вложения.
    Если вопрос ещё не попал в сохранённую историю (сбой в первые секунды),
    повторяем его целиком — иначе модель не поймёт, что продолжать. */
+const RESUME_HEAD =
+  'Продолжи прерванную задачу с того места, где остановился. Предыдущая попытка прервалась ' +
+  'из-за перезапуска сервиса, работа не отменена. Не начинай с нуля: проверь, что уже сделано ' +
+  'в рабочей папке и в истории, и доведи задачу до результата. Если всё уже готово — коротко ' +
+  'подведи итог и перечисли файлы.';
+
 function resumeTaskText(chat, originalText, userMessage) {
-  const head =
-    'Продолжи прерванную задачу с того места, где остановился. Предыдущая попытка прервалась ' +
-    'из-за перезапуска сервиса, работа не отменена. Не начинай с нуля: проверь, что уже сделано ' +
-    'в рабочей папке и в истории, и доведи задачу до результата. Если всё уже готово — коротко ' +
-    'подведи итог и перечисли файлы.';
   const original = String(originalText || '').trim();
   const snippet = original.slice(0, 80);
   const history = Array.isArray(chat?.history) ? chat.history : [];
@@ -795,7 +797,23 @@ function resumeTaskText(chat, originalText, userMessage) {
     .map((att) => `«${att.name}» — ${att.relPath}`)
     .join('\n');
   const files = attachments ? `Вложения задачи уже лежат в проекте:\n${attachments}` : '';
-  return [head, goal, files, renderTaskState(chat?.task)].filter(Boolean).join('\n\n');
+  return [RESUME_HEAD, goal, files, renderTaskState(chat?.task)].filter(Boolean).join('\n\n');
+}
+
+/* То же самое, но для ручного «продолжи» после остановки.
+   Автоматическое продолжение после зависания выключено (чтобы не зациклиться),
+   и человек, выполняя обещание из сообщения, пишет «продолжи». Без этой
+   подсказки модель получает одно слово и начинает заново; с ней — видит, что
+   работа прервана, и подхватывает с сохранённого места. */
+const MANUAL_RESUME_RE = /^\s*(продолж|продолжай|продолжите|про(долж|должай)|дальше|давай дальше)/i;
+
+function manualResumeHint(chat, text) {
+  const phrase = String(text || '').trim();
+  if (!phrase || phrase.length > 60 || !MANUAL_RESUME_RE.test(phrase)) return '';
+  const messages = Array.isArray(chat?.messages) ? chat.messages : [];
+  const last = messages[messages.length - 1];
+  if (last?.role !== 'assistant' || !last.interrupted) return '';
+  return [RESUME_HEAD, renderTaskState(chat?.task)].filter(Boolean).join('\n\n');
 }
 
 /* Перезапуск мог застать инструмент в работе: в истории уже есть assistant с
@@ -2440,7 +2458,7 @@ async function handleDashboardFileUpload(req, res, user, task) {
       const described = await describeImage({ buffer: fs.readFileSync(full), mime, name });
       text = String(described?.text || '');
     } else if (Number(size) <= LIMITS.maxParseBytes) {
-      const parsed = extractDocumentText(fs.readFileSync(full), name, mime, {
+      const parsed = await extractDocumentTextOffThread(fs.readFileSync(full), name, mime, {
         maxChars: DASHBOARD_LIMITS.filesContextChars,
       });
       text = String(parsed.text || '');
@@ -2555,7 +2573,7 @@ async function processAttachment(att, workspace) {
       }
       return;
     }
-    const parsed = extractDocumentText(buffer, att.name, att.mime, { maxChars: LIMITS.maxFileTextChars });
+    const parsed = await extractDocumentTextOffThread(buffer, att.name, att.mime, { maxChars: LIMITS.maxFileTextChars });
     if (!parsed.text) {
       store.updateAttachment(att.id, {
         status: 'ready',
@@ -2928,7 +2946,7 @@ async function executeRun(run, job) {
 
     const userText = resume
       ? resumeTaskText(chat, text, resumeUser)
-      : [text, ctx.text].filter(Boolean).join('\n\n');
+      : [manualResumeHint(chat, text), text, ctx.text].filter(Boolean).join('\n\n');
     stream.emit({ type: 'start' });
 
     /* Первый вопрос сразу даёт диалогу рабочее имя: человек видит тему в
@@ -4133,6 +4151,10 @@ async function route(req, res) {
           watchdog: watchdog.stats(),
           hardWatchdog: hardWatchdog.stats(),
           activeRuns: [...runs.values()].filter((run) => run.status === 'running').length,
+          /* Разбор тяжёлых страниц: сколько задач ушло в отдельный поток и
+             сколько не уложилось. По этим числам видно, что разбор больше не
+             останавливает главный поток. */
+          parse: parseThreadStats(),
           limits: {
             maxRuns: CAPACITY.maxRuns,
             runsPerUser: CAPACITY.runsPerUser,
@@ -4795,7 +4817,7 @@ async function route(req, res) {
         if (fs.statSync(full).size > 40 * 1024 * 1024) {
           return sendError(res, 413, 'Файл больше 40 МБ — озвучьте его по частям');
         }
-        const parsed = extractDocumentText(fs.readFileSync(full), name, '', { maxChars: MAX_TTS_CHARS + 1 });
+        const parsed = await extractDocumentTextOffThread(fs.readFileSync(full), name, '', { maxChars: MAX_TTS_CHARS + 1 });
         const text = String(parsed.text || '').trim();
         if (text.replace(/\s/g, '').length < 40) {
           const reason = (parsed.warnings || [])[0] || 'В документе нет текста, который можно прочитать вслух.';
@@ -4909,7 +4931,7 @@ async function route(req, res) {
         if (!fs.existsSync(full) || !fs.statSync(full).isFile()) return sendError(res, 404, 'Файл не найден');
         const name = path.basename(full);
         if (fs.statSync(full).size > 40 * 1024 * 1024) return sendError(res, 413, 'Файл больше 40 МБ — озвучьте его по частям');
-        const parsed = extractDocumentText(fs.readFileSync(full), name, '', { maxChars: MAX_TTS_CHARS + 1 });
+        const parsed = await extractDocumentTextOffThread(fs.readFileSync(full), name, '', { maxChars: MAX_TTS_CHARS + 1 });
         const text = String(parsed.text || '').trim();
         if (text.replace(/\s/g, '').length < 40) {
           return sendJson(res, 200, {
@@ -5020,7 +5042,7 @@ async function route(req, res) {
           const preview = previewDocument(buf, name, { maxRows: 400, maxChars: 200000 });
           if (preview) return sendJson(res, 200, { ...base, ...preview, name, path: rel, size: stat.size });
           /* Незнакомый формат: пробуем вытащить хотя бы текст. */
-          const { text, warnings } = extractDocumentText(buf, name, '', { maxRows: 500, maxChars: 200000 });
+          const { text, warnings } = await extractDocumentTextOffThread(buf, name, '', { maxRows: 500, maxChars: 200000 });
           return sendJson(res, 200, {
             ...base,
             format: 'other',

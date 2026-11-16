@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { readZip } from './zip.mjs';
 import { pdfExtract } from './pdf-text.mjs';
+import { parseOffThread, parseThreadEnabled } from './parse-thread.mjs';
 
 const TEXT_EXT = new Set([
   'txt', 'md', 'markdown', 'csv', 'tsv', 'json', 'jsonl', 'yaml', 'yml', 'xml', 'html', 'htm',
@@ -231,6 +232,7 @@ function htmlText(buf) {
  * Извлекает текст из документа. Возвращает { kind, text, warnings }.
  */
 export function extractDocumentText(buf, name, mime = '', limits = {}) {
+  const startedAt = Date.now();
   const kind = detectKind(name, mime);
   const cfg = { maxRows: 400, maxChars: 48000, ...limits };
   const warnings = [];
@@ -288,7 +290,48 @@ export function extractDocumentText(buf, name, mime = '', limits = {}) {
     text = `${text.slice(0, cfg.maxChars)}\n…[документ сокращён до ${cfg.maxChars} символов]`;
     warnings.push('Документ очень большой — показана только часть.');
   }
+  const spent = Date.now() - startedAt;
+  if (spent > 1000) {
+    console.log(`[docparse] ${name}: ${Math.round(buf.length / 1024)} КБ разобрано за ${spent} мс (${kind})`);
+  }
   return { kind, text: text.trim(), warnings };
+}
+
+/* Слишком большие файлы не разбираем вовсе: разбор PDF в главном потоке —
+   синхронная работа, и на 0.25 ядра файл в сотни мегабайт остановит сервис
+   раньше, чем закончится. Лучше честно сказать об этом человеку. */
+const MAX_PARSE_BYTES = 64 * 1024 * 1024;
+
+/**
+ * Разбор документа в отдельном потоке (parse-thread.mjs).
+ *
+ * Смысл тот же, что у страниц: jsdom и разборщики офисных форматов — обычный
+ * синхронный код, и в главном потоке они на секунды останавливают HTTP,
+ * сторожевой таймер и журнал. Небольшие файлы (до 512 КБ) разбираются на месте:
+ * это быстрее, чем поднимать поток. Любая неудача потока — не повод терять
+ * файл: разбираем на месте, как раньше.
+ */
+export async function extractDocumentTextOffThread(buf, name, mime = '', limits = {}) {
+  if (buf.length > MAX_PARSE_BYTES) {
+    return {
+      kind: detectKind(name, mime),
+      text: '',
+      warnings: [`Файл больше ${Math.round(MAX_PARSE_BYTES / 1024 / 1024)} МБ — разобрать его внутри сервиса нельзя.`],
+    };
+  }
+  if (buf.length <= 512 * 1024 || !parseThreadEnabled()) {
+    return extractDocumentText(buf, name, mime, limits);
+  }
+  try {
+    const copy = Buffer.from(buf);
+    return await parseOffThread(
+      { kind: 'document', buf: copy, name, mime, limits },
+      { timeoutMs: 60000, transfer: [copy.buffer] },
+    );
+  } catch (error) {
+    console.warn(`[docparse] ${name}: разбор в потоке не удался (${String(error?.message || error)}) — разбираю на месте`);
+    return extractDocumentText(buf, name, mime, limits);
+  }
 }
 
 export function kindLabel(kind) {
