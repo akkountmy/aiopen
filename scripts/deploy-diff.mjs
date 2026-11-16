@@ -14,6 +14,9 @@ const SLUG = process.env.DSHOW_AMVERA_SLUG || 'dshopen';
 const root = path.resolve(import.meta.dirname, '..');
 const hash = (buffer) => crypto.createHash('sha256').update(buffer).digest('hex').slice(0, 12);
 const skip = (file) => ['tmp/', 'exports/', 'data/', '.dsh/', 'node_modules/'].some((prefix) => file.startsWith(prefix));
+/* Файлы для работы агента и локальных проверок: на сервисе не нужны, поэтому их
+   отсутствие на Amvera — не «не выложено», а так и задумано. */
+const DEV_ONLY = new Set(['AGENTS.md', 'scripts/check-deck-live.mjs', 'scripts/deploy-diff.mjs', 'scripts/pdf2png.py']);
 
 const status = execFileSync('git', ['status', '--porcelain'], { cwd: root, encoding: 'utf8' });
 const changed = status
@@ -26,6 +29,10 @@ const changed = status
 console.log(`файлов изменено/добавлено: ${changed.length}`);
 let missing = 0;
 for (const file of changed) {
+  if (DEV_ONLY.has(file)) {
+    console.log(`локальный файл   ${file} (на сервис не выкладывается)`);
+    continue;
+  }
   const local = path.join(root, file);
   if (!fs.existsSync(local) || fs.statSync(local).isDirectory()) {
     console.log(`удалён локально   ${file}`);
