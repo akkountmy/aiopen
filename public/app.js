@@ -109,6 +109,13 @@ const state = {
   /* Папки, содержимое которых уже известно: корень приходит одним запросом,
      более глубокие папки подгружаются при раскрытии. */
   filesLoaded: new Set(),
+  /* Показать весь проект вместо файлов выбранного диалога. Нужно, когда в
+     диалоге файлов нет: иначе созданный агентом PDF «пропадает» из виду,
+     хотя лежит в корне проекта. Сбрасывается при смене диалога или проекта. */
+  filesAll: false,
+  /* Человек сам выбрал вид списка кнопкой в заголовке: автоматический переход
+     к файлам проекта больше не должен перебивать его выбор. */
+  filesScopePicked: false,
   filesLoading: false,
   /* Запись, открытая в полосе прослушивания внизу панели файлов:
      { path, name, projectId, api }. null — полосы нет. */
@@ -1144,28 +1151,48 @@ function filesChatId() {
   return filesChat()?.id || '';
 }
 
-/* Заголовок панели — подпись, а не кнопка. В проектном виде имя проекта
-   остаётся во всплывающей подсказке; в диалоговом подпись прямо говорит, что
-   показаны только файлы выбранного диалога. */
+/* Заголовок панели — кнопка «Файлы проекта». В диалоге она переключает список
+   между файлами этого диалога и всеми файлами проекта, а в проекте просто
+   обновляет список. Файлы всегда принадлежат проекту, открытому слева, поэтому
+   отдельного выбора проекта в заголовке нет. */
 function syncFilesProjectLabel() {
   const title = $('#filesProjectTitle');
   const label = $('#filesProjectName');
   if (!label) return;
   const project = filesProject();
   const chat = filesChat();
-  if (chat) {
+  if (chat && !state.filesAll) {
     label.textContent = 'Файлы диалога';
-    if (title) title.title = `Файлы диалога «${chat.title || 'Без названия'}» · только файлы этого диалога`;
+    if (title) {
+      const chatName = chat.title || 'Без названия';
+      title.title = `Файлы диалога «${chatName}» · нажмите, чтобы показать все файлы проекта`;
+      title.setAttribute('aria-label', `Файлы диалога «${chatName}». Показать все файлы проекта`);
+    }
     return;
   }
   label.textContent = 'Файлы проекта';
-  if (title) title.title = project ? `Файлы проекта «${project.name}»` : 'Файлы проекта';
+  if (title) {
+    if (!project) {
+      title.title = 'Файлы проекта';
+      title.setAttribute('aria-label', 'Файлы проекта');
+      return;
+    }
+    /* В диалоге без своих файлов сразу показываются файлы проекта: кнопка
+       возвращает к диалоговому списку. В проекте она обновляет дерево. */
+    const hint = chat
+      ? `Все файлы проекта «${project.name}» · нажмите, чтобы вернуться к файлам диалога`
+      : `Файлы проекта «${project.name}» · нажмите, чтобы обновить список`;
+    title.title = hint;
+    title.setAttribute('aria-label', hint);
+  }
 }
 
 /* Переключение диалога или проекта освежает подпись. Сам список перечитывает
    loadFiles: у проекта и диалога он разный. */
 function followActiveProject() {
   rememberProject(state.activeProjectId);
+  state.filesAll = false;
+  state.filesScopePicked = false;
   syncFilesProjectLabel();
 }
 
@@ -1558,7 +1585,7 @@ async function openChat(chatId) {
     renderThread();
     renderQueue();
     updateCrumbs();
-    if (state.filesOpen) loadFiles();
+    if (state.filesOpen) loadFiles({ widenWhenEmpty: true });
     if (!restoreFilesUi()) closeSidebar();
     rememberChat(chatId);
     /* В этом диалоге идёт задача — подключаемся и показываем накопленное. */
@@ -1601,7 +1628,7 @@ async function ensureChat() {
      весь проект до первого ответа. */
   syncFilesProjectLabel();
   resetFilesTree();
-  if (state.filesOpen) loadFiles();
+  if (state.filesOpen) loadFiles({ widenWhenEmpty: true });
   /* Новый диалог, начатый с пустого экрана, тоже должен стать «последним»:
      иначе после перезагрузки открывался предыдущий разговор. */
   rememberChat(chat.id);
@@ -4085,7 +4112,7 @@ function syncFilesPanel({ reload = false } = {}) {
      закрывают и открывают, а запись должна оставаться на виду. */
   if (open) filesAudioRestore();
   if (open && reload && filesProjectId()) {
-    loadFiles();
+    loadFiles({ widenWhenEmpty: true });
   }
 }
 
@@ -4123,12 +4150,17 @@ function filesNote(text) {
 /* Корень проекта приходит одним запросом вместе со всем деревом: папки и их
    документы уже в наборе, поэтому раскрытие папки ничего не ждёт. */
 let filesSeq = 0;
-async function loadFiles() {
+/* widenWhenEmpty: в диалоге своих файлов нет, а в проекте они есть — показываем
+   файлы проекта сразу, без кнопки «Показать файлы проекта». Так созданный
+   агентом PDF не пропадает из виду, хотя лежит в корне проекта, а не в
+   переписке. */
+async function loadFiles({ widenWhenEmpty = false } = {}) {
   const projectId = filesProjectId();
   if (!projectId) return;
   /* Диалог мог смениться, пока шёл запрос: ответ от прошлого вида не должен
      перерисовать список уже выбранного. */
-  const scopeChatId = filesChatId();
+  const scopeChatId = state.filesAll ? '' : filesChatId();
+  const currentScope = () => (state.filesAll ? '' : filesChatId());
   /* Запросов к одному и тому же проекту может быть несколько: переключение,
      загрузка файла, обновление после ответа агента. Ответы приходят не по
      порядку — и медленный старый ответ затирал свежий список, из-за чего
@@ -4143,8 +4175,25 @@ async function loadFiles() {
     if (scopeChatId) query.set('chatId', scopeChatId);
     const data = await api(`/api/projects/${projectId}/files?${query}`);
     if (seq !== filesSeq) return;
-    if (projectId !== filesProjectId() || scopeChatId !== filesChatId()) return;
-    state.files = data.items || [];
+    if (projectId !== filesProjectId() || scopeChatId !== currentScope()) return;
+    let items = data.items || [];
+    /* Диалог пуст, а проект — нет: сразу переходим к файлам проекта. Подпись
+       заголовка («Файлы проекта») тогда честно говорит, что показано. */
+    if (widenWhenEmpty && !state.filesScopePicked && scopeChatId && !items.length) {
+      try {
+        const wide = await api(`/api/projects/${projectId}/files?path=.&depth=6`);
+        if (seq !== filesSeq) return;
+        if (projectId !== filesProjectId() || scopeChatId !== currentScope()) return;
+        if ((wide.items || []).length) {
+          state.filesAll = true;
+          syncFilesProjectLabel();
+          items = wide.items;
+        }
+      } catch {
+        /* Проект тоже пуст или запрос не прошёл — оставляем пустой список. */
+      }
+    }
+    state.files = items;
     state.filesLoaded = new Set(['.']);
     pruneFilesExpanded();
     renderFiles();
@@ -4156,11 +4205,11 @@ async function loadFiles() {
     loadDesign();
   } catch (error) {
     if (seq !== filesSeq) return;
-    if (projectId !== filesProjectId() || scopeChatId !== filesChatId()) return;
+    if (projectId !== filesProjectId() || scopeChatId !== currentScope()) return;
     list.innerHTML = '';
     list.appendChild(el('div', 'files-empty', error.message));
   } finally {
-    if (seq === filesSeq && projectId === filesProjectId() && scopeChatId === filesChatId()) state.filesLoading = false;
+    if (seq === filesSeq && projectId === filesProjectId() && scopeChatId === currentScope()) state.filesLoading = false;
   }
 }
 
@@ -4197,8 +4246,11 @@ function renderFiles() {
   list.innerHTML = '';
   if (!(state.files || []).length) {
     const chat = filesChat();
+    /* Отдельной кнопки «Показать файлы проекта» здесь нет: если в диалоге
+       файлов нет, панель сама показывает файлы проекта, а переключает виды
+       заголовок блока. */
     list.appendChild(
-      el('div', 'files-empty', chat ? 'В этом диалоге пока нет файлов.' : 'Пока пусто. Загрузите файл кнопкой выше.'),
+      el('div', 'files-empty', chat && !state.filesAll ? 'В этом диалоге пока нет файлов.' : 'Пока пусто. Загрузите файл кнопкой выше.'),
     );
     return;
   }
@@ -5773,12 +5825,13 @@ function toggleFolder(item) {
 async function loadFolderContents(item) {
   const projectId = filesProjectId();
   if (!projectId) return;
-  const scopeChatId = filesChatId();
+  const scopeChatId = state.filesAll ? '' : filesChatId();
+  const currentScope = () => (state.filesAll ? '' : filesChatId());
   try {
     const query = new URLSearchParams({ path: item.path, depth: '6' });
     if (scopeChatId) query.set('chatId', scopeChatId);
     const data = await api(`/api/projects/${projectId}/files?${query}`);
-    if (projectId !== filesProjectId() || scopeChatId !== filesChatId()) return;
+    if (projectId !== filesProjectId() || scopeChatId !== currentScope()) return;
     state.files = mergeFiles(state.files, data.items || []);
     state.filesLoaded.add(item.path);
     renderFiles();
@@ -6173,7 +6226,12 @@ async function mountPdfPreview(container, url) {
   const status = el('div', 'preview-status', 'Открываем PDF…');
   container.appendChild(status);
   try {
-    const response = await fetch(url, { credentials: 'same-origin' });
+    /* Просмотр всегда тянет свежие байты: после пересборки деки в том же
+       файле браузерный кэш мог показать старую версию, пока скачивание
+       отдавало новую. Сервер уже шлёт no-store, но URL с меткой времени
+       закрывает и кэш PDF-плагина. */
+    const fresh = `${url}${url.includes('?') ? '&' : '?'}_=${Date.now()}`;
+    const response = await fetch(fresh, { credentials: 'same-origin' });
     if (!response.ok) throw new Error('файл не отдался');
     const pdfjs = await loadPdfjs();
     const data = new Uint8Array(await response.arrayBuffer());
@@ -14071,6 +14129,18 @@ $('#fileBtn').addEventListener('click', () => {
   else pickFiles();
 });
 $('#filesBtn').addEventListener('click', () => toggleFilesDrawer());
+/* Заголовок блока — кнопка «Файлы проекта». В диалоге она переключает его файлы
+   и весь проект; в проекте обновляет список. */
+$('#filesProjectTitle').addEventListener('click', () => {
+  if (filesChat()) {
+    state.filesScopePicked = true;
+    state.filesAll = !state.filesAll;
+    syncFilesProjectLabel();
+    loadFiles();
+    return;
+  }
+  loadFiles();
+});
 $('#filesUploadBtn').addEventListener('click', () => $('#filesPanelInput').click());
 $('#filesPanelInput').addEventListener('change', (event) => {
   uploadToProject(event.target.files);
@@ -14300,8 +14370,6 @@ function maybeShowSwipeHint() {
 }
 
 $('#swipeHintClose')?.addEventListener('click', hideSwipeHint);
-/* Заголовок панели «Файлы проекта» — подпись, а не кнопка: проект выбирается
-   слева, и файлы всегда принадлежат ему. */
 /* ------------------------------ panel resize ------------------------------ */
 /* Полная версия: ширину панели проектов и панели файлов можно тянуть мышью
    за разделитель, ширины запоминаются. На телефоне панели — выезжающие ящики,
