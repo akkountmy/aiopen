@@ -60,6 +60,9 @@ const BOOK = [
 ].join('\n');
 
 const source = path.join(workspace, 'Тестовая книга для озвучки.txt');
+/* Папку данных в чистом репозитории создаёт сервис, а тест бежит без него:
+   без mkdir прогон падал ENOENT вместо проверки нарезки. */
+fs.mkdirSync(workspace, { recursive: true });
 fs.writeFileSync(source, BOOK, 'utf8');
 
 await test('нарезка на части по границам глав', () => {

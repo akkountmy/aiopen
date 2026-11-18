@@ -401,13 +401,10 @@ export function systemPrompt({ projectName, memory, projectContext = '', userNam
     'В проекте есть файловая система. Все пути указывай относительно корня проекта.',
     'После create_word/create_excel/create_pptx/create_pdf читай строку «Проверка файла»: ОШИБКИ — не отдавай файл, исправь причину и пересоздай; замечания — поправь или упомяни одной фразой.',
   ];
-  /* Бюджет считаем по постоянной части правил: память, навыки и карточка
-     проекта растут вместе с задачей, и мерить их одним числом бессмысленно. */
-  const baseLength = lines.filter(Boolean).join('\n').length;
-  if (baseLength > PROMPT_BUDGET.limitChars && !warnedBudget) {
-    warnedBudget = true;
-    console.warn(`[prompt] постоянные правила ${baseLength} знаков при бюджете ${PROMPT_BUDGET.limitChars}`);
-  }
+  /* Бюджет считаем в конце, по всему постоянному сообщению: правила, каталог
+     навыков, память и карточка файлов проекта уходят в каждый запрос вместе.
+     Прежняя проверка ловила только правила (16 169 знаков) и не видела каталог
+     (15 192), то есть половину подсказки. */
   if (memoryBlock) lines.push('', memoryBlock);
   if (taskBlock) lines.push('', taskBlock);
   if (projectContext) lines.push('', projectContext);
@@ -440,7 +437,12 @@ export function systemPrompt({ projectName, memory, projectContext = '', userNam
       '— В ответе опирайся на найденное, давай ссылки на страницы, из которых взяты факты, и указывай дату данных. Если поиск ничего не дал или источники расходятся — скажи это прямо и не выдумывай ссылки и цифры.',
     );
   }
-  return lines.filter(Boolean).join('\n');
+  const text = lines.filter(Boolean).join('\n');
+  if (text.length > PROMPT_BUDGET.limitChars && !warnedBudget) {
+    warnedBudget = true;
+    console.warn(`[prompt] системное сообщение ${text.length} знаков при бюджете ${PROMPT_BUDGET.limitChars}`);
+  }
+  return text;
 }
 
 export function visionAttachmentNote({ name, text }) {

@@ -348,26 +348,49 @@ test('стандарты подключаются к просьбе: финан�
   assert.match(landing, /prefers-reduced-motion/, 'анимации уважают reduced-motion');
   /* Бюджет подсказки: влезаем в предел и оставляем запас под новые правила.
      Раньше проверялось только «меньше 12 000», и промпт подошёл к пределу
-     вплотную — любая правка роняла тест. */
+     вплотную — любая правка роняла тест.
+     Пересчёт 18.11.2026: прежняя проверка мерила подсказку БЕЗ каталога навыков
+     (16 169 знаков правил), хотя каждый запрос уходит с каталогом на 15 192
+     знака — то есть половина системного сообщения не проверялась вовсе.
+     Теперь собираем так же, как agent.mjs: правила + каталог + память + карточка
+     файлов проекта, и держим запас в PROMPT_BUDGET.reserveChars. */
   const { PROMPT_BUDGET } = await import('../src/config.mjs');
-  assert.ok(
-    finance.length < PROMPT_BUDGET.limitChars,
-    `промпт слишком большой: ${finance.length} при пределе ${PROMPT_BUDGET.limitChars}`,
-  );
-  assert.ok(
-    PROMPT_BUDGET.limitChars - finance.length >= PROMPT_BUDGET.reserveChars,
-    `запас промпта кончился: свободно ${PROMPT_BUDGET.limitChars - finance.length}, нужно ${PROMPT_BUDGET.reserveChars}`,
-  );
-  /* Самый тяжёлый реальный случай — блок дизайна: он один длиннее остальных. */
-  assert.ok(
-    landing.length < PROMPT_BUDGET.limitChars,
-    `промпт лендинга слишком большой: ${landing.length} при пределе ${PROMPT_BUDGET.limitChars}`,
-  );
-  assert.ok(
-    PROMPT_BUDGET.limitChars - landing.length >= PROMPT_BUDGET.reserveChars,
-    `запас промпта лендинга кончился: свободно ${PROMPT_BUDGET.limitChars - landing.length}, нужно ${PROMPT_BUDGET.reserveChars}`,
-  );
-  assert.ok(finance.length > plain.length);
+  const { skillsPromptText } = await import('../src/skills.mjs');
+  const skillsText = skillsPromptText('admin');
+  const filesBrief = 'Файлы проекта (12): отчёт.md, бюджет.xlsx, дек.html, план.pdf, заметки.txt, схема.png, ' +
+    'смета.xlsx, КП.docx, данные.csv, озвучка.mp3, презентация.pptx, договор.pdf';
+  const memoryText = 'Пользователь просил считать в тысячах рублей и не менять структуру прошлого отчёта.';
+  const factList = [{ text: memoryText, pinned: false, tags: [] }];
+  const build = (question) => systemPrompt({
+    projectName: 'Проект',
+    memory: memoryText,
+    userName: 'Владимир',
+    question,
+    facts: factList,
+    skillsText,
+    filesBrief,
+    continuing: false,
+  });
+  const heavyFinance = build('посчитай юнит-экономику продукта');
+  const heavyLanding = build('сделай лендинг по шпатлёвке стен под покраску');
+  const heavyBoth = build('сделай лендинг и финмодель для проекта');
+  const heavyPlain = build('что такое EBITDA');
+  for (const [name, text] of [
+    ['обычный вопрос', heavyPlain],
+    ['финансы', heavyFinance],
+    ['лендинг', heavyLanding],
+    ['лендинг и финмодель', heavyBoth],
+  ]) {
+    assert.ok(
+      text.length < PROMPT_BUDGET.limitChars,
+      `промпт (${name}) слишком большой: ${text.length} при пределе ${PROMPT_BUDGET.limitChars}`,
+    );
+    assert.ok(
+      PROMPT_BUDGET.limitChars - text.length >= PROMPT_BUDGET.reserveChars,
+      `запас промпта (${name}) кончился: свободно ${PROMPT_BUDGET.limitChars - text.length}, нужно ${PROMPT_BUDGET.reserveChars}`,
+    );
+  }
+  assert.ok(heavyFinance.length > heavyPlain.length);
 });
 
 test('откат на прежние сборщики без про-библиотек', async () => {

@@ -45,6 +45,12 @@ test('начальный набор легче полного и содержи�
   const fullBytes = JSON.stringify(all).length;
   const lazyBytes = JSON.stringify(lazy.defs).length;
   assert.ok(lazyBytes < fullBytes * 0.3, `экономия слишком мала: ${lazyBytes} из ${fullBytes}`);
+  /* Абсолютная планка, а не только доля от полного набора: схемы инструментов
+     уходят в каждый запрос, и рост одной тяжёлой схемы (create_word — 9 953
+     знака из 64 332) доля не поймает, если полный набор вырос вместе с ней.
+     Сегодня 12 840 знаков; 14 000 оставляют запас 9 % на две новые базовые
+     схемы, а дальше придётся сокращать описания параметров. */
+  assert.ok(lazyBytes < 14000, `начальный набор инструментов ${lazyBytes} знаков — выше плана 14000`);
   assert.ok(lazy.defs.length < all.length, 'скрывать нечего — набор не уменьшился');
   for (const name of CORE_TOOL_NAMES) {
     assert.ok(lazy.defs.some((tool) => tool.function.name === name), `базовый ${name} не попал в запрос`);
