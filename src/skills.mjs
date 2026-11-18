@@ -69,6 +69,8 @@ function loadAll() {
       id,
       name: meta.name || id,
       description: meta.description || body.split(/\r?\n/).find((line) => line.trim()) || id,
+      /* Кому виден навык. Пусто или «all» — всем; «admin» — только админу. */
+      access: String(meta.access || '').trim().toLowerCase() === 'admin' ? 'admin' : 'all',
       body,
       chars: body.length,
     });
@@ -88,18 +90,28 @@ export function reloadSkills() {
   return skills();
 }
 
-export function listSkills() {
-  return skills().map(({ id, name, description, chars }) => ({ id, name, description, chars }));
+export function isSkillVisible(skill, role = 'user') {
+  if (!skill) return false;
+  return skill.access !== 'admin' || String(role || 'user') === 'admin';
 }
 
-export function skillIds() {
-  return skills().map((skill) => skill.id);
+/** Навыки, которые видит роль: единственный вход для каталога и use_skill. */
+export function visibleSkills(role = 'user') {
+  return skills().filter((skill) => isSkillVisible(skill, role));
 }
 
-export function getSkill(id) {
+export function listSkills(role = 'user') {
+  return visibleSkills(role).map(({ id, name, description, chars, access }) => ({ id, name, description, chars, access }));
+}
+
+export function skillIds(role = 'user') {
+  return visibleSkills(role).map((skill) => skill.id);
+}
+
+export function getSkill(id, role = 'user') {
   const wanted = String(id || '').trim().toLowerCase();
   if (!wanted) return null;
-  const all = skills();
+  const all = visibleSkills(role);
   return all.find((skill) => skill.id.toLowerCase() === wanted) || null;
 }
 
@@ -156,15 +168,15 @@ export function compactDescription(description, limit = 240) {
 }
 
 /** Строки каталога: одна на навык. Отдельно от текста — для тестов и аудита. */
-export function catalogLines() {
-  return skills().map((skill) => `— ${skill.id}: ${compactDescription(skill.description)}`);
+export function catalogLines(role = 'user') {
+  return visibleSkills(role).map((skill) => `— ${skill.id}: ${compactDescription(skill.description)}`);
 }
 
 /** Каталог навыков для системного сообщения: одна строка на навык. */
-export function skillsPromptText() {
-  const all = skills();
+export function skillsPromptText(role = 'user') {
+  const all = visibleSkills(role);
   if (!all.length) return '';
-  const lines = ['Доступные навыки (полную инструкцию открывает инструмент use_skill):', ...catalogLines()];
+  const lines = ['Доступные навыки (полную инструкцию открывает инструмент use_skill):', ...catalogLines(role)];
   lines.push(
     'Перед ответственной работой по теме навыка (документ, таблица, презентация, PDF, сайт, анализ большого файла, аудит финансов, бизнес-план, ресёрч интернета) сначала вызови use_skill с его id и следуй инструкции. Если инструкция называет файл рядом с навыком (template.md, examples/…), открой его тем же use_skill с полем file.',
     'Структуру ответа в диалоге (разбор, сравнение, план, инструкция, риски) открывай по answer-structure, наглядность (таблица, матрица, таймлайн, воронка, чек-лист) — по answer-visuals.',
@@ -173,12 +185,12 @@ export function skillsPromptText() {
 }
 
 /** Тело навыка для выдачи модели. */
-export function skillBody(id) {
-  const skill = getSkill(id);
+export function skillBody(id, role = 'user') {
+  const skill = getSkill(id, role);
   if (!skill) {
     return {
       ok: false,
-      text: `Навык «${id}» не найден. Доступны: ${skillIds().join(', ') || 'пока нет'}.`,
+      text: `Навык «${id}» не найден. Доступны: ${skillIds(role).join(', ') || 'пока нет'}.`,
     };
   }
   const body =
@@ -199,8 +211,8 @@ export const SKILL_FILE_CHARS = 20000;
  * чтению проекта, поэтому их отдаёт тот же use_skill — иначе ссылка в
  * инструкции обрывается, и модель придумывает структуру заново.
  */
-export function skillFiles(id) {
-  const skill = getSkill(id);
+export function skillFiles(id, role = 'user') {
+  const skill = getSkill(id, role);
   if (!skill) return [];
   const base = path.join(SKILLS_DIR, skill.id);
   const out = [];
@@ -222,13 +234,13 @@ export function skillFiles(id) {
 }
 
 /** Текстовый файл из папки навыка: только внутри неё и только чтение. */
-export function skillFile(id, relName) {
-  const skill = getSkill(id);
+export function skillFile(id, relName, role = 'user') {
+  const skill = getSkill(id, role);
   if (!skill) {
-    return { ok: false, text: `Навык «${id}» не найден. Доступны: ${skillIds().join(', ') || 'пока нет'}.` };
+    return { ok: false, text: `Навык «${id}» не найден. Доступны: ${skillIds(role).join(', ') || 'пока нет'}.` };
   }
   const wanted = String(relName || '').replace(/\\/g, '/').replace(/^\.\//, '').trim();
-  const files = skillFiles(skill.id);
+  const files = skillFiles(skill.id, role);
   if (!wanted) {
     return { ok: false, text: `Укажи файл навыка «${skill.id}». Рядом лежат: ${files.join(', ') || 'файлов нет'}.` };
   }

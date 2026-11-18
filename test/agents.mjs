@@ -349,6 +349,63 @@ test('ответ уходит в ленту одним куском в конц�
   assert.ok(seen.indexOf(deltas[0]) > lastTool, 'текст ответа ушёл раньше окончания работы');
 });
 
+test('инструменты по требованию подключаются после поиска и не ломают префикс', async () => {
+  reset();
+  fs.writeFileSync(path.join(workspace, 'lazy-a.txt'), 'перенос');
+  behavior = ({ isSubagent }) => {
+    if (isSubagent) return { kind: 'text', text: 'ok' };
+    if (requests.length === 1) return { kind: 'tool', name: 'tool_search', args: { names: ['move_path'] } };
+    if (requests.length === 2) {
+      return { kind: 'tool', name: 'move_path', args: { from: 'lazy-a.txt', to: 'lazy-b.txt' } };
+    }
+    return { kind: 'text', text: 'Готово: lazy-b.txt' };
+  };
+  const seen = [];
+  const outcome = await runTurn(baseTurn({
+    emit: (event) => seen.push(event),
+    userText: 'Перемести lazy-a.txt в lazy-b.txt',
+  }));
+
+  assert.ok(requests[0].tools.includes('tool_search'), 'в первом запросе нет tool_search');
+  assert.ok(!requests[0].tools.includes('move_path'), 'скрытая схема приехала сразу');
+  assert.ok(!requests[0].tools.includes('create_word'), 'тяжёлая схема не спрятана');
+  assert.ok(requests[0].tools.length < 30, 'начальный набор слишком большой');
+  assert.ok(requests[1].tools.includes('move_path'), 'схема не подключилась на следующем шаге');
+  assert.deepEqual(
+    requests[1].tools.slice(0, requests[0].tools.length),
+    requests[0].tools,
+    'префикс tools изменился — кэш провайдера сломается',
+  );
+  assert.ok(fs.existsSync(path.join(workspace, 'lazy-b.txt')), 'подключённый инструмент не выполнился');
+  assert.ok(outcome.tools.some((tool) => tool.name === 'tool_search'));
+  assert.ok(outcome.tools.some((tool) => tool.name === 'move_path'));
+  const detail = seen
+    .filter((event) => event.type === 'tool' && event.name === 'tool_search' && event.status === 'ok')
+    .pop()?.detail || '';
+  assert.match(detail, /подключено: move_path/);
+});
+
+test('прямой вызов скрытого инструмента выполняется и оставляет схему', async () => {
+  reset();
+  fs.writeFileSync(path.join(workspace, 'lazy-c.txt'), 'прямой');
+  behavior = ({ isSubagent }) => {
+    if (isSubagent) return { kind: 'text', text: 'ok' };
+    if (requests.length === 1) {
+      return { kind: 'tool', name: 'move_path', args: { from: 'lazy-c.txt', to: 'lazy-d.txt' } };
+    }
+    return { kind: 'text', text: 'Готово: lazy-d.txt' };
+  };
+  const outcome = await runTurn(baseTurn({
+    userText: 'Перемести lazy-c.txt в lazy-d.txt',
+    toolFilter: null,
+  }));
+
+  assert.ok(!requests[0].tools.includes('move_path'), 'скрытая схема приехала сразу');
+  assert.ok(requests[1].tools.includes('move_path'), 'прямой вызов не оставил схему подключённой');
+  assert.ok(fs.existsSync(path.join(workspace, 'lazy-d.txt')), 'прямой вызов скрытого инструмента не сработал');
+  assert.match(outcome.text, /Готово/);
+});
+
 let failed = 0;
 for (const item of tests) {
   try {

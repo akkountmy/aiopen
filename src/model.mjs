@@ -167,6 +167,7 @@ export const MECHANICAL_TOOLS = new Set([
   'move_path',
   'remember',
   'use_skill',
+  'tool_search',
 ]);
 
 export function isMechanicalTool(name) {

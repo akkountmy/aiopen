@@ -35,6 +35,7 @@ export const READ_ONLY_TOOLS = new Set([
   'check_links',
   'check_document',
   'analyze_image',
+  'tool_search',
 ]);
 
 /** Запускать ли этот вызов вместе с соседними. */

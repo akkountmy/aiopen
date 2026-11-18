@@ -148,6 +148,20 @@ test('копия не замораживает сервис на время ко
   assert.ok(worst < 400, `очередь событий стояла ${worst} мс — копия всё ещё блокирует сервис`);
 });
 
+test('две копии одновременно не мешают друг другу', async () => {
+  /* Ручная и суточная копии могли стартовать в одну секунду и писать в одну
+     временную папку `.tmp-<дата>-<pid>`: одна переименовывала её, вторая падала
+     с ENOTEMPTY. Теперь вызовы в очереди, а временная папка у каждого своя. */
+  reset();
+  const now = new Date('2026-12-04T03:00:00.000Z');
+  const [first, second] = await Promise.all([snapshotState({ now }), snapshotState({ now })]);
+  assert.ok(first.files > 0, `первая копия: файлов ${first.files}`);
+  assert.ok(second.files > 0, `вторая копия: файлов ${second.files}`);
+  assert.equal(listBackups().filter((item) => item.id === first.id).length, 1, 'за день одна копия');
+  const leftovers = fs.readdirSync(backupsDir()).filter((name) => name.startsWith('.tmp-'));
+  assert.deepEqual(leftovers, [], `остались временные папки: ${leftovers.join(', ')}`);
+});
+
 let failed = 0;
 for (const { name, fn } of tests) {
   try {

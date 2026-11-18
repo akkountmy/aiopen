@@ -2993,6 +2993,8 @@ async function executeRun(run, job) {
       userName: user.displayName || user.username,
       userText,
       projectContext,
+      /* Роль владельца: навыки с access: admin видит только админ. */
+      role: user.role,
       /* Озвучка, запущенная из чата инструментом, принадлежит этому человеку:
          по ownerId её находят в /api/tts/jobs и показывает окно прогресса. */
       ownerId: user.id,
@@ -4137,7 +4139,7 @@ async function route(req, res) {
         time: nowIso(),
         sessions: sessionSeats(),
         docs: await docEngines(),
-        skills: listSkills().length,
+        skills: listSkills('admin').length,
         browser: await browserStatus({ probe }),
         stealth: obscuraInfo(),
         /* Состояние утренней сборки Top news: без него «Не удалось собрать

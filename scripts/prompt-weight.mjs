@@ -9,7 +9,9 @@
  * Запуск: node scripts/prompt-weight.mjs [--probe-tokens=22471] [--json]
  */
 import { systemPrompt } from '../src/prompt.mjs';
+import { TOOLBOX } from '../src/config.mjs';
 import { availableToolDefs } from '../src/tools.mjs';
+import { buildLazyToolset } from '../src/toolrouter.mjs';
 import { skillsPromptText, listSkills } from '../src/skills.mjs';
 
 const arg = (name, fallback) => {
@@ -34,6 +36,11 @@ const system = systemPrompt({
 
 const toolDefs = await availableToolDefs();
 const toolsJson = JSON.stringify(toolDefs);
+/* Реальный первый запрос хода: базовые схемы плюс tool_search с каталогом. */
+const lazy = TOOLBOX.enabled ? buildLazyToolset(toolDefs) : { defs: toolDefs };
+const lazyJson = JSON.stringify(lazy.defs);
+const savedChars = toolsJson.length - lazyJson.length;
+const savedPct = toolsJson.length ? Math.round((savedChars / toolsJson.length) * 1000) / 10 : 0;
 const perTool = toolDefs
   .map((def) => ({
     name: def.function?.name || '?',
@@ -52,6 +59,7 @@ const body = {
   tools: toolDefs,
 };
 const bodyChars = JSON.stringify(body).length;
+const lazyBodyChars = JSON.stringify({ ...body, tools: lazy.defs }).length;
 const ratio = probeTokens > 0 ? bodyChars / probeTokens : 0;
 
 const pct = (part) => (ratio ? Math.round((part / ratio / probeTokens) * 1000) / 10 : null);
@@ -62,6 +70,11 @@ const report = {
   toolsChars: toolsJson.length,
   bodyChars,
   tools: toolDefs.length,
+  lazyToolsChars: lazyJson.length,
+  lazyBodyChars,
+  lazyTools: lazy.defs.length,
+  savedChars,
+  savedPct,
   skillsInCatalog: listSkills().length,
   share: {
     systemPct: pct(system.length),
@@ -82,6 +95,7 @@ if (asJson) {
   console.log(`запрос «сколько будет 2+2»: тело ${bodyChars} знаков, якорь ${probeTokens} токенов, ${report.charsPerToken} знака на токен`);
   console.log(`системный промпт: ${system.length} знаков${ratio ? ` ≈ ${report.tokensEstimate.system} токенов (${report.share.systemPct} %)` : ''}`);
   console.log(`схемы инструментов: ${toolsJson.length} знаков, ${toolDefs.length} инструментов${ratio ? ` ≈ ${report.tokensEstimate.tools} токенов (${report.share.toolsPct} %)` : ''}`);
+  console.log(`первый запрос хода: ${lazyJson.length} знаков, ${lazy.defs.length} инструментов — экономия ${savedChars} знаков (${savedPct} %)`);
   console.log(`каталог навыков внутри промпта: ${listSkills().length} навыков, ${skillsPromptText().length} знаков`);
   console.log('');
   console.log('самые дорогие инструменты (знаки: всего / описание / параметры):');

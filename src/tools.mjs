@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { CAPACITY, DATA_DIR, LIMITS, MODEL } from './config.mjs';
+import { CAPACITY, DATA_DIR, LIMITS, MODEL, TOOLBOX } from './config.mjs';
 import { withHeavySlot } from './capacity.mjs';
 import { checkDocument, formatCheckReport } from './doccheck.mjs';
 import { memoryToolReply } from './memory.mjs';
@@ -43,6 +43,7 @@ import { writeZip } from './zip.mjs';
 import { ARCHIVE_LIMITS, archiveKind, extractArchiveTo, formatExtraction, gunzipTo } from './archive.mjs';
 import { checkLinks, formatLinks, linksFromText } from './linkcheck.mjs';
 import { compareDocuments, formatCompare } from './comparedocs.mjs';
+import { CORE_TOOL_NAMES, MAX_REVEAL, TOOL_SEARCH_NAME, matchToolDefs, withToolSearchCatalog } from './toolrouter.mjs';
 import { buildArtifacts, describeDesign, designView, mergeStyle, normalizeStyle, readSpec, styleFromVision, writeSpec } from './design.mjs';
 import {
   LAB_DIR,
@@ -1039,7 +1040,7 @@ async function buildDeckFile({ root, rel, spec, imageNotes = [], origin = 'deka'
 
 /* ------------------------------ инструменты ------------------------------ */
 
-export const TOOL_DEFS = [
+const PRIMARY_TOOL_DEFS = [
   {
     type: 'function',
     function: {
@@ -2426,6 +2427,39 @@ export const TOOL_DEFS = [
   },
 ];
 
+/* Инструмент-ключ к остальным схемам. Каталог дописывается в availableToolDefs:
+ * он зависит от окружения (в облаке нет run_python), а здесь лежит только
+ * устойчивое описание механики. */
+export const TOOL_SEARCH_DEF = {
+  type: 'function',
+  function: {
+    name: 'tool_search',
+    description:
+      'Подключить инструмент по требованию. В запросе сразу видны только базовые инструменты; остальные перечислены в каталоге здесь. Передай query словами задачи или names с точными именами — схемы подключённых инструментов появятся в следующем шаге.',
+    parameters: {
+      type: 'object',
+      properties: {
+        query: {
+          type: 'string',
+          description: 'Что нужно сделать: слова задачи или имя инструмента. Например: «Excel с диаграммой», «озвучить книгу», create_deck.',
+        },
+        names: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Точные имена из каталога, если уже знаешь нужные. Можно передать без query.',
+        },
+        limit: {
+          type: 'integer',
+          description: 'Сколько инструментов подключить по query, 1–8. По умолчанию 4.',
+        },
+      },
+      required: [],
+    },
+  },
+};
+
+export const TOOL_DEFS = [...PRIMARY_TOOL_DEFS, TOOL_SEARCH_DEF];
+
 export const TOOL_LABELS = {
   list_files: 'Просмотр файлов',
   read_file: 'Чтение файла',
@@ -2477,6 +2511,7 @@ export const TOOL_LABELS = {
   create_project: 'Создание проекта',
   add_personal_block: 'Свой блок',
   add_news_topic: 'Своя тема',
+  tool_search: 'Подбор инструментов',
 };
 
 /** Русское склонение по числу: 1 ссылка, 2 ссылки, 5 ссылок. */
@@ -2492,6 +2527,9 @@ function plural(count, one, few, many) {
 export function toolSummary(name, args) {
   if (!args || typeof args !== 'object') return '';
   switch (name) {
+    case 'tool_search':
+      return String(args.query || '').trim()
+        || (Array.isArray(args.names) ? args.names.join(', ') : '');
     case 'legal_task':
       return [String(args.action || 'list'), args.id || args.area || args.query || ''].filter(Boolean).join(' · ');
     case 'read_file':
@@ -2790,7 +2828,12 @@ export async function availableToolDefs() {
   const withPython = await pythonAvailable();
   let defs = TOOL_DEFS;
   if (!withPython) defs = defs.filter((tool) => tool.function.name !== 'run_python');
-  return defs;
+  /* Выключенный режим — это прежний полный набор без каталога и лишней схемы:
+     иначе DSHOW_TOOLS_LAZY=0 не возвращал бы ровно старое поведение. */
+  if (!TOOLBOX.enabled) return defs.filter((tool) => tool.function.name !== TOOL_SEARCH_NAME);
+  /* Каталог собирается из доступных схем: не обещаем инструмент, которого
+     в этом окружении нет, и не держим второй рукописный список. */
+  return withToolSearchCatalog(defs);
 }
 
 /* ------------------------- создание проекта и диалога ---------------------- */
@@ -4178,24 +4221,81 @@ async function executeToolInner(name, args, ctx) {
         },
       };
     }
+    case 'tool_search': {
+      const defs = (await availableToolDefs()).filter((tool) => tool.function.name !== TOOL_SEARCH_NAME);
+      const core = new Set(CORE_TOOL_NAMES);
+      /* Базовые схемы уже в запросе: искать их незачем, иначе они занимают
+         места в ответе и прячут то, что действительно нужно подключить. */
+      const hidden = defs.filter((tool) => !core.has(tool.function.name));
+      const query = String(args.query || '').trim();
+      const rawNames = Array.isArray(args.names)
+        ? args.names
+        : String(args.names || '').split(',');
+      const wanted = [...new Set(rawNames.map((name) => String(name || '').trim()).filter(Boolean))]
+        .slice(0, MAX_REVEAL);
+      const limit = Math.max(1, Math.min(MAX_REVEAL, Number(args.limit) || 4));
+      if (!query && !wanted.length) {
+        return {
+          text: `Укажи query словами задачи или names с точными именами. В каталоге ${hidden.length} инструментов: ${hidden.map((tool) => tool.function.name).join(', ')}.`,
+          meta: { found: 0 },
+        };
+      }
+
+      let picked = [];
+      let missing = [];
+      if (wanted.length) {
+        const byName = new Map(defs.map((tool) => [tool.function.name, tool]));
+        picked = wanted.map((name) => byName.get(name)).filter(Boolean);
+        missing = wanted.filter((name) => !byName.has(name) && name !== TOOL_SEARCH_NAME);
+      } else {
+        picked = matchToolDefs(hidden, query, { labels: TOOL_LABELS, limit });
+      }
+
+      if (!picked.length) {
+        return {
+          text: `По запросу «${query || wanted.join(', ')}» ничего не нашлось. В каталоге ${hidden.length} инструментов: ${hidden.map((tool) => tool.function.name).join(', ')}. Уточни запрос или передай точное имя в names.`,
+          meta: { found: 0 },
+        };
+      }
+
+      const names = picked.map((tool) => tool.function.name);
+      const reveal = names.filter((name) => !core.has(name));
+      const already = names.filter((name) => core.has(name));
+      const tail = [
+        already.length ? `Уже доступны: ${already.join(', ')}.` : '',
+        missing.length ? `Не найдено: ${missing.join(', ')}.` : '',
+      ].filter(Boolean).join(' ');
+      if (!reveal.length) {
+        return {
+          text: `${tail} Все названные инструменты уже в запросе — вызывай их как обычно.`,
+          meta: { found: names.length, reveal: [], query },
+        };
+      }
+      return {
+        text: `Подключено (${reveal.length}): ${reveal.join(', ')}.${tail ? ` ${tail}` : ''} Схемы появятся в следующем шаге — вызывай эти инструменты как обычно.`,
+        meta: { found: reveal.length, reveal, query },
+      };
+    }
     case 'use_skill': {
       const id = String(args.id || '').trim();
       const file = String(args.file || '').trim();
+      /* Роль приходит из контекста хода: закрытый навык не открывается и прямым id. */
+      const role = String(ctx && ctx.role ? ctx.role : 'user');
       /* Шаблоны и примеры лежат рядом с навыком и не видны обычному чтению
          проекта: их отдаёт тот же инструмент, иначе ссылка в инструкции
          обрывается. */
       if (file) {
-        const answer = skillFile(id, file);
+        const answer = skillFile(id, file, role);
         return {
-          text: answer.ok ? answer.text : `${answer.text}\nДоступные навыки: ${skillIds().join(', ')}.`,
+          text: answer.ok ? answer.text : `${answer.text}\nДоступные навыки: ${skillIds(role).join(', ')}.`,
           meta: { skill: id, found: answer.ok, file: answer.file || file },
         };
       }
-      const body = skillBody(id);
+      const body = skillBody(id, role);
       if (!body.ok) {
-        return { text: `${body.text}\nДоступные навыки: ${skillIds().join(', ')}.`, meta: { skill: id, found: false } };
+        return { text: `${body.text}\nДоступные навыки: ${skillIds(role).join(', ')}.`, meta: { skill: id, found: false } };
       }
-      return { text: body.text, meta: { skill: body.id, found: true, files: skillFiles(body.id) } };
+      return { text: body.text, meta: { skill: body.id, found: true, files: skillFiles(body.id, role) } };
     }
     case 'check_document': {
       const rel = String(args.path || '');

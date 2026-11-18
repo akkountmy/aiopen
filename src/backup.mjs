@@ -217,11 +217,23 @@ async function copyWorkspaces(staging, budget, yieldEvery = 20) {
   return { workspaces, files: copied, bytes, skipped };
 }
 
+let snapshotQueue = Promise.resolve();
+let snapshotSeq = 0;
+
 /**
  * Снимает копию состояния. Возвращает { id, dir, chats, workspaces, bytes }.
  * Повторный вызов в тот же день перезаписывает копию этого дня.
+ * Вызовы идут строго по очереди: две копии одновременно не должны делить
+ * временную папку и перезаписывать копию дня друг у друга.
  */
-export async function snapshotState({
+export function snapshotState(options = {}) {
+  snapshotSeq += 1;
+  const run = snapshotQueue.then(() => snapshotStateNow(options));
+  snapshotQueue = run.then(() => undefined, () => undefined);
+  return run;
+}
+
+async function snapshotStateNow({
   now = new Date(),
   keep = BACKUP_DEFAULTS.keep,
   maxSnapshotBytes = BACKUP_DEFAULTS.maxSnapshotBytes,
@@ -230,8 +242,8 @@ export async function snapshotState({
   const base = backupsDir();
   await fsp.mkdir(base, { recursive: true });
   const target = path.join(base, id);
-  const staging = path.join(base, `.tmp-${id}-${process.pid}`);
-  await fsp.rm(staging, { recursive: true, force: true });
+  const staging = path.join(base, `.tmp-${id}-${process.pid}-${snapshotSeq}`);
+  await fsp.rm(staging, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
   await fsp.mkdir(path.join(staging, 'chats'), { recursive: true });
 
   let chats = 0;

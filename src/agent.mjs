@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { CAPACITY, CONTEXT, ESCALATION, MODEL, REVIEW, SPLIT, TOOLPLAN, costUsd } from './config.mjs';
+import { CAPACITY, CONTEXT, ESCALATION, MODEL, REVIEW, SPLIT, TOOLBOX, TOOLPLAN, costUsd } from './config.mjs';
 import { buildArtifacts, describeDesign, designView, specFromText, writeSpec } from './design.mjs';
 import { documentExcerpt, documentKind } from './doccheck.mjs';
 import { normalizeHistory, repairHistoryInPlace } from './history.mjs';
@@ -13,6 +13,7 @@ import { describeReview, needsReview, reviewAnswer } from './review.mjs';
 import { skillsPromptText } from './skills.mjs';
 import { continuePrompt, taskSummaryLine, updateTaskState } from './taskstate.mjs';
 import { describeToolStep, groupToolCalls, savedByParallel } from './toolplan.mjs';
+import { activateToolDefs, buildLazyToolset } from './toolrouter.mjs';
 import { applyReference, availableToolDefs, TOOL_LABELS, executeTool, listTree, toolSummary } from './tools.mjs';
 import {
   compressHistory,
@@ -809,6 +810,8 @@ async function runTurnInner({
   /* Владелец разговора: фоновые задания (озвучка) записываются на него, чтобы
      человек видел прогресс и мог остановить синтез. */
   ownerId = null,
+  /* Роль владельца разговора: от неё зависит, какие навыки видит модель. */
+  role = 'user',
   userText,
   /* Выжимка прошлых диалогов проекта: новый чат не начинает с чистого листа. */
   projectContext = '',
@@ -862,7 +865,7 @@ async function runTurnInner({
     }
   }
   const toolsUsed = [];
-  const skillsText = skillsPromptText();
+  const skillsText = skillsPromptText(role);
   const trimStats = createTrimStats();
   const trimConfig = resolveTrimConfig(CONTEXT.trim);
   /* Повторы вызовов внутри хода: отпечаток вызова → {шаг, отпечаток ответа}.
@@ -909,7 +912,14 @@ async function runTurnInner({
   const turnMessage = { role: 'user', content: buildUserContent(userText, images) };
   chat.history.push(turnMessage);
 
-  const toolDefs = filterToolDefs(await availableToolDefs(), toolFilter);
+  /* Явный toolFilter — это уже готовый набор (субагент, тест): не трогаем его
+     и не прячем схемы. Обычный ход получает базовый набор плюс tool_search. */
+  const fullToolDefs = filterToolDefs(await availableToolDefs(), toolFilter);
+  const lazyTools =
+    !toolFilter && TOOLBOX.enabled && fullToolDefs.length >= TOOLBOX.minTools
+      ? buildLazyToolset(fullToolDefs)
+      : null;
+  let toolDefs = lazyTools ? lazyTools.defs : fullToolDefs;
   /* Класс задачи решает, кто её делает: короткий вопрос — быстро и дёшево,
      аудит/финмодель/ресёрч — сильная модель с максимальным усилием. Профиль
      выбирается один раз на ход и держится до конца: посреди работы модель не
@@ -917,7 +927,9 @@ async function runTurnInner({
   const route = chooseProfile({
     text: userText,
     filesBrief,
-    tools: toolDefs.map((def) => def.function.name),
+    /* Маршрутизатор видит весь набор хода, а не только видимые сейчас схемы:
+       иначе create_word, подключённый позже, перестал бы поднимать профиль. */
+    tools: fullToolDefs.map((def) => def.function.name),
     images: images.length,
     config: ESCALATION,
     /* «Рассуждения» — явный выбор человека: не полагаемся на эвристику
@@ -998,6 +1010,7 @@ async function runTurnInner({
           toolFilter: allowed,
           writeRoot: folder,
           depth: depth + 1,
+          role,
           maxSteps: SUBAGENT_STEPS,
         });
         usage.tokensIn += outcome.usage.tokensIn;
@@ -1036,6 +1049,7 @@ async function runTurnInner({
     facts,
     depth,
     ownerId,
+    role,
     attachments,
     spawnAgent: spawnSubagents,
     createProjectChat,
@@ -1299,6 +1313,17 @@ async function runTurnInner({
       const label = TOOL_LABELS[call.function.name] || call.function.name;
       const summary = toolSummary(call.function.name, args);
       const toolId = call.id || `${Date.now()}`;
+      /* Модель может вспомнить имя из прошлого хода и позвать его без
+         tool_search. Не ломаем вызов: выполняем и оставляем схему подключённой
+         для следующих шагов. */
+      const revealedNow = [];
+      if (lazyTools) {
+        const auto = activateToolDefs(toolDefs, lazyTools.universe, [call.function.name]);
+        if (auto.added.length) {
+          toolDefs = auto.defs;
+          console.log(`[tools] шаг ${steps}: схема ${call.function.name} подключена по прямому вызову`);
+        }
+      }
       emit({ type: 'tool', id: toolId, name: call.function.name, label, summary, status: 'run' });
       const started = Date.now();
       let content = '';
@@ -1354,6 +1379,18 @@ async function runTurnInner({
             console.log(`[trim] ${call.function.name}: ${trimmed.before} → ${trimmed.after} знаков, полный текст ${trimmed.spill}`);
           }
 
+          /* tool_search возвращает имена — подключаем их к следующему шагу.
+             Схемы дописываются в конец массива, чтобы префикс уже отправленных
+             tools не менялся и кэш провайдера продолжал работать. */
+          const reveal = lazyTools && Array.isArray(executed.meta?.reveal) ? executed.meta.reveal : [];
+          if (reveal.length) {
+            const activated = activateToolDefs(toolDefs, lazyTools.universe, reveal);
+            if (activated.added.length) {
+              toolDefs = activated.defs;
+              revealedNow.push(...activated.added);
+              console.log(`[tools] шаг ${steps}: подключены ${activated.added.join(', ')}`);
+            }
+          }
           const pathDetail = executed.meta?.path ? String(executed.meta.path) : '';
           toolPath = pathDetail;
           /* Короткая приписка инструмента («проверяю страницу в живом браузере:
@@ -1373,7 +1410,11 @@ async function runTurnInner({
             label,
             summary,
             status: 'ok',
-            detail: [pathDetail, trimDetail].filter(Boolean).join(' · '),
+            detail: [
+              pathDetail,
+              trimDetail,
+              revealedNow.length ? `подключено: ${revealedNow.join(', ')}` : '',
+            ].filter(Boolean).join(' · '),
             ...(noteDetail ? { note: noteDetail } : {}),
             ms: Date.now() - started,
           });
