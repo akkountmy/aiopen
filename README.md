@@ -1411,3 +1411,5 @@ Remove-Item -Recurse -Force "HKCU:\Software\Microsoft\Windows\CurrentVersion\Int
 ## Лицензия
 
 MIT — см. [LICENSE](LICENSE).
+
+<!-- проверка публикации из облака: 2026-11-21 -->
