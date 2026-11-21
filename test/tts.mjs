@@ -78,7 +78,11 @@ async function main() {
     if (chunks.length < 2) throw new Error(`ожидалось несколько кусков, получено ${chunks.length}`);
     const longest = Math.max(...chunks.map((item) => item.length));
     if (longest > 200) throw new Error(`кусок длиннее лимита: ${longest}`);
-    if (!normalizeText(FRAGMENT).includes('т. д.')) throw new Error('сокращение потерялось');
+    /* Сокращение не теряется, а раскрывается словами: диктор читает «тэ дэ»,
+       поэтому «т. д.» уходит в синтез как «так далее». */
+    const spoken = normalizeText(FRAGMENT);
+    if (!spoken.includes('так далее')) throw new Error('сокращение «т. д.» потерялось');
+    if (spoken.includes('т. д.')) throw new Error('сокращение ушло в синтез буквами');
     ok('нарезка текста', `${chunks.length} кусков, максимум ${longest} знак`);
   });
 
