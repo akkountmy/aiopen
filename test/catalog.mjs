@@ -9,7 +9,18 @@
  * Запуск: node test/catalog.mjs
  */
 import assert from 'node:assert/strict';
-import { catalogLines, compactDescription, listSkills, skillFile, skillFiles, skillsPromptText, SKILL_BODY_CHARS } from '../src/skills.mjs';
+import {
+  catalogLines,
+  catalogSkills,
+  compactDescription,
+  getSkill,
+  listSkills,
+  skillBody,
+  skillFile,
+  skillFiles,
+  skillsPromptText,
+  SKILL_BODY_CHARS,
+} from '../src/skills.mjs';
 
 const tests = [];
 const test = (name, fn) => tests.push({ name, fn });
@@ -40,7 +51,9 @@ test('строка каталога не обрывается служебным
 test('триггеры попадают в каталог (кроме известного остатка)', () => {
   const lines = catalogLines();
   const lost = [];
-  for (const skill of listSkills()) {
+  /* Только навыки каталога: у скрытых дочерних (catalog: false) своей строки
+     нет, их триггеры обязан нести родитель — это проверяет следующий тест. */
+  for (const skill of catalogSkills()) {
     const shown = lines.find((line) => line.startsWith(`— ${skill.id}: `)) || '';
     const triggers = [...String(skill.description || '').matchAll(/«([^»]{3,60})»/g)].map((match) => match[1].trim());
     for (const trigger of triggers) if (!shown.includes(trigger)) lost.push(skill.id);
@@ -50,9 +63,43 @@ test('триггеры попадают в каталог (кроме извес
   assert.ok(lost.length <= KNOWN_LOST.length, `потеряно триггеров: ${lost.length}`);
 });
 
+test('скрытый дочерний навык открывается по id и не теряет маршрут', () => {
+  /* Объединение семейства (24.11.2026): 14 навыков про дом убраны из каталога
+     и стоят строкой у родителя house-build / house-design. Скрытый навык без
+     маршрута — это навык, которого для модели не существует: поэтому у каждого
+     скрытого проверяем id в теле родителя и все его триггеры в тексте родителя
+     (строка каталога плюс тело). */
+  const hidden = listSkills('admin').filter((skill) => skill.catalog === false);
+  assert.ok(hidden.length > 0, 'скрытых навыков нет — тест ничего не проверяет');
+  const parents = new Map();
+  const parentText = (id) => {
+    if (!parents.has(id)) {
+      const skill = getSkill(id, 'admin');
+      assert.ok(skill, `у скрытого навыка нет родителя ${id}: маршрут потерян`);
+      const line = catalogLines('admin').find((item) => item.startsWith(`— ${id}: `)) || '';
+      parents.set(id, `${line}\n${skill.body}`);
+    }
+    return parents.get(id);
+  };
+  const lost = [];
+  for (const skill of hidden) {
+    assert.equal(skill.access, 'all', `${skill.id}: скрытый навык не должен быть закрытым`);
+    assert.equal(skillBody(skill.id, 'admin').ok, true, `${skill.id}: тело не открывается по id`);
+    const text = parentText(skill.id.replace(/-[^-]+$/, ''));
+    if (!text.includes(skill.id)) lost.push(`${skill.id}: нет id у родителя`);
+    const triggers = [...String(skill.description || '').matchAll(/«([^»]{3,60})»/g)].map((match) => match[1].trim());
+    for (const trigger of triggers) if (!text.includes(trigger)) lost.push(`${skill.id}: «${trigger}»`);
+  }
+  assert.deepEqual(lost, [], `скрытые навыки без маршрута: ${lost.join('; ')}`);
+});
+
 test('каталог целиком укладывается в бюджет и растёт вместе с навыками', () => {
   const text = skillsPromptText();
-  assert.equal(text.split('\n').length, listSkills().length + 3, 'строк каталога: навыки плюс заголовок и два правила');
+  assert.equal(
+    text.split('\n').length,
+    catalogLines().length + 3,
+    'строк каталога: строки навыков плюс заголовок и два правила',
+  );
   /* Бюджет 12000 → 16000 (10.11.2026): добавили 26 PM-навыков, каталог стал
      75 навыков и 15.3 тыс. знаков. 16000 → 16800 (11.11.2026): шесть навыков
      финансового блока (юнит-экономика, скоринг, инвестмеморандум, правовая

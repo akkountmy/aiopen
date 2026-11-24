@@ -83,14 +83,14 @@ const CASES = [
   {
     key: 'legal',
     prompt: 'Клиент не заплатил 620 000 ₽ по договору подряда, подписан акт, срок оплаты прошёл 40 дней. Что делать по шагам: претензия, неустойка, суд. Посчитай неустойку по 1/300 ключевой ставки 16%.',
-    skill: 'house-build-claims',
+    skill: ['house-build', 'house-build-claims'],
     tools: ['calculate'],
     verify: [],
   },
   {
     key: 'estimate',
     prompt: 'Сколько стоит построить дом 120 м² из газобетона под чистовую отделку в Подмосковье? Нужна смета по разделам с итогом и Excel.',
-    skill: 'house-build-estimate',
+    skill: ['house-build', 'house-build-estimate'],
     tools: ['create_excel'],
     verify: ['check_document'],
   },
@@ -270,14 +270,18 @@ for (const item of chosen) {
     const names = run.tools.map((tool) => tool.name);
     const skillHit = run.tools.find((tool) => tool.name === 'use_skill');
     const firedSkill = skillHit ? String(skillHit.summary || '').trim() : '';
-    const rightSkill = firedSkill === item.skill;
+    /* Допустимый ответ — строка или список: у объединённого семейства
+       (house-build / house-design) правильным считается и вход в раздел, и
+       сразу дочерний навык с деталями. */
+    const expected = Array.isArray(item.skill) ? item.skill : [item.skill];
+    const rightSkill = expected.includes(firedSkill);
     const anySkill = Boolean(skillHit);
     const toolsHit = item.tools.length ? item.tools.some((name) => names.includes(name)) : true;
     const verified = item.verify.length ? item.verify.some((name) => names.includes(name)) : true;
     const ok = !run.error && anySkill && toolsHit;
     results.push({
       key: item.key,
-      expected: item.skill,
+      expected: expected.join(' | '),
       fired: firedSkill,
       anySkill,
       rightSkill,
@@ -291,7 +295,7 @@ for (const item of chosen) {
       error: run.error,
     });
     console.log(
-      `${ok ? 'ok  ' : 'FAIL'} ${run.seconds}s навык=${firedSkill || '—'}${rightSkill ? '' : ` (ждали ${item.skill})`} ` +
+      `${ok ? 'ok  ' : 'FAIL'} ${run.seconds}s навык=${firedSkill || '—'}${rightSkill ? '' : ` (ждали ${expected.join(' | ')})`} ` +
         `инструменты=${[...new Set(names)].join(',') || '—'}${verified ? '' : ' · нет проверки'}${run.error ? ` · ${run.error}` : ''}`,
     );
   } catch (error) {

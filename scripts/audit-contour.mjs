@@ -13,7 +13,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { TOOL_DEFS } from '../src/tools.mjs';
-import { SKILLS_DIR, listSkills, skillsPromptText, SKILL_BODY_CHARS, catalogLines } from '../src/skills.mjs';
+import { SKILLS_DIR, listSkills, getSkill, skillsPromptText, SKILL_BODY_CHARS, catalogLines } from '../src/skills.mjs';
 
 const PROMPT_FILE = path.join(SKILLS_DIR, '..', 'src', 'prompt.mjs');
 
@@ -68,6 +68,17 @@ function triggersOf(description) {
 }
 
 const rows = [];
+/* Скрытый дочерний навык (catalog: false) своей строки не занимает: его
+   триггеры обязан нести родитель — строка каталога плюс тело. */
+const parentCache = new Map();
+function parentText(id) {
+  if (!parentCache.has(id)) {
+    const parent = getSkill(id, 'admin');
+    const line = catalogLines('admin').find((item) => item.startsWith(`— ${id}: `)) || '';
+    parentCache.set(id, `${line}\n${parent ? parent.body : ''}`);
+  }
+  return parentCache.get(id);
+}
 for (const skill of skills) {
   const file = path.join(SKILLS_DIR, skill.id, 'SKILL.md');
   const raw = fs.readFileSync(file, 'utf8');
@@ -77,7 +88,9 @@ for (const skill of skills) {
      функции, что и сервер, а не по своей копии правил. */
   const shown = catalogLines().find((line) => line.startsWith(`— ${skill.id}: `)) || '';
   const shownText = shown.replace(`— ${skill.id}: `, '');
-  const lostTriggers = triggers.filter((trigger) => !shownText.includes(trigger));
+  const hidden = skill.catalog === false;
+  const coverage = hidden ? parentText(skill.id.replace(/-[^-]+$/, '')) : shownText;
+  const lostTriggers = triggers.filter((trigger) => !coverage.includes(trigger));
   const mentioned = toolMentions(raw);
   const unknown = [...mentioned].filter((name) => !tools.has(name) && !PARAM_NAMES.has(name) && !NOT_A_TOOL.has(name));
   rows.push({
@@ -86,6 +99,7 @@ for (const skill of skills) {
     descChars: description.length,
     shownChars: shownText.length,
     triggers: triggers.length,
+    hidden,
     lostTriggers,
     unknownTools: unknown,
     knownTools: [...mentioned].filter((name) => tools.has(name)),
@@ -107,6 +121,8 @@ const uncovered = [...tools].filter((name) => !coveredTools.has(name)).sort();
 
 const report = {
   skills: skills.length,
+  catalogSkills: skills.filter((skill) => skill.catalog !== false).length,
+  hiddenSkills: skills.filter((skill) => skill.catalog === false).length,
   catalogChars: catalog.length,
   catalogLines: catalog.split('\n').length,
   bodyTotalChars: rows.reduce((sum, row) => sum + row.bodyChars, 0),
@@ -129,7 +145,7 @@ const report = {
 if (process.argv.includes('--json')) {
   console.log(JSON.stringify(report, null, 2));
 } else {
-  console.log(`навыков: ${report.skills}, каталог: ${report.catalogChars} знаков (${report.catalogLines} строк)`);
+  console.log(`навыков: ${report.skills} (в каталоге ${report.catalogSkills}, скрытых ${report.hiddenSkills}), каталог: ${report.catalogChars} знаков (${report.catalogLines} строк)`);
   console.log(`тела навыков: всего ${report.bodyTotalChars}, потолок ${report.bodyLimit}, обрезанных ${report.truncatedBodies}, самый длинный ${report.bodyMaxChars}`);
   console.log(`инструментов в реестре: ${report.tools}, без навыка: ${report.toolsUncoveredInSkills}${uncovered.length ? ' → ' + uncovered.join(', ') : ''}`);
   console.log(

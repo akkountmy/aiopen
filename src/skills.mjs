@@ -78,6 +78,12 @@ function loadAll() {
       description: meta.description || body.split(/\r?\n/).find((line) => line.trim()) || id,
       /* Кому виден навык. Пусто или «all» — всем; «admin» — только админу. */
       access: String(meta.access || '').trim().toLowerCase() === 'admin' ? 'admin' : 'all',
+      /* Показывать ли навык в каталоге системного сообщения (24.11.2026).
+         `catalog: false` — навык остаётся доступен по id через use_skill, но
+         своей строки в каталоге не занимает: он дочерний у навыка-раздела и
+         вызывается по маршруту из его тела. Так семейство из 14 навыков стоит
+         в каталоге две строки вместо пятнадцати. */
+      catalog: String(meta.catalog || '').trim().toLowerCase() !== 'false',
       body,
       chars: body.length,
     });
@@ -108,7 +114,18 @@ export function visibleSkills(role = 'user') {
 }
 
 export function listSkills(role = 'user') {
-  return visibleSkills(role).map(({ id, name, description, chars, access }) => ({ id, name, description, chars, access }));
+  return visibleSkills(role).map(({ id, name, description, chars, access, catalog }) => ({ id, name, description, chars, access, catalog }));
+}
+
+/**
+ * Навыки каталога: видимые роли и не помеченные `catalog: false`.
+ *
+ * Отдельная функция, потому что каталог и доступ — разные вещи: скрытый
+ * дочерний навык открывается по id, но строки в системном сообщении не
+ * занимает. Тест каталога сверяет число строк именно с этим списком.
+ */
+export function catalogSkills(role = 'user') {
+  return visibleSkills(role).filter((skill) => skill.catalog !== false);
 }
 
 export function skillIds(role = 'user') {
@@ -186,12 +203,12 @@ export function compactDescription(description, limit = 200) {
 
 /** Строки каталога: одна на навык. Отдельно от текста — для тестов и аудита. */
 export function catalogLines(role = 'user') {
-  return visibleSkills(role).map((skill) => `— ${skill.id}: ${compactDescription(skill.description)}`);
+  return catalogSkills(role).map((skill) => `— ${skill.id}: ${compactDescription(skill.description)}`);
 }
 
 /** Каталог навыков для системного сообщения: одна строка на навык. */
 export function skillsPromptText(role = 'user') {
-  const all = visibleSkills(role);
+  const all = catalogSkills(role);
   if (!all.length) return '';
   const lines = ['Доступные навыки (полную инструкцию открывает инструмент use_skill):', ...catalogLines(role)];
   lines.push(

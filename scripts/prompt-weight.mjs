@@ -12,7 +12,7 @@ import { systemPrompt } from '../src/prompt.mjs';
 import { TOOLBOX } from '../src/config.mjs';
 import { availableToolDefs } from '../src/tools.mjs';
 import { buildLazyToolset } from '../src/toolrouter.mjs';
-import { skillsPromptText, listSkills } from '../src/skills.mjs';
+import { skillsPromptText, catalogSkills } from '../src/skills.mjs';
 
 const arg = (name, fallback) => {
   const hit = process.argv.find((item) => item.startsWith(`--${name}=`));
@@ -75,7 +75,7 @@ const report = {
   lazyTools: lazy.defs.length,
   savedChars,
   savedPct,
-  skillsInCatalog: listSkills().length,
+  skillsInCatalog: catalogSkills().length,
   share: {
     systemPct: pct(system.length),
     toolsPct: pct(toolsJson.length),
@@ -96,7 +96,7 @@ if (asJson) {
   console.log(`системный промпт: ${system.length} знаков${ratio ? ` ≈ ${report.tokensEstimate.system} токенов (${report.share.systemPct} %)` : ''}`);
   console.log(`схемы инструментов: ${toolsJson.length} знаков, ${toolDefs.length} инструментов${ratio ? ` ≈ ${report.tokensEstimate.tools} токенов (${report.share.toolsPct} %)` : ''}`);
   console.log(`первый запрос хода: ${lazyJson.length} знаков, ${lazy.defs.length} инструментов — экономия ${savedChars} знаков (${savedPct} %)`);
-  console.log(`каталог навыков внутри промпта: ${listSkills().length} навыков, ${skillsPromptText().length} знаков`);
+  console.log(`каталог навыков внутри промпта: ${catalogSkills().length} навыков, ${skillsPromptText().length} знаков`);
   console.log('');
   console.log('самые дорогие инструменты (знаки: всего / описание / параметры):');
   for (const item of report.heaviestTools) {
