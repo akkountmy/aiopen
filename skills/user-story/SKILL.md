@@ -1,6 +1,6 @@
 ---
 name: user-story
-description: User story по Кону с приёмкой в Gherkin: работа, польза и проверяемые условия. Use when «напиши user story», «история в бэклог», «критерии в Gherkin».
+description: User story по Кону с приёмкой в Gherkin: работа, польза и проверяемые условия. «напиши user story», «история в бэклог», «критерии в Gherkin».
 ---
 
 ## Purpose

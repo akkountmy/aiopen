@@ -1,6 +1,6 @@
 ---
 name: prioritization-advisor
-description: Выбор фреймворка приоритизации под стадию и команду: RICE, ICE, value/effort. Use when «приоритизируй», «RICE или ICE», «что делать первым».
+description: Выбор фреймворка приоритизации под стадию и команду: RICE, ICE, value/effort. «приоритизируй», «RICE или ICE», «что делать первым».
 ---
 
 ## Purpose

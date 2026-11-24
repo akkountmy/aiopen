@@ -1,6 +1,6 @@
 ---
 name: tam-sam-som-calculator
-description: TAM/SAM/SOM с явными допущениями, методом расчёта и оговорками для бизнес-кейса. Use when «посчитай рынок», «TAM SAM SOM», «объём рынка».
+description: TAM/SAM/SOM с явными допущениями, методом расчёта и оговорками для бизнес-кейса. «посчитай рынок», «TAM SAM SOM», «объём рынка».
 ---
 
 ## Purpose
